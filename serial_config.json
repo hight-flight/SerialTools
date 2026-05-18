@@ -1,0 +1,30 @@
+{
+    "port": "COM3",
+    "baudrate": 115200,
+    "auto_save": false,
+    "save_directory": "D:\\test_project\\trace_pro\\test_demo\\logs",
+    "hex_recv": false,
+    "hex_send": false,
+    "show_timestamp": true,
+    "newline": true,
+    "rts": false,
+    "dtr": false,
+    "head_field": "",
+    "tail_field": "",
+    "multi_items": [
+        {
+            "hex": false,
+            "string": "help",
+            "button_text": "帮助",
+            "delay": 1000,
+            "order": "1"
+        },
+        {
+            "hex": false,
+            "string": "呜呜呜",
+            "button_text": "无注释",
+            "delay": 1000,
+            "order": "0"
+        }
+    ]
+}
