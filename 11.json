@@ -1,0 +1,20 @@
+[
+  {
+    "hex": false,
+    "text": "help",
+    "delay": 2000,
+    "order": "0"
+  },
+  {
+    "hex": false,
+    "text": "5",
+    "delay": 1000,
+    "order": "1"
+  },
+  {
+    "hex": false,
+    "text": "4",
+    "delay": 1000,
+    "order": "2"
+  }
+]

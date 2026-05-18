@@ -1,0 +1,4 @@
+﻿hex,string,button_text,delay,order
+False,help,帮助,1000,1
+False,print_ad,打印ad值,1000,2
+False,1,无注释,1000,3
