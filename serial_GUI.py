@@ -12,7 +12,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool
 from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor
 
 # --- 全局常量 --- 
-VERSION = "1.1.4"
+VERSION = "1.1.5"
 
 # --- 文件操作工作类 ---
 class WorkerSignals(QObject):
@@ -2730,31 +2730,103 @@ class SerialTool(QMainWindow):
     
 
     
+    def _try_decode_csv(self, file_path):
+        """尝试用多种编码读取CSV文件，返回(文本内容, 使用的编码)或(None, None)"""
+        import csv
+        import io
+
+        # 先读取原始字节
+        try:
+            with open(file_path, 'rb') as f:
+                raw_bytes = f.read()
+        except Exception:
+            return None, None
+
+        if len(raw_bytes) == 0:
+            return None, None
+
+        # BOM 检测：UTF-8-BOM 以 EF BB BF 开头
+        has_utf8_bom = raw_bytes[:3] == b'\xef\xbb\xbf'
+        # UTF-16 LE BOM: FF FE, UTF-16 BE BOM: FE FF
+        has_utf16_bom = raw_bytes[:2] in (b'\xff\xfe', b'\xfe\xff')
+
+        # 按优先级尝试编码
+        encodings_to_try = ['utf-8-sig', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'latin-1']
+        # 如果检测到 GBK/GB18030 特征字节（首字节在 0x81-0xFE 范围），优先尝试中文编码
+        if not has_utf8_bom and not has_utf16_bom:
+            first_byte = raw_bytes[0] if raw_bytes else 0
+            if 0x81 <= first_byte <= 0xFE:
+                encodings_to_try = ['gb18030', 'gbk', 'utf-8-sig', 'utf-8', 'gb2312', 'latin-1']
+
+        for encoding in encodings_to_try:
+            try:
+                text = raw_bytes.decode(encoding)
+                # 验证是否为有效CSV：检查是否包含预期的列头
+                test_io = io.StringIO(text)
+                reader = csv.DictReader(test_io)
+                if reader.fieldnames and 'string' in reader.fieldnames:
+                    return text, encoding
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+            except Exception:
+                continue
+
+        # 所有编码都失败，尝试仅用 chardet（如果可用）作为最后手段
+        try:
+            import chardet
+            result = chardet.detect(raw_bytes)
+            if result and result['encoding'] and result['confidence'] > 0.5:
+                encoding = result['encoding']
+                try:
+                    text = raw_bytes.decode(encoding)
+                    test_io = io.StringIO(text)
+                    reader = csv.DictReader(test_io)
+                    if reader.fieldnames and 'string' in reader.fieldnames:
+                        return text, encoding
+                except Exception:
+                    pass
+        except ImportError:
+            pass
+
+        return None, None
+
     def load_multi_items(self):
         """从CSV文件加载多字符项目"""
         try:
             import csv
+            import io
             file_path, _ = QFileDialog.getOpenFileName(
                 self, "加载多字符项目", "", "CSV Files (*.csv)"
             )
             if not file_path:
                 return
 
+            text_content, _ = self._try_decode_csv(file_path)
+            if text_content is None:
+                QMessageBox.critical(
+                    self, "加载失败",
+                    "无法读取CSV文件，文件可能已被系统安全策略加密或使用了不支持的编码。\n\n"
+                    "建议：\n"
+                    "1. 右键文件 → 属性 → 高级 → 检查'加密内容以便保护数据'是否勾选\n"
+                    "2. 若文件被加密，请解密后重新加载\n"
+                    "3. 或使用之前保存的未加密备份"
+                )
+                return
+
             items = []
-            with open(file_path, 'r', encoding='utf-8-sig') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    try:
-                        item = {
-                            "hex": row['hex'].lower() == 'true',
-                            "string": row.get('string', ''),
-                            "button_text": row.get('button_text', '无注释'),
-                            "delay": int(row.get('delay', 1000)),
-                            "order": row.get('order', '1')
-                        }
-                        items.append(item)
-                    except (ValueError, KeyError) as e:
-                        continue
+            reader = csv.DictReader(io.StringIO(text_content))
+            for row in reader:
+                try:
+                    item = {
+                        "hex": row['hex'].lower() == 'true',
+                        "string": row.get('string', ''),
+                        "button_text": row.get('button_text', '无注释'),
+                        "delay": int(row.get('delay', 1000)),
+                        "order": row.get('order', '1')
+                    }
+                    items.append(item)
+                except (ValueError, KeyError) as e:
+                    continue
 
             if not items:
                 QMessageBox.information(self, "提示", "文件中没有有效的项目")
