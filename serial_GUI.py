@@ -4,15 +4,327 @@ import datetime
 import serial
 import serial.tools.list_ports
 from collections import deque
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QLabel, QComboBox, QPushButton, 
-                             QTextEdit, QCheckBox, QMessageBox, QSplitter, QSpinBox, QLineEdit, QProgressBar, QGroupBox, QDialog, QFormLayout, 
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QLabel, QComboBox, QPushButton,
+                             QTextEdit, QCheckBox, QMessageBox, QSplitter, QSpinBox, QLineEdit, QProgressBar, QGroupBox, QDialog, QFormLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog, QFrame, QSizePolicy)  
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker
-from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint
+from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPixmap, QPainter, QPolygon
 
 # --- 全局常量 --- 
-VERSION = "1.1.5"
+VERSION = "1.1.6"
+
+# --- 主题颜色常量 ---
+THEME_COLORS = {
+    'light': {
+        'text_normal':    QColor(0, 0, 0),
+        'text_send':      QColor(0, 0, 255),
+        'text_system':    QColor(128, 128, 128),
+        'text_error':     QColor(255, 0, 0),
+        'ansi_default_fg': QColor(0, 0, 0),
+        # ANSI 前景色映射（亮色模式使用原色）
+        'ansi_fg': {
+            '30': QColor(0, 0, 0),       '31': QColor(255, 0, 0),
+            '32': QColor(0, 128, 0),     '33': QColor(165, 42, 42),
+            '34': QColor(0, 0, 255),     '35': QColor(128, 0, 128),
+            '36': QColor(0, 128, 128),   '37': QColor(128, 128, 128),
+            '90': QColor(128, 128, 128), '91': QColor(255, 0, 0),
+            '92': QColor(0, 128, 0),     '93': QColor(165, 42, 42),
+            '94': QColor(0, 0, 255),     '95': QColor(128, 0, 128),
+            '96': QColor(0, 128, 128),   '97': QColor(200, 200, 200),
+        },
+        # ANSI 背景色映射
+        'ansi_bg': {
+            '40': QColor(0, 0, 0),       '41': QColor(255, 0, 0),
+            '42': QColor(0, 255, 0),     '43': QColor(255, 255, 0),
+            '44': QColor(0, 0, 255),     '45': QColor(255, 0, 255),
+            '46': QColor(0, 255, 255),   '47': QColor(255, 255, 255),
+        },
+    },
+    'dark': {
+        'text_normal':    QColor(0xAB, 0xB2, 0xBF),
+        'text_send':      QColor(0x61, 0xAF, 0xEF),
+        'text_system':    QColor(0x5C, 0x63, 0x70),
+        'text_error':     QColor(0xE0, 0x6C, 0x75),
+        'ansi_default_fg': QColor(0xAB, 0xB2, 0xBF),
+        # ANSI 前景色映射（暗底提亮）
+        'ansi_fg': {
+            '30': QColor(0x6A, 0x73, 0x84),  '31': QColor(0xE0, 0x6C, 0x75),
+            '32': QColor(0x98, 0xC3, 0x79),  '33': QColor(0xD1, 0x9A, 0x66),
+            '34': QColor(0x61, 0xAF, 0xEF),  '35': QColor(0xC6, 0x78, 0xDD),
+            '36': QColor(0x56, 0xB6, 0xC2),  '37': QColor(0xAB, 0xB2, 0xBF),
+            '90': QColor(0x5C, 0x63, 0x70),  '91': QColor(0xE0, 0x6C, 0x75),
+            '92': QColor(0x98, 0xC3, 0x79),  '93': QColor(0xD1, 0x9A, 0x66),
+            '94': QColor(0x61, 0xAF, 0xEF),  '95': QColor(0xC6, 0x78, 0xDD),
+            '96': QColor(0x56, 0xB6, 0xC2),  '97': QColor(0xDC, 0xDF, 0xE4),
+        },
+        # ANSI 背景色映射
+        'ansi_bg': {
+            '40': QColor(0x2C, 0x31, 0x3C),  '41': QColor(0xBE, 0x50, 0x46),
+            '42': QColor(0x50, 0x8C, 0x50),  '43': QColor(0x8C, 0x8C, 0x46),
+            '44': QColor(0x46, 0x46, 0xBE),  '45': QColor(0xBE, 0x46, 0xBE),
+            '46': QColor(0x46, 0x8C, 0x8C),  '47': QColor(0x6A, 0x73, 0x84),
+        },
+    },
+}
+
+DARK_QSS = """
+QMainWindow        { background-color: #282C34; }
+QGroupBox {
+    border: 1px solid #3E4451; border-radius: 6px;
+    margin-top: 12px; padding-top: 16px; font-weight: bold; color: #ABB2BF;
+    background: transparent;
+}
+QGroupBox::title {
+    subcontrol-origin: margin; left: 12px; padding: 0 8px; color: #ABB2BF;
+}
+QTextEdit {
+    background-color: #2C313C; color: #ABB2BF;
+    border: 1px solid #3E4451; border-radius: 4px;
+    selection-background-color: #3E4451;
+}
+QTextEdit:focus { border-color: #528BFF; }
+QLineEdit {
+    background-color: #2C313C; color: #ABB2BF;
+    border: 1px solid #3E4451; border-radius: 4px;
+    selection-background-color: #3E4451;
+}
+QLineEdit:focus { border-color: #528BFF; }
+QLineEdit:read-only { background-color: #21252B; }
+QComboBox {
+    background-color: #2C313C; color: #ABB2BF;
+    border: 1px solid #3E4451; border-radius: 4px; padding: 4px 8px;
+}
+QComboBox:hover { border-color: #528BFF; }
+QComboBox:focus { border-color: #528BFF; }
+QComboBox:disabled { background-color: #21252B; color: #5C6370; }
+QComboBox::drop-down { border: none; width: 22px; }
+QComboBox::down-arrow { image: url(__ARROW_DARK__); width: 12px; height: 12px; }
+QComboBox QAbstractItemView {
+    background-color: #21252B; color: #ABB2BF;
+    selection-background-color: #3E4451; border: 1px solid #181A1F;
+    outline: none;
+}
+QPushButton {
+    background-color: #2C313C; color: #ABB2BF;
+    border: 1px solid #3E4451; border-radius: 4px; padding: 4px 12px;
+}
+QPushButton:hover    { background-color: #3E4451; }
+QPushButton:pressed  { background-color: #21252B; }
+QPushButton:checked  { background-color: #528BFF; color: #FFFFFF; }
+QPushButton:checked:hover { background-color: #61AFEF; }
+QPushButton:disabled { background-color: #21252B; color: #5C6370; }
+QCheckBox   { color: #ABB2BF; spacing: 6px; }
+QCheckBox::indicator {
+    background-color: #2C313C; border: 1px solid #3E4451;
+    border-radius: 3px; width: 16px; height: 16px;
+}
+QCheckBox::indicator:hover { border-color: #528BFF; }
+QCheckBox::indicator:checked { background-color: #528BFF; border-color: #528BFF; }
+QCheckBox::indicator:disabled { background-color: #21252B; border-color: #2C313C; }
+QLabel      { color: #ABB2BF; }
+QSpinBox {
+    background-color: #2C313C; color: #ABB2BF;
+    border: 1px solid #3E4451; border-radius: 4px; padding: 4px 4px;
+}
+QSpinBox:focus { border-color: #528BFF; }
+QSpinBox:disabled { background-color: #21252B; color: #5C6370; }
+QTableView, QTableWidget {
+    background-color: #2C313C; color: #ABB2BF;
+    border: 1px solid #3E4451; gridline-color: #3E4451;
+    selection-background-color: #3E4451;
+    alternate-background-color: rgba(44, 49, 60, 180);
+}
+QTableView::viewport, QTableWidget::viewport {
+    background-color: #2C313C;
+}
+QTableView::item:hover, QTableWidget::item:hover {
+    background-color: rgba(82, 139, 255, 30);
+}
+QHeaderView { background-color: #21252B; }
+QHeaderView::section {
+    background-color: #21252B; color: #ABB2BF;
+    border: 1px solid #3E4451; padding: 4px;
+}
+QHeaderView::section:hover { background-color: #2C313C; }
+QStatusBar  { background-color: #21252B; border-top: 1px solid #181A1F; color: #6A7384; }
+QSplitter::handle { background-color: #3E4451; }
+QSplitter::handle:hover { background-color: #4B5363; }
+QSplitter::handle:pressed { background-color: #5C6370; }
+QScrollBar:vertical {
+    background-color: #282C34; width: 12px; border-radius: 6px; margin: 0;
+}
+QScrollBar::handle:vertical {
+    background-color: #3E4451; border-radius: 6px; min-height: 24px;
+}
+QScrollBar::handle:vertical:hover { background-color: #4B5363; }
+QScrollBar::handle:vertical:pressed { background-color: #5C6370; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar:horizontal {
+    background-color: #282C34; height: 12px; border-radius: 6px; margin: 0;
+}
+QScrollBar::handle:horizontal {
+    background-color: #3E4451; border-radius: 6px; min-width: 24px;
+}
+QScrollBar::handle:horizontal:hover { background-color: #4B5363; }
+QScrollBar::handle:horizontal:pressed { background-color: #5C6370; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QMenu {
+    background-color: #21252B; color: #ABB2BF;
+    border: 1px solid #181A1F; padding: 4px 0;
+}
+QMenu::item { padding: 8px 28px 8px 16px; }
+QMenu::item:selected { background-color: #3E4451; }
+QMenu::separator { height: 1px; background-color: #3E4451; margin: 4px 8px; }
+QProgressBar {
+    background-color: #2C313C; border: 1px solid #3E4451;
+    border-radius: 4px; color: #ABB2BF; text-align: center;
+}
+QProgressBar::chunk { background-color: #528BFF; border-radius: 3px; }
+QDialog    { background-color: #282C34; color: #ABB2BF; }
+QSlider::groove:horizontal {
+    background-color: #3E4451; height: 6px; border-radius: 3px;
+}
+QSlider::handle:horizontal {
+    background-color: #528BFF; width: 14px; height: 14px;
+    margin: -4px 0; border-radius: 8px;
+}
+QSlider::handle:horizontal:hover { background-color: #61AFEF; }
+QSlider::sub-page:horizontal { background-color: #528BFF; border-radius: 3px; }
+QToolTip {
+    background-color: #21252B; color: #ABB2BF;
+    border: 1px solid #3E4451; border-radius: 4px; padding: 4px 8px;
+}
+"""
+
+LIGHT_QSS = """
+QMainWindow        { background-color: #F5F5F5; }
+QGroupBox {
+    border: 1px solid #DDDDDD; border-radius: 6px;
+    margin-top: 12px; padding-top: 16px; font-weight: bold; color: #444444;
+    background: transparent;
+}
+QGroupBox::title {
+    subcontrol-origin: margin; left: 12px; padding: 0 8px; color: #444444;
+}
+QTextEdit {
+    background-color: rgba(255, 255, 255, 230); color: #333333;
+    border: 1px solid #CCCCCC; border-radius: 4px;
+    selection-background-color: #0078D4;
+}
+QTextEdit:focus { border-color: #005A9E; }
+QLineEdit {
+    background-color: rgba(255, 255, 255, 230); color: #333333;
+    border: 1px solid #CCCCCC; border-radius: 4px;
+    selection-background-color: #0078D4;
+}
+QLineEdit:focus { border-color: #005A9E; }
+QLineEdit:read-only { background-color: #F0F0F0; }
+QComboBox {
+    background-color: rgba(255, 255, 255, 230); color: #333333;
+    border: 1px solid #CCCCCC; border-radius: 4px; padding: 4px 8px;
+}
+QComboBox:hover { border-color: #0078D4; }
+QComboBox:focus { border-color: #005A9E; }
+QComboBox:disabled { background-color: #F0F0F0; color: #888888; }
+QComboBox::drop-down { border: none; width: 22px; }
+QComboBox::down-arrow { image: url(__ARROW_LIGHT__); width: 12px; height: 12px; }
+QComboBox QAbstractItemView {
+    background-color: rgba(255, 255, 255, 240); color: #333333;
+    selection-background-color: #0078D4; border: 1px solid #CCCCCC;
+    outline: none;
+}
+QPushButton {
+    background-color: #E0E0E0; color: #333333;
+    border: 1px solid #CCCCCC; border-radius: 4px; padding: 4px 12px;
+}
+QPushButton:hover    { background-color: #D0D0D0; }
+QPushButton:pressed  { background-color: #C0C0C0; }
+QPushButton:checked  { background-color: #0078D4; color: #FFFFFF; }
+QPushButton:checked:hover { background-color: #168BE0; }
+QPushButton:disabled { background-color: #F0F0F0; color: #888888; }
+QCheckBox   { color: #333333; spacing: 6px; }
+QCheckBox::indicator {
+    background-color: #FFFFFF; border: 1px solid #AAAAAA;
+    border-radius: 3px; width: 16px; height: 16px;
+}
+QCheckBox::indicator:hover { border-color: #0078D4; }
+QCheckBox::indicator:checked { background-color: #0078D4; border-color: #0078D4; }
+QCheckBox::indicator:disabled { background-color: #F0F0F0; border-color: #CCCCCC; }
+QLabel      { color: #333333; }
+QSpinBox {
+    background-color: rgba(255, 255, 255, 230); color: #333333;
+    border: 1px solid #CCCCCC; border-radius: 4px; padding: 4px 4px;
+}
+QSpinBox:focus { border-color: #005A9E; }
+QSpinBox:disabled { background-color: #F0F0F0; color: #888888; }
+QTableView, QTableWidget {
+    background-color: rgba(255, 255, 255, 230); color: #333333;
+    border: 1px solid #CCCCCC; gridline-color: #DDDDDD;
+    selection-background-color: #0078D4;
+    alternate-background-color: rgba(245, 245, 245, 210);
+}
+QTableView::viewport, QTableWidget::viewport {
+    background-color: rgba(255, 255, 255, 230);
+}
+QTableView::item:hover, QTableWidget::item:hover {
+    background-color: rgba(0, 120, 212, 20);
+}
+QHeaderView { background-color: #E8E8E8; }
+QHeaderView::section {
+    background-color: #E8E8E8; color: #333333;
+    border: 1px solid #CCCCCC; padding: 4px;
+}
+QHeaderView::section:hover { background-color: #D0D0D0; }
+QStatusBar  { background-color: #E8E8E8; border-top: 1px solid #CCCCCC; color: #333333; }
+QSplitter::handle { background-color: #CCCCCC; }
+QSplitter::handle:hover { background-color: #AAAAAA; }
+QSplitter::handle:pressed { background-color: #999999; }
+QScrollBar:vertical {
+    background-color: #F5F5F5; width: 12px; border-radius: 6px; margin: 0;
+}
+QScrollBar::handle:vertical {
+    background-color: #C0C0C0; border-radius: 6px; min-height: 24px;
+}
+QScrollBar::handle:vertical:hover { background-color: #A0A0A0; }
+QScrollBar::handle:vertical:pressed { background-color: #888888; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar:horizontal {
+    background-color: #F5F5F5; height: 12px; border-radius: 6px; margin: 0;
+}
+QScrollBar::handle:horizontal {
+    background-color: #C0C0C0; border-radius: 6px; min-width: 24px;
+}
+QScrollBar::handle:horizontal:hover { background-color: #A0A0A0; }
+QScrollBar::handle:horizontal:pressed { background-color: #888888; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QMenu {
+    background-color: #FFFFFF; color: #333333;
+    border: 1px solid #CCCCCC; padding: 4px 0;
+}
+QMenu::item { padding: 8px 28px 8px 16px; }
+QMenu::item:selected { background-color: #0078D4; color: #FFFFFF; }
+QMenu::separator { height: 1px; background-color: #DDDDDD; margin: 4px 8px; }
+QProgressBar {
+    background-color: #E8E8E8; border: 1px solid #CCCCCC;
+    border-radius: 4px; color: #333333; text-align: center;
+}
+QProgressBar::chunk { background-color: #0078D4; border-radius: 3px; }
+QDialog    { background-color: #F5F5F5; color: #333333; }
+QSlider::groove:horizontal {
+    background-color: #DDDDDD; height: 6px; border-radius: 3px;
+}
+QSlider::handle:horizontal {
+    background-color: #0078D4; width: 14px; height: 14px;
+    margin: -4px 0; border-radius: 8px;
+}
+QSlider::handle:horizontal:hover { background-color: #106EBE; }
+QSlider::sub-page:horizontal { background-color: #0078D4; border-radius: 3px; }
+QToolTip {
+    background-color: #FFFFFF; color: #333333;
+    border: 1px solid #CCCCCC; border-radius: 4px; padding: 4px 8px;
+}
+"""
 
 # --- 文件操作工作类 ---
 class WorkerSignals(QObject):
@@ -155,6 +467,7 @@ class SerialReadThread(QThread):
         if not self.wait(2000):  # 2秒超时
             print(f"警告: 线程停止超时，可能卡在串口操作中")
 
+
 # --- 主窗口类 ---
 class SerialTool(QMainWindow):
     def __init__(self):
@@ -195,10 +508,47 @@ class SerialTool(QMainWindow):
         self.serial_mutex = QMutex()  # 串口操作互斥锁
         self.error_state = False  # 错误状态标志
         self.stop_file_send = False  # 文件发送取消标志
-        
+
+        # 主题相关
+        self.current_theme = "light"  # 默认亮色模式
+        self.theme_colors = dict(THEME_COLORS['light'])
+
+        # 生成下拉箭头图标（QSS 接管 QComboBox 后必须显式提供箭头图片）
+        self._arrow_dark_path, self._arrow_light_path = self._make_arrow_icons()
+
+
         self.init_ui()
         self.refresh_ports() # 启动时刷新串口列表
         self.load_config() # 启动时加载配置
+
+    def _make_arrow_icons(self):
+        """生成下拉箭头 V 型图标（QSS 接管 ComboBox 后系统箭头不显示，必须手绘）"""
+        import os
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+
+        def _draw(path, color_hex, size=12):
+            pix = QPixmap(size, size)
+            pix.fill(Qt.transparent)
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setBrush(QColor(color_hex))
+            p.setPen(Qt.NoPen)
+            # ▼ 倒三角
+            margin = 3
+            cx = size // 2
+            tri = QPolygon([
+                QPoint(cx, size - margin),
+                QPoint(margin, margin + 1),
+                QPoint(size - margin, margin + 1),
+            ])
+            p.drawPolygon(tri)
+            p.end()
+            pix.save(path, 'PNG')
+            return path.replace('\\', '/')
+
+        dark = _draw(os.path.join(script_dir, '_arrow_dark.png'), '#6A7384')
+        light = _draw(os.path.join(script_dir, '_arrow_light.png'), '#666666')
+        return dark, light
 
     def init_ui(self):
         self.setWindowTitle("串口调试助手")
@@ -207,17 +557,18 @@ class SerialTool(QMainWindow):
         # 主窗口部件
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
+
         main_layout = QVBoxLayout(main_widget)
         main_layout.setContentsMargins(4, 4, 4, 4)
-        main_layout.setSpacing(3)
+        main_layout.setSpacing(4)
 
         # --- 顶部设置区域 ---
         # 串口设置分组
         serial_group = QGroupBox("串口设置")
         serial_group.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
         serial_layout = QVBoxLayout(serial_group)
-        serial_layout.setContentsMargins(4, 3, 4, 3)
-        serial_layout.setSpacing(2)
+        serial_layout.setContentsMargins(4, 4, 4, 4)
+        serial_layout.setSpacing(4)
         
         # 第一行：串口和波特率设置
         port_baud_layout = QHBoxLayout()
@@ -226,30 +577,30 @@ class SerialTool(QMainWindow):
         # 串口选择
         port_layout = QHBoxLayout()
         port_label = QLabel("串口:")
-        port_label.setFont(QFont("Microsoft YaHei", 8))
+        port_label.setFont(QFont("Microsoft YaHei", 9))
         port_layout.addWidget(port_label)
         self.combo_port = QComboBox()
         self.combo_port.setMinimumWidth(100)
-        self.combo_port.setFont(QFont("Consolas", 8))
+        self.combo_port.setFont(QFont("Consolas", 9))
         port_layout.addWidget(self.combo_port)
         port_baud_layout.addLayout(port_layout)
         
         # 刷新按钮
         self.btn_refresh = QPushButton("刷新")
         self.btn_refresh.setMaximumWidth(55)
-        self.btn_refresh.setFont(QFont("Microsoft YaHei", 8))
+        self.btn_refresh.setFont(QFont("Microsoft YaHei", 9))
         self.btn_refresh.clicked.connect(self.refresh_ports)
         port_baud_layout.addWidget(self.btn_refresh)
         
         # 波特率选择
         baud_layout = QHBoxLayout()
         baud_label = QLabel("波特率:")
-        baud_label.setFont(QFont("Microsoft YaHei", 8))
+        baud_label.setFont(QFont("Microsoft YaHei", 9))
         baud_layout.addWidget(baud_label)
         self.combo_baud = QComboBox()
         self.combo_baud.addItems(['9600', '19200', '38400', '57600', '115200', '自定义'])
         self.combo_baud.setCurrentText('115200')
-        self.combo_baud.setFont(QFont("Consolas", 8))
+        self.combo_baud.setFont(QFont("Consolas", 9))
         self.combo_baud.currentIndexChanged.connect(self.handle_baud_change)
         baud_layout.addWidget(self.combo_baud)
         port_baud_layout.addLayout(baud_layout)
@@ -257,17 +608,26 @@ class SerialTool(QMainWindow):
         # 打开/关闭串口按钮
         self.btn_switch = QPushButton("打开串口")
         self.btn_switch.setCheckable(True)
-        self.btn_switch.setFont(QFont("Microsoft YaHei", 8))
+        self.btn_switch.setFont(QFont("Microsoft YaHei", 9))
         self.btn_switch.setMinimumWidth(80)
         self.btn_switch.clicked.connect(self.toggle_serial)
         port_baud_layout.addWidget(self.btn_switch)
         
         # 更多串口设置按钮
         self.btn_more_settings = QPushButton("更多串口设置")
-        self.btn_more_settings.setFont(QFont("Microsoft YaHei", 8))
+        self.btn_more_settings.setFont(QFont("Microsoft YaHei", 9))
         self.btn_more_settings.setMinimumWidth(90)
         self.btn_more_settings.clicked.connect(self.show_more_settings)
         port_baud_layout.addWidget(self.btn_more_settings)
+
+        # 主题切换按钮
+        self.btn_theme = QPushButton("◑ 暗黑模式")
+        self.btn_theme.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_theme.setMinimumWidth(88)
+        self.btn_theme.setToolTip("切换亮色/暗黑主题")
+        self.btn_theme.clicked.connect(self.toggle_theme)
+        port_baud_layout.addWidget(self.btn_theme)
+
         port_baud_layout.addStretch()
 
         serial_layout.addLayout(port_baud_layout)
@@ -278,29 +638,29 @@ class SerialTool(QMainWindow):
 
         # 接收区设置：HEX显示
         self.check_hex_recv = QCheckBox("HEX显示")
-        self.check_hex_recv.setFont(QFont("Microsoft YaHei", 8))
+        self.check_hex_recv.setFont(QFont("Microsoft YaHei", 9))
         display_save_layout.addWidget(self.check_hex_recv)
 
         # 编码选择
         encoding_label = QLabel("编码:")
-        encoding_label.setFont(QFont("Microsoft YaHei", 8))
+        encoding_label.setFont(QFont("Microsoft YaHei", 9))
         display_save_layout.addWidget(encoding_label)
         self.combo_encoding = QComboBox()
         self.combo_encoding.addItems(['UTF-8', 'GBK', 'GB2312', 'ASCII', 'ISO-8859-1', 'GB18030'])
         self.combo_encoding.setCurrentText('UTF-8')
-        self.combo_encoding.setFont(QFont("Microsoft YaHei", 8))
+        self.combo_encoding.setFont(QFont("Microsoft YaHei", 9))
         self.combo_encoding.setMinimumWidth(80)
         display_save_layout.addWidget(self.combo_encoding)
 
         # 显示时间戳复选框
         self.check_timestamp = QCheckBox("显示时间")
         self.check_timestamp.setChecked(True)  # 默认显示时间
-        self.check_timestamp.setFont(QFont("Microsoft YaHei", 8))
+        self.check_timestamp.setFont(QFont("Microsoft YaHei", 9))
         display_save_layout.addWidget(self.check_timestamp)
 
         # 自动保存复选框
         self.check_auto_save = QCheckBox("自动保存日志")
-        self.check_auto_save.setFont(QFont("Microsoft YaHei", 8))
+        self.check_auto_save.setFont(QFont("Microsoft YaHei", 9))
         self.check_auto_save.stateChanged.connect(self.toggle_auto_save)
         display_save_layout.addWidget(self.check_auto_save)
 
@@ -308,24 +668,24 @@ class SerialTool(QMainWindow):
 
         # 保存路径（紧凑内联）
         self.label_save_path = QLabel("路径:")
-        self.label_save_path.setFont(QFont("Microsoft YaHei", 8))
+        self.label_save_path.setFont(QFont("Microsoft YaHei", 9))
         display_save_layout.addWidget(self.label_save_path)
         self.line_edit_save_path = QLineEdit()
         self.line_edit_save_path.setReadOnly(True)
         self.line_edit_save_path.setText(self.save_directory)
-        self.line_edit_save_path.setFont(QFont("Consolas", 8))
+        self.line_edit_save_path.setFont(QFont("Consolas", 9))
         self.line_edit_save_path.setMaximumWidth(200)
         display_save_layout.addWidget(self.line_edit_save_path)
         self.btn_browse_path = QPushButton("浏览")
-        self.btn_browse_path.setMaximumWidth(40)
-        self.btn_browse_path.setFont(QFont("Microsoft YaHei", 8))
+        self.btn_browse_path.setMaximumWidth(48)
+        self.btn_browse_path.setFont(QFont("Microsoft YaHei", 9))
         self.btn_browse_path.clicked.connect(self.browse_save_path)
         display_save_layout.addWidget(self.btn_browse_path)
 
         # 清空接收区按钮
         self.btn_clear_recv = QPushButton("清空接收")
-        self.btn_clear_recv.setFont(QFont("Microsoft YaHei", 8))
-        self.btn_clear_recv.setFixedSize(60, 22)
+        self.btn_clear_recv.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_clear_recv.setFixedSize(78, 28)
         self.btn_clear_recv.clicked.connect(self.clear_recv_area)
         display_save_layout.addWidget(self.btn_clear_recv)
         display_save_layout.addStretch()
@@ -341,35 +701,33 @@ class SerialTool(QMainWindow):
         recv_group = QGroupBox("接收区")
         recv_group.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
         recv_layout = QVBoxLayout(recv_group)
-        recv_layout.setContentsMargins(3, 3, 3, 3)
+        recv_layout.setContentsMargins(4, 4, 4, 4)
 
         self.text_recv = QTextEdit()
         self.text_recv.setReadOnly(True)
-        self.text_recv.setFont(QFont("Consolas", 11))
-        # 设置背景色为白色，文本颜色为黑色
-        self.text_recv.setStyleSheet("QTextEdit { background-color: white; color: black; border: 1px solid #CCCCCC; border-radius: 4px; }")
+        self.text_recv.setFont(QFont("Consolas", 11, QFont.Normal))
         recv_layout.addWidget(self.text_recv)
 
         # 图示区域
         graph_group = QGroupBox("数据统计")
-        graph_group.setFont(QFont("Microsoft YaHei", 7, QFont.Bold))
+        graph_group.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
         graph_layout = QHBoxLayout(graph_group)
-        graph_layout.setContentsMargins(3, 2, 3, 2)
+        graph_layout.setContentsMargins(4, 4, 4, 4)
         graph_layout.setSpacing(8)
         
         # 接收字节数统计
         self.label_rx_bytes = QLabel("接收字节: 0")
-        self.label_rx_bytes.setFont(QFont("Consolas", 7))
+        self.label_rx_bytes.setFont(QFont("Consolas", 9))
         graph_layout.addWidget(self.label_rx_bytes)
 
         # 发送字节数统计
         self.label_tx_bytes = QLabel("发送字节: 0")
-        self.label_tx_bytes.setFont(QFont("Consolas", 7))
+        self.label_tx_bytes.setFont(QFont("Consolas", 9))
         graph_layout.addWidget(self.label_tx_bytes)
 
         # 数据包数量统计
         self.label_packets = QLabel("数据包: 0")
-        self.label_packets.setFont(QFont("Consolas", 7))
+        self.label_packets.setFont(QFont("Consolas", 9))
         graph_layout.addWidget(self.label_packets)
         
         graph_layout.addStretch()
@@ -379,64 +737,64 @@ class SerialTool(QMainWindow):
         
         # 发送区
         send_group = QGroupBox("发送区")
-        send_group.setFont(QFont("Microsoft YaHei", 8, QFont.Bold))
+        send_group.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
         send_layout = QVBoxLayout(send_group)
-        send_layout.setContentsMargins(4, 3, 4, 3)
-        send_layout.setSpacing(2)
+        send_layout.setContentsMargins(4, 4, 4, 4)
+        send_layout.setSpacing(4)
         
         # 发送设置行
         send_settings_layout = QHBoxLayout()
-        send_settings_layout.setSpacing(3)
+        send_settings_layout.setSpacing(4)
 
         # 发送区设置：HEX发送
         self.check_hex_send = QCheckBox("HEX发送")
-        self.check_hex_send.setFont(QFont("Microsoft YaHei", 8))
+        self.check_hex_send.setFont(QFont("Microsoft YaHei", 9))
         send_settings_layout.addWidget(self.check_hex_send)
 
         # 回车换行勾选选项
         self.check_newline = QCheckBox("回车换行")
-        self.check_newline.setFont(QFont("Microsoft YaHei", 8))
+        self.check_newline.setFont(QFont("Microsoft YaHei", 9))
         send_settings_layout.addWidget(self.check_newline)
 
         # RTS和DTR控制选项
         self.check_rts = QCheckBox("RTS")
-        self.check_rts.setFont(QFont("Microsoft YaHei", 8))
+        self.check_rts.setFont(QFont("Microsoft YaHei", 9))
         self.check_rts.stateChanged.connect(self.update_rts_dtr)
         send_settings_layout.addWidget(self.check_rts)
 
         self.check_dtr = QCheckBox("DTR")
-        self.check_dtr.setFont(QFont("Microsoft YaHei", 8))
+        self.check_dtr.setFont(QFont("Microsoft YaHei", 9))
         self.check_dtr.stateChanged.connect(self.update_rts_dtr)
         send_settings_layout.addWidget(self.check_dtr)
 
         # 校验选项（使用子布局，设置更小的间距）
         checksum_layout = QHBoxLayout()
-        checksum_layout.setSpacing(1)
+        checksum_layout.setSpacing(4)
 
         self.label_checksum = QLabel("校验:")
-        self.label_checksum.setFont(QFont("Microsoft YaHei", 8))
+        self.label_checksum.setFont(QFont("Microsoft YaHei", 9))
         checksum_layout.addWidget(self.label_checksum)
 
         self.combo_checksum = QComboBox()
         self.combo_checksum.addItems(["None", "ModbusCRC16", "CRC32", "Fletcher", "XOR8", "ADD8", "ADD16"])
-        self.combo_checksum.setFont(QFont("Consolas", 8))
+        self.combo_checksum.setFont(QFont("Consolas", 9))
         checksum_layout.addWidget(self.combo_checksum)
 
         send_settings_layout.addLayout(checksum_layout)
 
         # 重复发送相关控件
         repeat_layout = QHBoxLayout()
-        repeat_layout.setSpacing(3)
+        repeat_layout.setSpacing(4)
 
         self.check_repeat = QCheckBox("重复发送")
-        self.check_repeat.setFont(QFont("Microsoft YaHei", 8))
+        self.check_repeat.setFont(QFont("Microsoft YaHei", 9))
         repeat_layout.addWidget(self.check_repeat)
 
         repeat_layout.addWidget(QLabel("间隔(ms):"))
         self.spin_interval = QSpinBox()
         self.spin_interval.setRange(100, 5000)
         self.spin_interval.setValue(1000)
-        self.spin_interval.setFont(QFont("Consolas", 8))
+        self.spin_interval.setFont(QFont("Consolas", 9))
         self.spin_interval.setEnabled(False)  # 默认禁用
         repeat_layout.addWidget(self.spin_interval)
 
@@ -451,31 +809,29 @@ class SerialTool(QMainWindow):
 
         # 发送首字段
         head_field_layout = QHBoxLayout()
-        head_field_layout.setSpacing(2)
+        head_field_layout.setSpacing(4)
         self.check_head_field = QCheckBox()
         head_field_layout.addWidget(self.check_head_field)
         head_label = QLabel("首字段:")
-        head_label.setFont(QFont("Microsoft YaHei", 8))
+        head_label.setFont(QFont("Microsoft YaHei", 9))
         head_field_layout.addWidget(head_label)
         self.text_ota = QLineEdit()
-        self.text_ota.setFont(QFont("Consolas", 8))
+        self.text_ota.setFont(QFont("Consolas", 9))
         self.text_ota.setPlaceholderText("输入首字段...")
-        self.text_ota.setStyleSheet("QLineEdit { border: 1px solid #CCCCCC; border-radius: 4px; }")
         head_field_layout.addWidget(self.text_ota)
         fields_layout.addLayout(head_field_layout)
 
         # 发送尾字段
         tail_field_layout = QHBoxLayout()
-        tail_field_layout.setSpacing(2)
+        tail_field_layout.setSpacing(4)
         self.check_tail_field = QCheckBox()
         tail_field_layout.addWidget(self.check_tail_field)
         tail_label = QLabel("尾字段:")
-        tail_label.setFont(QFont("Microsoft YaHei", 8))
+        tail_label.setFont(QFont("Microsoft YaHei", 9))
         tail_field_layout.addWidget(tail_label)
         self.text_tail = QLineEdit()
-        self.text_tail.setFont(QFont("Consolas", 8))
+        self.text_tail.setFont(QFont("Consolas", 9))
         self.text_tail.setPlaceholderText("输入尾字段...")
-        self.text_tail.setStyleSheet("QLineEdit { border: 1px solid #CCCCCC; border-radius: 4px; }")
         tail_field_layout.addWidget(self.text_tail)
         fields_layout.addLayout(tail_field_layout)
         fields_layout.addStretch()
@@ -485,9 +841,8 @@ class SerialTool(QMainWindow):
         # 发送输入框
         self.text_send = QTextEdit()
         self.text_send.setMaximumHeight(45)
-        self.text_send.setFont(QFont("Consolas", 10))
+        self.text_send.setFont(QFont("Consolas", 11, QFont.Normal))
         self.text_send.setPlaceholderText("在此输入要发送的内容...")
-        self.text_send.setStyleSheet("QTextEdit { border: 1px solid #CCCCCC; border-radius: 4px; }")
         send_layout.addWidget(self.text_send)
 
         # 文件发送区域
@@ -496,18 +851,17 @@ class SerialTool(QMainWindow):
         
         # 文件路径显示
         self.file_path_edit = QLineEdit()
-        self.file_path_edit.setFont(QFont("Consolas", 8))
+        self.file_path_edit.setFont(QFont("Consolas", 9))
         self.file_path_edit.setPlaceholderText("选择要发送的文件...")
-        self.file_path_edit.setStyleSheet("QLineEdit { border: 1px solid #CCCCCC; border-radius: 4px; }")
         self.file_path_edit.setReadOnly(True)
 
         self.btn_select_file = QPushButton("选择文件")
-        self.btn_select_file.setFont(QFont("Microsoft YaHei", 8))
+        self.btn_select_file.setFont(QFont("Microsoft YaHei", 9))
         self.btn_select_file.setMinimumWidth(60)
         self.btn_select_file.clicked.connect(self.select_file_to_send)
 
         self.btn_send_file = QPushButton("发送文件")
-        self.btn_send_file.setFont(QFont("Microsoft YaHei", 8))
+        self.btn_send_file.setFont(QFont("Microsoft YaHei", 9))
         self.btn_send_file.setMinimumWidth(60)
         self.btn_send_file.clicked.connect(self.send_file)
         self.btn_send_file.setEnabled(False)  # 默认禁用，选择文件后启用
@@ -523,19 +877,19 @@ class SerialTool(QMainWindow):
         send_buttons_layout.setSpacing(4)
 
         self.btn_send = QPushButton("发送")
-        self.btn_send.setFont(QFont("Microsoft YaHei", 8))
+        self.btn_send.setFont(QFont("Microsoft YaHei", 9))
         self.btn_send.setMinimumWidth(50)
         self.btn_send.clicked.connect(self.send_data)
         self.btn_send.setShortcut("Ctrl+Return")
 
         self.btn_stop = QPushButton("停止")
-        self.btn_stop.setFont(QFont("Microsoft YaHei", 8))
+        self.btn_stop.setFont(QFont("Microsoft YaHei", 9))
         self.btn_stop.setMinimumWidth(50)
         self.btn_stop.clicked.connect(self.stop_repeat)
         self.btn_stop.setEnabled(False)
 
         self.btn_clear_send = QPushButton("清空发送")
-        self.btn_clear_send.setFont(QFont("Microsoft YaHei", 8))
+        self.btn_clear_send.setFont(QFont("Microsoft YaHei", 9))
         self.btn_clear_send.setMinimumWidth(50)
         self.btn_clear_send.clicked.connect(self.clear_send_area)
 
@@ -545,13 +899,13 @@ class SerialTool(QMainWindow):
         send_buttons_layout.addStretch()
 
         self.btn_save_params = QPushButton("保存参数")
-        self.btn_save_params.setFont(QFont("Microsoft YaHei", 8))
+        self.btn_save_params.setFont(QFont("Microsoft YaHei", 9))
         self.btn_save_params.setMinimumWidth(60)
         self.btn_save_params.clicked.connect(self.save_config)
         send_buttons_layout.addWidget(self.btn_save_params)
 
         self.btn_toggle_multi_send = QPushButton("显示多字符发送")
-        self.btn_toggle_multi_send.setFont(QFont("Microsoft YaHei", 8))
+        self.btn_toggle_multi_send.setFont(QFont("Microsoft YaHei", 9))
         self.btn_toggle_multi_send.setMinimumWidth(100)
         self.btn_toggle_multi_send.clicked.connect(self.toggle_multi_send)
         send_buttons_layout.addWidget(self.btn_toggle_multi_send)
@@ -566,13 +920,13 @@ class SerialTool(QMainWindow):
         self.multi_send_widget = QWidget()
         self.multi_send_layout = QVBoxLayout(self.multi_send_widget)
         self.multi_send_layout.setContentsMargins(0, 0, 0, 0)
-        self.multi_send_layout.setSpacing(10)
+        self.multi_send_layout.setSpacing(8)
         
         # 多字符发送组
         multi_send_group = QGroupBox("多字符串发送")
         multi_send_group.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
         multi_send_group_layout = QVBoxLayout(multi_send_group)
-        multi_send_group_layout.setContentsMargins(10, 10, 10, 10)
+        multi_send_group_layout.setContentsMargins(8, 8, 8, 8)
         multi_send_group_layout.setSpacing(8)
         
         # 工具栏
@@ -580,33 +934,33 @@ class SerialTool(QMainWindow):
         
         # 循环发送复选框（用于控制批量发送的开始/停止）
         self.check_cycle_send = QCheckBox("循环发送")
-        self.check_cycle_send.setFont(QFont("Microsoft YaHei", 8))
+        self.check_cycle_send.setFont(QFont("Microsoft YaHei", 9))
         self.check_cycle_send.stateChanged.connect(self.toggle_batch_send)
         toolbar_layout.addWidget(self.check_cycle_send)
         
         # 延时标签和输入框
         delay_label = QLabel("延时:")
-        delay_label.setFont(QFont("Microsoft YaHei", 8))
+        delay_label.setFont(QFont("Microsoft YaHei", 9))
         toolbar_layout.addWidget(delay_label)
         self.spin_delay = QSpinBox()
         self.spin_delay.setRange(0, 10000)
         self.spin_delay.setValue(1000)
-        self.spin_delay.setFont(QFont("Consolas", 8))
+        self.spin_delay.setFont(QFont("Consolas", 9))
         self.spin_delay.setMinimumWidth(60)
         toolbar_layout.addWidget(self.spin_delay)
         ms_label = QLabel("ms")
-        ms_label.setFont(QFont("Microsoft YaHei", 8))
+        ms_label.setFont(QFont("Microsoft YaHei", 9))
         toolbar_layout.addWidget(ms_label)
         
         # 循环次数勾选按钮和输入框
         self.check_cycle_count = QCheckBox("次数:")
-        self.check_cycle_count.setFont(QFont("Microsoft YaHei", 8))
+        self.check_cycle_count.setFont(QFont("Microsoft YaHei", 9))
         toolbar_layout.addWidget(self.check_cycle_count)
         
         self.spin_cycle_count = QSpinBox()
         self.spin_cycle_count.setRange(1, 9999)
         self.spin_cycle_count.setValue(1)
-        self.spin_cycle_count.setFont(QFont("Consolas", 8))
+        self.spin_cycle_count.setFont(QFont("Consolas", 9))
         self.spin_cycle_count.setMinimumWidth(60)
         self.spin_cycle_count.setEnabled(False)  # 默认禁用
         toolbar_layout.addWidget(self.spin_cycle_count)
@@ -622,20 +976,20 @@ class SerialTool(QMainWindow):
         
         # 保存/加载按钮
         btn_save = QPushButton("保存")
-        btn_save.setFont(QFont("Microsoft YaHei", 8))
+        btn_save.setFont(QFont("Microsoft YaHei", 9))
         btn_save.setMinimumWidth(50)
         btn_save.clicked.connect(self.save_multi_items)
         button_row_layout.addWidget(btn_save)
         
         btn_load = QPushButton("加载")
-        btn_load.setFont(QFont("Microsoft YaHei", 8))
+        btn_load.setFont(QFont("Microsoft YaHei", 9))
         btn_load.setMinimumWidth(50)
         btn_load.clicked.connect(self.load_multi_items)
         button_row_layout.addWidget(btn_load)
         
         # 帮助按钮
         btn_help = QPushButton("帮助")
-        btn_help.setFont(QFont("Microsoft YaHei", 8))
+        btn_help.setFont(QFont("Microsoft YaHei", 9))
         btn_help.setMinimumWidth(50)
         btn_help.clicked.connect(self.show_multi_send_help)
         button_row_layout.addWidget(btn_help)
@@ -696,7 +1050,7 @@ class SerialTool(QMainWindow):
             
             # 发送按钮（支持双击编辑）
             send_btn = QPushButton(item[2])
-            send_btn.setFont(QFont("Microsoft YaHei", 8))
+            send_btn.setFont(QFont("Microsoft YaHei", 9))
             send_btn.setMinimumWidth(70)  # 增加按钮宽度
             send_btn.clicked.connect(self.on_send_multi_btn_clicked)
             send_btn.setObjectName(f"btn_{i}")
@@ -713,7 +1067,7 @@ class SerialTool(QMainWindow):
             delay_spin = QSpinBox()
             delay_spin.setRange(0, 10000)
             delay_spin.setValue(item[3])
-            delay_spin.setFont(QFont("Consolas", 8))
+            delay_spin.setFont(QFont("Consolas", 9))
             delay_widget = QWidget()
             delay_layout = QHBoxLayout(delay_widget)
             delay_layout.addWidget(delay_spin)
@@ -738,21 +1092,21 @@ class SerialTool(QMainWindow):
         
         # 添加/删除按钮
         btn_layout = QHBoxLayout()
-        btn_add = QPushButton("+")
-        btn_add.setFont(QFont("Microsoft YaHei", 8))
-        btn_add.setMinimumWidth(30)
+        btn_add = QPushButton("＋ 添加")
+        btn_add.setFont(QFont("Microsoft YaHei", 9))
+        btn_add.setMinimumWidth(70)
         btn_add.clicked.connect(self.add_multi_item)
         btn_layout.addWidget(btn_add)
-        
-        btn_remove = QPushButton("-")
-        btn_remove.setFont(QFont("Microsoft YaHei", 8))
-        btn_remove.setMinimumWidth(30)
+
+        btn_remove = QPushButton("− 删除")
+        btn_remove.setFont(QFont("Microsoft YaHei", 9))
+        btn_remove.setMinimumWidth(70)
         btn_remove.clicked.connect(self.remove_multi_item)
         btn_layout.addWidget(btn_remove)
         
         # 清空指令按钮
         btn_clear = QPushButton("清空指令")
-        btn_clear.setFont(QFont("Microsoft YaHei", 8))
+        btn_clear.setFont(QFont("Microsoft YaHei", 9))
         btn_clear.setMinimumWidth(40)
         btn_clear.clicked.connect(self.clear_all_items)
         btn_layout.addWidget(btn_clear)
@@ -776,7 +1130,7 @@ class SerialTool(QMainWindow):
         left_content = QWidget()
         left_layout = QVBoxLayout(left_content)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(3)
+        left_layout.setSpacing(4)
         left_layout.addWidget(serial_group)
         left_layout.addWidget(splitter)
         # 设置左侧内容的大小策略
@@ -815,30 +1169,32 @@ class SerialTool(QMainWindow):
         
         # --- 状态栏 ---
         self.statusBar().showMessage("就绪")
-        self.statusBar().setStyleSheet("QStatusBar { background-color: #F0F0F0; border-top: 1px solid #CCCCCC; }")
         
         # 添加状态栏组件
         # 使用富文本设置连接状态，只改变状态部分的颜色
         self.status_connection = QLabel()
         self.status_connection.setFont(QFont("Microsoft YaHei", 9))
-        # 初始状态为未连接，红色
-        self.status_connection.setText('<span style="color: black;">连接状态：</span><span style="color: red;">未连接</span>')
+        # 初始状态为未连接
+        self._update_status_connection_text(False)
         self.status_baud = QLabel("波特率: 115200")
         self.status_baud.setFont(QFont("Microsoft YaHei", 9))
         self.status_log = QLabel("日志文件: 未创建")
         self.status_log.setFont(QFont("Microsoft YaHei", 9))
         
         self.statusBar().addPermanentWidget(self.status_connection)
-        self.statusBar().addPermanentWidget(QLabel(" | "))
+        self.statusBar().addPermanentWidget(QLabel("  ·  "))
         self.statusBar().addPermanentWidget(self.status_baud)
-        self.statusBar().addPermanentWidget(QLabel(" | "))
+        self.statusBar().addPermanentWidget(QLabel("  ·  "))
         self.statusBar().addPermanentWidget(self.status_log)
-        self.statusBar().addPermanentWidget(QLabel(" | "))
+        self.statusBar().addPermanentWidget(QLabel("  ·  "))
         
         # 版本号显示
         self.status_version = QLabel(f"版本: {VERSION}")
         self.status_version.setFont(QFont("Microsoft YaHei", 9))
         self.statusBar().addPermanentWidget(self.status_version)
+
+        # 应用初始主题（必须在所有控件创建之后调用）
+        self.apply_theme(self.current_theme)
 
     def toggle_repeat(self):
         """切换重复发送状态"""
@@ -856,6 +1212,125 @@ class SerialTool(QMainWindow):
         self.btn_stop.setEnabled(False)
         self.check_repeat.setChecked(False)
 
+    # ========== 主题相关方法 ==========
+
+    def apply_theme(self, theme_name):
+        """应用主题（light 或 dark）"""
+        self.current_theme = theme_name
+        self.theme_colors = dict(THEME_COLORS[theme_name])
+
+        # 1. 全局 QSS（注入下拉箭头图片路径）
+        if theme_name == 'dark':
+            qss = DARK_QSS.replace('__ARROW_DARK__', self._arrow_dark_path)
+            QApplication.instance().setStyleSheet(qss)
+            self.btn_theme.setText("☀ 亮色模式")
+            self._set_titlebar_dark(True, color_hex='#282C34')
+        else:
+            qss = LIGHT_QSS.replace('__ARROW_LIGHT__', self._arrow_light_path)
+            QApplication.instance().setStyleSheet(qss)
+            self.btn_theme.setText("◑ 暗黑模式")
+            self._set_titlebar_dark(False)
+
+        # 2. 更新状态栏连接状态文字颜色
+        self._refresh_status_connection()
+
+
+    def _set_titlebar_dark(self, dark=True, color_hex='#282C34'):
+        """设置 Windows 标题栏颜色以匹配主题"""
+        import platform
+        if platform.system() != 'Windows':
+            return
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            if not hwnd:
+                return
+
+            if dark:
+                # Win11: DWMWA_CAPTION_COLOR (35) — 精确颜色
+                try:
+                    r, g, b = int(color_hex[1:3], 16), int(color_hex[3:5], 16), int(color_hex[5:7], 16)
+                    colorref = ctypes.c_uint((b << 16) | (g << 8) | r)
+                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                        ctypes.wintypes.HWND(hwnd),
+                        ctypes.c_uint(35),
+                        ctypes.byref(colorref),
+                        ctypes.sizeof(colorref))
+                except Exception:
+                    pass
+                # Win10: DWMWA_USE_IMMERSIVE_DARK_MODE (19/20)
+                value = ctypes.c_int(1)
+                for attr in (20, 19):
+                    try:
+                        if ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                                ctypes.wintypes.HWND(hwnd),
+                                ctypes.c_uint(attr),
+                                ctypes.byref(value),
+                                ctypes.sizeof(value)) == 0:
+                            break
+                    except Exception:
+                        continue
+            else:
+                # Win11: 重置标题栏颜色为系统默认
+                try:
+                    none = ctypes.c_uint(0xFFFFFFFF)  # DWMWA_COLOR_NONE
+                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                        ctypes.wintypes.HWND(hwnd),
+                        ctypes.c_uint(35),
+                        ctypes.byref(none),
+                        ctypes.sizeof(none))
+                except Exception:
+                    pass
+                # Win10: 取消暗黑模式
+                value = ctypes.c_int(0)
+                for attr in (20, 19):
+                    try:
+                        if ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                                ctypes.wintypes.HWND(hwnd),
+                                ctypes.c_uint(attr),
+                                ctypes.byref(value),
+                                ctypes.sizeof(value)) == 0:
+                            break
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    def showEvent(self, event):
+        """窗口显示时设置标题栏颜色（此时 winId 已有效）"""
+        super().showEvent(event)
+        if self.current_theme == 'dark':
+            self._set_titlebar_dark(True, color_hex='#282C34')
+        else:
+            self._set_titlebar_dark(False)
+
+    def _refresh_status_connection(self):
+        """根据当前串口连接状态刷新状态栏文本颜色"""
+        is_connected = (hasattr(self, 'serial_port') and self.serial_port
+                        and self.serial_port.is_open)
+        self._update_status_connection_text(is_connected)
+
+    def _update_status_connection_text(self, connected):
+        """更新状态栏连接状态文字（主题感知）"""
+        label_color = self.theme_colors['text_normal'].name()
+        if connected:
+            self.status_connection.setText(
+                f'<span style="color: {label_color};">连接状态：</span>'
+                f'<span style="color: green;">已连接</span>'
+            )
+        else:
+            self.status_connection.setText(
+                f'<span style="color: {label_color};">连接状态：</span>'
+                f'<span style="color: red;">未连接</span>'
+            )
+
+    def toggle_theme(self):
+        """切换主题"""
+        new_theme = 'dark' if self.current_theme == 'light' else 'light'
+        self.apply_theme(new_theme)
+        self.save_config()
+        theme_display = "暗黑模式" if new_theme == 'dark' else "亮色模式"
+        self.append_text(f"[系统]: 已切换至{theme_display}\n")
     def handle_baud_change(self, index):
         """处理波特率选择变化"""
         if self.combo_baud.itemText(index) == "自定义":
@@ -1025,7 +1500,7 @@ class SerialTool(QMainWindow):
                 self.append_text(f"--- 串口 {port_name} 已打开, 波特率 {baud_rate} ---")
                 
                 # 更新状态栏
-                self.status_connection.setText('<span style="color: black;">连接状态：</span><span style="color: green;">已连接</span>')
+                self._update_status_connection_text(True)
                 self.status_baud.setText(f"波特率: {baud_rate}")
                 self.statusBar().showMessage("就绪")  # 恢复就绪状态
                 
@@ -1093,7 +1568,7 @@ class SerialTool(QMainWindow):
                     self.append_text(f"[错误]: 关闭串口失败: {str(e)}\n")
 
             # 更新状态栏
-            self.status_connection.setText('<span style="color: black;">连接状态：</span><span style="color: red;">未连接</span>')
+            self._update_status_connection_text(False)
             self.status_baud.setText("波特率：115200")
             self.statusBar().showMessage("就绪")  # 恢复就绪状态
             
@@ -1386,42 +1861,14 @@ class SerialTool(QMainWindow):
     def process_ansi_colors(self, text):
         """处理ANSI颜色转义序列，返回文本和格式信息"""
         import re
-        # ANSI颜色代码映射到QColor
-        ansi_colors = {
-            '30': QColor(0, 0, 0),      # 黑色
-            '31': QColor(255, 0, 0),    # 红色
-            '32': QColor(0, 128, 0),    # 深绿色（更清晰）
-            '33': QColor(165, 42, 42),  # 棕色（更清晰）
-            '34': QColor(0, 0, 255),    # 蓝色
-            '35': QColor(128, 0, 128),  # 深紫色（更清晰）
-            '36': QColor(0, 128, 128),  # 深青色（更清晰）
-            '37': QColor(128, 128, 128), # 灰色（更清晰）
-            '90': QColor(128, 128, 128), # 亮黑（灰色）
-            '91': QColor(255, 0, 0),    # 亮红
-            '92': QColor(0, 128, 0),    # 亮绿（更清晰）
-            '93': QColor(165, 42, 42),  # 亮黄（更清晰）
-            '94': QColor(0, 0, 255),    # 亮蓝
-            '95': QColor(128, 0, 128),  # 亮紫（更清晰）
-            '96': QColor(0, 128, 128),  # 亮青（更清晰）
-            '97': QColor(128, 128, 128), # 亮白（更清晰）
-        }
-        
-        # ANSI背景颜色代码映射到QColor
-        ansi_bg_colors = {
-            '40': QColor(0, 0, 0),      # 黑色背景
-            '41': QColor(255, 0, 0),    # 红色背景
-            '42': QColor(0, 255, 0),    # 绿色背景
-            '43': QColor(255, 255, 0),  # 黄色背景
-            '44': QColor(0, 0, 255),    # 蓝色背景
-            '45': QColor(255, 0, 255),  # 紫色背景
-            '46': QColor(0, 255, 255),  # 青色背景
-            '47': QColor(255, 255, 255), # 白色背景
-        }
+        # 使用主题感知的 ANSI 颜色映射
+        ansi_colors = self.theme_colors['ansi_fg']
+        ansi_bg_colors = self.theme_colors['ansi_bg']
         
         # 处理ANSI转义序列
         result = []
         current_format = QTextCharFormat()
-        current_format.setForeground(QColor(0, 0, 0))  # 默认黑色，与白色背景对比清晰
+        current_format.setForeground(self.theme_colors['ansi_default_fg'])  # 根据主题设置默认前景色
         
         # 使用正则表达式匹配ANSI转义序列和单独的\x1B字符
         ansi_pattern = re.compile(r'\x1B(?:\[([0-9;]*)m)?')
@@ -1450,7 +1897,7 @@ class SerialTool(QMainWindow):
                     if code == '0':
                         # 重置所有样式
                         current_format = QTextCharFormat()
-                        current_format.setForeground(QColor(0, 0, 0))  # 重置为黑色前景色，确保在白色背景下可见
+                        current_format.setForeground(self.theme_colors['ansi_default_fg'])  # 重置为当前主题默认前景色
                     elif code in ansi_colors:
                         current_format.setForeground(ansi_colors[code])
                     elif code in ansi_bg_colors:
@@ -1542,7 +1989,7 @@ class SerialTool(QMainWindow):
             self.btn_refresh.setEnabled(True)
             
             # 更新状态栏
-            self.status_connection.setText('<span style="color: black;">连接状态：</span><span style="color: red;">未连接</span>')
+            self._update_status_connection_text(False)
             self.status_baud.setText("波特率: 115200")
             self.statusBar().showMessage(f"串口读取错误: {error_msg}")
         except Exception as e:
@@ -1856,25 +2303,22 @@ class SerialTool(QMainWindow):
         cursor.movePosition(QTextCursor.End)
         
         # 根据消息类型设置不同的颜色
+        tc = self.theme_colors
         if "[发送]:" in text:
-            # 发送的内容使用蓝色
             format = QTextCharFormat()
-            format.setForeground(QColor(0, 0, 255))  # 蓝色
+            format.setForeground(tc['text_send'])
             cursor.setCharFormat(format)
         elif "[系统]:" in text:
-            # 系统消息使用灰色
             format = QTextCharFormat()
-            format.setForeground(QColor(128, 128, 128))  # 灰色
+            format.setForeground(tc['text_system'])
             cursor.setCharFormat(format)
         elif "[错误]:" in text:
-            # 错误消息使用红色
             format = QTextCharFormat()
-            format.setForeground(QColor(255, 0, 0))  # 红色
+            format.setForeground(tc['text_error'])
             cursor.setCharFormat(format)
         else:
-            # 其他消息使用黑色
             format = QTextCharFormat()
-            format.setForeground(QColor(0, 0, 0))  # 黑色
+            format.setForeground(tc['text_normal'])
             cursor.setCharFormat(format)
         
         # 插入文本
@@ -2205,7 +2649,7 @@ class SerialTool(QMainWindow):
         
         # 发送按钮（支持双击编辑）
         send_btn = QPushButton("无注释")
-        send_btn.setFont(QFont("Microsoft YaHei", 8))
+        send_btn.setFont(QFont("Microsoft YaHei", 9))
         send_btn.setMinimumWidth(70)  # 增加按钮宽度
         send_btn.clicked.connect(self.on_send_multi_btn_clicked)
         send_btn.setObjectName(f"btn_{row}")
@@ -2222,7 +2666,7 @@ class SerialTool(QMainWindow):
         delay_spin = QSpinBox()
         delay_spin.setRange(0, 10000)
         delay_spin.setValue(1000)
-        delay_spin.setFont(QFont("Consolas", 8))
+        delay_spin.setFont(QFont("Consolas", 9))
         delay_widget = QWidget()
         delay_layout = QHBoxLayout(delay_widget)
         delay_layout.addWidget(delay_spin)
@@ -2856,7 +3300,7 @@ class SerialTool(QMainWindow):
                 # 发送按钮（支持双击编辑，恢复保存的按钮文本）
                 button_text = item.get("button_text", "无注释")
                 send_btn = QPushButton(button_text)
-                send_btn.setFont(QFont("Microsoft YaHei", 8))
+                send_btn.setFont(QFont("Microsoft YaHei", 9))
                 send_btn.setMinimumWidth(70)
                 send_btn.clicked.connect(self.on_send_multi_btn_clicked)
                 send_btn.setObjectName(f"btn_{i}")
@@ -2873,7 +3317,7 @@ class SerialTool(QMainWindow):
                 delay_spin = QSpinBox()
                 delay_spin.setRange(0, 10000)
                 delay_spin.setValue(item.get("delay", 1000))
-                delay_spin.setFont(QFont("Consolas", 8))
+                delay_spin.setFont(QFont("Consolas", 9))
                 delay_widget = QWidget()
                 delay_layout = QHBoxLayout(delay_widget)
                 delay_layout.addWidget(delay_spin)
@@ -3401,7 +3845,7 @@ class SerialTool(QMainWindow):
 
                         # 发送按钮
                         button = QPushButton(item_data.get('button_text', '无注释'))
-                        button.setFont(QFont("Microsoft YaHei", 8))
+                        button.setFont(QFont("Microsoft YaHei", 9))
                         button.setMinimumWidth(70)
                         button.clicked.connect(self.on_send_multi_btn_clicked)
                         # 为按钮设置唯一的对象名称，用于事件过滤器
@@ -3425,7 +3869,7 @@ class SerialTool(QMainWindow):
                         except (ValueError, TypeError):
                             delay = 1000
                         delay_spin.setValue(delay)
-                        delay_spin.setFont(QFont("Consolas", 8))
+                        delay_spin.setFont(QFont("Consolas", 9))
                         delay_widget = QWidget()
                         delay_layout = QHBoxLayout(delay_widget)
                         delay_layout.setContentsMargins(0, 0, 0, 0)
@@ -3439,6 +3883,18 @@ class SerialTool(QMainWindow):
                         order_item.setTextAlignment(Qt.AlignCenter)  # 文本居中显示
                         self.table_multi_send.setItem(row, 4, order_item)
                 
+                # 加载主题设置
+                need_apply_theme = False
+                if 'theme' in config and config['theme'] in ('light', 'dark'):
+                    if config['theme'] != self.current_theme:
+                        self.current_theme = config['theme']
+                        self.theme_colors = dict(THEME_COLORS[self.current_theme])
+                        need_apply_theme = True
+
+                # 如果加载了与默认不同的主题，重新应用
+                if need_apply_theme:
+                    self.apply_theme(self.current_theme)
+
                 self.append_text("[系统]: 配置已加载\n")
             except Exception as e:
                 self.append_text(f"[错误]: 加载配置失败: {str(e)}\n")
@@ -3528,7 +3984,9 @@ class SerialTool(QMainWindow):
             'parity': getattr(self, 'serial_parity', 'None'),
             'flow_control': getattr(self, 'serial_flow_control', 'None'),
             # 编码格式
-            'encoding': self.combo_encoding.currentText()
+            'encoding': self.combo_encoding.currentText(),
+            # 主题设置
+            'theme': self.current_theme,
         }
         
         try:

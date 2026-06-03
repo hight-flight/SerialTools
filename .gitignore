@@ -6,3 +6,5 @@ dist/
 logs/
 serial_config.json
 .vscode/
+_arrow_dark.png
+_arrow_light.png

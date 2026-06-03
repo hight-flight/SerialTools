@@ -2,7 +2,7 @@
     "port": "COM3",
     "baudrate": 115200,
     "auto_save": false,
-    "save_directory": "D:\\test_project\\trace_pro\\test_demo\\logs",
+    "save_directory": "D:\\script\\code_project\\serial_GUI\\logs",
     "hex_recv": false,
     "hex_send": false,
     "show_timestamp": true,
@@ -11,20 +11,35 @@
     "dtr": false,
     "head_field": "",
     "tail_field": "",
+    "head_field_enabled": false,
+    "tail_field_enabled": false,
     "multi_items": [
         {
             "hex": false,
             "string": "help",
-            "button_text": "帮助",
-            "delay": 1000,
+            "button_text": "无注释",
+            "delay": 2000,
             "order": "1"
         },
         {
             "hex": false,
-            "string": "呜呜呜",
+            "string": "5",
+            "button_text": "无注释",
+            "delay": 1000,
+            "order": "0"
+        },
+        {
+            "hex": false,
+            "string": "4",
             "button_text": "无注释",
             "delay": 1000,
             "order": "0"
         }
-    ]
+    ],
+    "data_bits": "8",
+    "stop_bits": "1",
+    "parity": "None",
+    "flow_control": "None",
+    "encoding": "UTF-8",
+    "theme": "dark"
 }
