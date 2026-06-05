@@ -9,10 +9,10 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTextEdit, QCheckBox, QMessageBox, QSplitter, QSpinBox, QLineEdit, QProgressBar, QGroupBox, QDialog, QFormLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog, QFrame, QSizePolicy)  
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint
-from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPixmap, QPainter, QPolygon
+from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon
 
 # --- 全局常量 --- 
-VERSION = "1.1.6"
+VERSION = "1.1.7"
 
 # --- 主题颜色常量 ---
 THEME_COLORS = {
@@ -509,6 +509,11 @@ class SerialTool(QMainWindow):
         self.error_state = False  # 错误状态标志
         self.stop_file_send = False  # 文件发送取消标志
 
+        # 筛选相关
+        self.filter_enabled = False   # 筛选开关
+        self.filter_text = ""         # 筛选关键字
+        self.filter_mode = "包含"     # 筛选模式: "包含" / "忽略大小写" / "正则"
+
         # 主题相关
         self.current_theme = "light"  # 默认亮色模式
         self.theme_colors = dict(THEME_COLORS['light'])
@@ -551,7 +556,7 @@ class SerialTool(QMainWindow):
         return dark, light
 
     def init_ui(self):
-        self.setWindowTitle("串口调试助手")
+        self.setWindowTitle("hight-flight串口调试助手")
         self.resize(1000, 900)
 
         # 主窗口部件
@@ -641,6 +646,28 @@ class SerialTool(QMainWindow):
         self.check_hex_recv.setFont(QFont("Microsoft YaHei", 9))
         display_save_layout.addWidget(self.check_hex_recv)
 
+        # 筛选控件
+        self.check_filter = QCheckBox("筛选:")
+        self.check_filter.setFont(QFont("Microsoft YaHei", 9))
+        self.check_filter.stateChanged.connect(self.toggle_filter)
+        display_save_layout.addWidget(self.check_filter)
+
+        self.edit_filter = QLineEdit()
+        self.edit_filter.setFont(QFont("Consolas", 9))
+        self.edit_filter.setPlaceholderText("输入关键字，逗号分隔...")
+        self.edit_filter.setMaximumWidth(180)
+        self.edit_filter.setEnabled(False)
+        self.edit_filter.textChanged.connect(self.update_filter_text)
+        display_save_layout.addWidget(self.edit_filter)
+
+        self.combo_filter_mode = QComboBox()
+        self.combo_filter_mode.addItems(["包含", "忽略大小写", "正则"])
+        self.combo_filter_mode.setFont(QFont("Microsoft YaHei", 9))
+        self.combo_filter_mode.setMaximumWidth(90)
+        self.combo_filter_mode.setEnabled(False)
+        self.combo_filter_mode.currentTextChanged.connect(self.update_filter_mode)
+        display_save_layout.addWidget(self.combo_filter_mode)
+
         # 编码选择
         encoding_label = QLabel("编码:")
         encoding_label.setFont(QFont("Microsoft YaHei", 9))
@@ -677,7 +704,7 @@ class SerialTool(QMainWindow):
         self.line_edit_save_path.setMaximumWidth(200)
         display_save_layout.addWidget(self.line_edit_save_path)
         self.btn_browse_path = QPushButton("浏览")
-        self.btn_browse_path.setMaximumWidth(48)
+        self.btn_browse_path.setMinimumWidth(58)
         self.btn_browse_path.setFont(QFont("Microsoft YaHei", 9))
         self.btn_browse_path.clicked.connect(self.browse_save_path)
         display_save_layout.addWidget(self.btn_browse_path)
@@ -685,7 +712,9 @@ class SerialTool(QMainWindow):
         # 清空接收区按钮
         self.btn_clear_recv = QPushButton("清空接收")
         self.btn_clear_recv.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_clear_recv.setFixedSize(78, 28)
+        self.btn_clear_recv.setMinimumSize(88, 30)
+        # 让按钮高度与同一行的"浏览"按钮对齐，不设死 fixed size 避免文字被裁剪
+        self.btn_clear_recv.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_clear_recv.clicked.connect(self.clear_recv_area)
         display_save_layout.addWidget(self.btn_clear_recv)
         display_save_layout.addStretch()
@@ -1204,6 +1233,48 @@ class SerialTool(QMainWindow):
             self.spin_interval.setEnabled(False)
             self.stop_repeat()
 
+    def toggle_filter(self):
+        """切换筛选功能"""
+        self.filter_enabled = self.check_filter.isChecked()
+        self.edit_filter.setEnabled(self.filter_enabled)
+        self.combo_filter_mode.setEnabled(self.filter_enabled)
+
+    def update_filter_text(self, text):
+        """更新筛选关键字"""
+        self.filter_text = text
+
+    def update_filter_mode(self, mode):
+        """更新筛选模式"""
+        self.filter_mode = mode
+
+    def _match_filter(self, line):
+        """检查行是否匹配筛选条件。
+        支持逗号分隔的多关键字（OR 逻辑），以及三种匹配模式：
+        - "包含": 大小写敏感子串匹配
+        - "忽略大小写": 大小写不敏感子串匹配
+        - "正则": 正则表达式匹配
+        """
+        import re
+        keywords = [kw.strip() for kw in self.filter_text.split(',') if kw.strip()]
+        if not keywords:
+            return True
+
+        for kw in keywords:
+            if self.filter_mode == "包含":
+                if kw in line:
+                    return True
+            elif self.filter_mode == "忽略大小写":
+                if kw.lower() in line.lower():
+                    return True
+            elif self.filter_mode == "正则":
+                try:
+                    if re.search(kw, line):
+                        return True
+                except re.error:
+                    # 正则表达式无效时跳过该关键字
+                    continue
+        return False
+
     def stop_repeat(self):
         """停止重复发送"""
         if self.repeat_timer.isActive():
@@ -1236,65 +1307,130 @@ class SerialTool(QMainWindow):
 
 
     def _set_titlebar_dark(self, dark=True, color_hex='#282C34'):
-        """设置 Windows 标题栏颜色以匹配主题"""
+        """设置窗口标题栏/背景颜色以匹配主题（Windows / Linux / macOS）"""
         import platform
-        if platform.system() != 'Windows':
-            return
-        try:
-            import ctypes
-            hwnd = int(self.winId())
-            if not hwnd:
-                return
+        system = platform.system()
 
-            if dark:
-                # Win11: DWMWA_CAPTION_COLOR (35) — 精确颜色
-                try:
-                    r, g, b = int(color_hex[1:3], 16), int(color_hex[3:5], 16), int(color_hex[5:7], 16)
-                    colorref = ctypes.c_uint((b << 16) | (g << 8) | r)
-                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                        ctypes.wintypes.HWND(hwnd),
-                        ctypes.c_uint(35),
-                        ctypes.byref(colorref),
-                        ctypes.sizeof(colorref))
-                except Exception:
-                    pass
-                # Win10: DWMWA_USE_IMMERSIVE_DARK_MODE (19/20)
-                value = ctypes.c_int(1)
-                for attr in (20, 19):
+        # ── 通用：设置应用级暗色调色板（非 Windows 系统的主要手段）──
+        if dark:
+            dark_palette = QApplication.instance().palette()
+            dark_palette.setColor(QPalette.Window, QColor(color_hex))
+            dark_palette.setColor(QPalette.WindowText, QColor(0xAB, 0xB2, 0xBF))
+            dark_palette.setColor(QPalette.Base, QColor(0x2C, 0x31, 0x3C))
+            dark_palette.setColor(QPalette.AlternateBase, QColor(0x21, 0x25, 0x2B))
+            dark_palette.setColor(QPalette.Text, QColor(0xAB, 0xB2, 0xBF))
+            dark_palette.setColor(QPalette.Button, QColor(0x2C, 0x31, 0x3C))
+            dark_palette.setColor(QPalette.ButtonText, QColor(0xAB, 0xB2, 0xBF))
+            QApplication.instance().setPalette(dark_palette)
+        else:
+            QApplication.instance().setPalette(QApplication.style().standardPalette())
+
+        # ── Windows：DWM API 精确设置标题栏颜色 ──
+        if system == 'Windows':
+            try:
+                import ctypes
+                hwnd = int(self.winId())
+                if not hwnd:
+                    return
+
+                if dark:
+                    # Win11: DWMWA_CAPTION_COLOR (35) — 精确颜色
                     try:
-                        if ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                                ctypes.wintypes.HWND(hwnd),
-                                ctypes.c_uint(attr),
-                                ctypes.byref(value),
-                                ctypes.sizeof(value)) == 0:
-                            break
+                        r, g, b = int(color_hex[1:3], 16), int(color_hex[3:5], 16), int(color_hex[5:7], 16)
+                        colorref = ctypes.c_uint((b << 16) | (g << 8) | r)
+                        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                            ctypes.wintypes.HWND(hwnd),
+                            ctypes.c_uint(35),
+                            ctypes.byref(colorref),
+                            ctypes.sizeof(colorref))
                     except Exception:
-                        continue
-            else:
-                # Win11: 重置标题栏颜色为系统默认
-                try:
-                    none = ctypes.c_uint(0xFFFFFFFF)  # DWMWA_COLOR_NONE
-                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                        ctypes.wintypes.HWND(hwnd),
-                        ctypes.c_uint(35),
-                        ctypes.byref(none),
-                        ctypes.sizeof(none))
-                except Exception:
-                    pass
-                # Win10: 取消暗黑模式
-                value = ctypes.c_int(0)
-                for attr in (20, 19):
+                        pass
+                    # Win10: DWMWA_USE_IMMERSIVE_DARK_MODE (19/20)
+                    value = ctypes.c_int(1)
+                    for attr in (20, 19):
+                        try:
+                            if ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                                    ctypes.wintypes.HWND(hwnd),
+                                    ctypes.c_uint(attr),
+                                    ctypes.byref(value),
+                                    ctypes.sizeof(value)) == 0:
+                                break
+                        except Exception:
+                            continue
+                else:
+                    # Win11: 重置标题栏颜色为系统默认
                     try:
-                        if ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                                ctypes.wintypes.HWND(hwnd),
-                                ctypes.c_uint(attr),
-                                ctypes.byref(value),
-                                ctypes.sizeof(value)) == 0:
-                            break
+                        none = ctypes.c_uint(0xFFFFFFFF)  # DWMWA_COLOR_NONE
+                        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                            ctypes.wintypes.HWND(hwnd),
+                            ctypes.c_uint(35),
+                            ctypes.byref(none),
+                            ctypes.sizeof(none))
                     except Exception:
-                        continue
-        except Exception:
-            pass
+                        pass
+                    # Win10: 取消暗黑模式
+                    value = ctypes.c_int(0)
+                    for attr in (20, 19):
+                        try:
+                            if ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                                    ctypes.wintypes.HWND(hwnd),
+                                    ctypes.c_uint(attr),
+                                    ctypes.byref(value),
+                                    ctypes.sizeof(value)) == 0:
+                                break
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+        # ── Linux：通过 X11 property 告知窗口管理器这是暗色应用 ──
+        elif system == 'Linux':
+            try:
+                import ctypes
+                x11 = ctypes.cdll.LoadLibrary('libX11.so.6')
+                if not x11:
+                    return
+                display = x11.XOpenDisplay(None)
+                if not display:
+                    return
+                try:
+                    xwin = int(self.winId())
+                    if xwin == 0:
+                        return
+
+                    # 获取 UTF8_STRING 类型原子
+                    utf8_atom = x11.XInternAtom(display, ctypes.c_char_p(b'UTF8_STRING'), 0)
+                    variant = ctypes.c_char_p(b'dark' if dark else b'light')
+                    data_len = len(b'dark' if dark else b'light')
+
+                    # 设置 _GTK_THEME_VARIANT hint (GNOME/GTK 环境)
+                    gtk_atom = x11.XInternAtom(display, ctypes.c_char_p(b'_GTK_THEME_VARIANT'), 0)
+                    x11.XChangeProperty(
+                        display, ctypes.c_ulong(xwin),
+                        gtk_atom, utf8_atom, 8,
+                        ctypes.c_int(0),  # PropModeReplace
+                        variant, data_len)
+                    # 设置 _KDE_NET_WM_THEME_VARIANT hint (KDE Plasma 环境)
+                    kde_atom = x11.XInternAtom(display, ctypes.c_char_p(b'_KDE_NET_WM_THEME_VARIANT'), 0)
+                    x11.XChangeProperty(
+                        display, ctypes.c_ulong(xwin),
+                        kde_atom, utf8_atom, 8,
+                        ctypes.c_int(0),
+                        variant, data_len)
+                    x11.XFlush(display)
+                finally:
+                    x11.XCloseDisplay(display)
+            except Exception:
+                pass
+
+        # ── 确保 central widget 也获得暗色背景（QMainWindow QSS 不自动穿透）──
+        central = self.centralWidget()
+        if central is not None:
+            central.setAutoFillBackground(True)
+            bg_color = QColor(color_hex) if dark else QColor('#F5F5F5')
+            palette = central.palette()
+            palette.setColor(QPalette.Window, bg_color)
+            central.setPalette(palette)
 
     def showEvent(self, event):
         """窗口显示时设置标题栏颜色（此时 winId 已有效）"""
@@ -2208,7 +2344,12 @@ class SerialTool(QMainWindow):
                 # 跳过空行（连续换行或开头换行的情况）
                 if not line:
                     continue
-                    
+
+                # 筛选过滤：仅显示匹配关键字的行（不影响日志记录和自动保存）
+                if self.filter_enabled and self.filter_text:
+                    if not self._match_filter(line):
+                        continue
+
                 # 处理ANSI颜色转义序列和控制字符
                 formatted_segments = self.process_ansi_colors(line)
 
