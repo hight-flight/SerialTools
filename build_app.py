@@ -246,6 +246,8 @@ def build_application(icon_path=None):
         '--windowed',         # 无命令行窗口（GUI应用）
         '--name', APP_NAME,   # 可执行文件名
         '--add-data', f'{CONFIG_FILE}{path_sep}.',  # 添加配置文件（跨平台兼容）
+        '--hidden-import', 'pyqtgraph',  # 示波器懒加载依赖
+        '--hidden-import', 'numpy',      # pyqtgraph 底层依赖
         MAIN_SCRIPT           # 主脚本
     ]
     

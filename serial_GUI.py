@@ -1,18 +1,20 @@
 import sys
 import os
 import datetime
+import struct
 import serial
 import serial.tools.list_ports
 from collections import deque
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QComboBox, QPushButton,
                              QTextEdit, QCheckBox, QMessageBox, QSplitter, QSpinBox, QLineEdit, QProgressBar, QGroupBox, QDialog, QFormLayout,
-                             QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog, QFrame, QSizePolicy)  
+                             QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog, QFrame, QSizePolicy,
+                             QAction, QMenuBar)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint
 from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon
 
 # --- 全局常量 --- 
-VERSION = "1.1.8"
+VERSION = "1.2.0"
 
 # --- 主题颜色常量 ---
 THEME_COLORS = {
@@ -70,6 +72,8 @@ THEME_COLORS = {
 
 DARK_QSS = """
 QMainWindow        { background-color: #282C34; }
+QMenuBar           { background-color: #21252B; color: #ABB2BF; border-bottom: 1px solid #181A1F; }
+QMenuBar::item:selected { background-color: #3E4451; }
 QGroupBox {
     border: 1px solid #3E4451; border-radius: 6px;
     margin-top: 12px; padding-top: 16px; font-weight: bold; color: #ABB2BF;
@@ -199,6 +203,8 @@ QToolTip {
 
 LIGHT_QSS = """
 QMainWindow        { background-color: #F5F5F5; }
+QMenuBar           { background-color: #F0F0F0; color: #333333; border-bottom: 1px solid #DDDDDD; }
+QMenuBar::item:selected { background-color: #DDDDDD; }
 QGroupBox {
     border: 1px solid #DDDDDD; border-radius: 6px;
     margin-top: 12px; padding-top: 16px; font-weight: bold; color: #444444;
@@ -508,6 +514,7 @@ class SerialTool(QMainWindow):
         self.serial_mutex = QMutex()  # 串口操作互斥锁
         self.error_state = False  # 错误状态标志
         self.stop_file_send = False  # 文件发送取消标志
+        self.selected_file_path = None  # 待发送文件路径
 
         # 筛选相关
         self.filter_enabled = False   # 筛选开关
@@ -556,7 +563,7 @@ class SerialTool(QMainWindow):
         return dark, light
 
     def init_ui(self):
-        self.setWindowTitle("hight-flight串口调试助手")
+        self.setWindowTitle("hight-flight串口工具")
         self.resize(1000, 900)
 
         # 主窗口部件
@@ -564,13 +571,78 @@ class SerialTool(QMainWindow):
         self.setCentralWidget(main_widget)
 
         main_layout = QVBoxLayout(main_widget)
-        main_layout.setContentsMargins(4, 4, 4, 4)
+        main_layout.setContentsMargins(4, 0, 4, 4)  # 顶部由菜单栏占据，不留额外边距
         main_layout.setSpacing(4)
+
+        # --- 菜单栏 ---
+        menubar = self.menuBar()
+
+        # 文件菜单
+        file_menu = menubar.addMenu("文件(&F)")
+        act_save_log = QAction("保存接收日志(&S)", self)
+        act_save_log.setShortcut("Ctrl+S")
+        act_save_log.triggered.connect(self.save_log_manually)
+        file_menu.addAction(act_save_log)
+        act_export = QAction("导出接收数据(&E)...", self)
+        act_export.triggered.connect(self.export_data)
+        file_menu.addAction(act_export)
+        file_menu.addSeparator()
+        act_exit = QAction("退出(&X)", self)
+        act_exit.triggered.connect(self.close)
+        file_menu.addAction(act_exit)
+
+        # 视图菜单
+        view_menu = menubar.addMenu("视图(&V)")
+        self.act_dark_mode = QAction("暗黑模式(&D)", self)
+        self.act_dark_mode.setCheckable(True)
+        self.act_dark_mode.setChecked(self.current_theme == 'dark')
+        self.act_dark_mode.triggered.connect(self.toggle_theme)
+        view_menu.addAction(self.act_dark_mode)
+        self.act_multi_send = QAction("多字符发送(&M)", self)
+        self.act_multi_send.setCheckable(True)
+        self.act_multi_send.triggered.connect(self.toggle_multi_send)
+        view_menu.addAction(self.act_multi_send)
+        self.act_timestamp = QAction("显示时间戳(&T)", self)
+        self.act_timestamp.setCheckable(True)
+        self.act_timestamp.setChecked(True)
+        self.act_timestamp.triggered.connect(self._toggle_timestamp)
+        view_menu.addAction(self.act_timestamp)
+        view_menu.addSeparator()
+        act_clear_recv_menu = QAction("清空接收区(&R)", self)
+        act_clear_recv_menu.triggered.connect(self.clear_recv_area)
+        view_menu.addAction(act_clear_recv_menu)
+        act_clear_send_menu = QAction("清空发送区(&E)", self)
+        act_clear_send_menu.triggered.connect(self.clear_send_area)
+        view_menu.addAction(act_clear_send_menu)
+
+        # 工具菜单
+        tool_menu = menubar.addMenu("工具(&T)")
+        act_crc = QAction("CRC 计算器", self)
+        act_crc.triggered.connect(self.crc_calculator)
+        tool_menu.addAction(act_crc)
+        act_hex = QAction("HEX 转换器", self)
+        act_hex.triggered.connect(self.hex_converter)
+        tool_menu.addAction(act_hex)
+        act_monitor = QAction("串口监视器", self)
+        act_monitor.triggered.connect(self.serial_monitor)
+        tool_menu.addAction(act_monitor)
+        act_scope = QAction("数据波形（示波器）", self)
+        act_scope.triggered.connect(self.oscilloscope)
+        tool_menu.addAction(act_scope)
+
+        # 帮助菜单
+        help_menu = menubar.addMenu("帮助(&H)")
+        act_usage = QAction("使用说明(&U)", self)
+        act_usage.triggered.connect(self.show_usage)
+        help_menu.addAction(act_usage)
+        act_about = QAction("关于(&A)", self)
+        act_about.triggered.connect(self.show_about)
+        help_menu.addAction(act_about)
 
         # --- 顶部设置区域 ---
         # 串口设置分组
         serial_group = QGroupBox("串口设置")
-        serial_group.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+        serial_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         serial_layout = QVBoxLayout(serial_group)
         serial_layout.setContentsMargins(4, 4, 4, 4)
         serial_layout.setSpacing(4)
@@ -625,14 +697,6 @@ class SerialTool(QMainWindow):
         self.btn_more_settings.clicked.connect(self.show_more_settings)
         port_baud_layout.addWidget(self.btn_more_settings)
 
-        # 主题切换按钮
-        self.btn_theme = QPushButton("◑ 暗黑模式")
-        self.btn_theme.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_theme.setMinimumWidth(88)
-        self.btn_theme.setToolTip("切换亮色/暗黑主题")
-        self.btn_theme.clicked.connect(self.toggle_theme)
-        port_baud_layout.addWidget(self.btn_theme)
-
         port_baud_layout.addStretch()
 
         serial_layout.addLayout(port_baud_layout)
@@ -681,8 +745,11 @@ class SerialTool(QMainWindow):
 
         # 显示时间戳复选框
         self.check_timestamp = QCheckBox("显示时间")
-        self.check_timestamp.setChecked(True)  # 默认显示时间
+        self.check_timestamp.setChecked(True)
         self.check_timestamp.setFont(QFont("Microsoft YaHei", 9))
+        self.check_timestamp.stateChanged.connect(
+            lambda checked: self.act_timestamp.setChecked(checked)
+        )
         display_save_layout.addWidget(self.check_timestamp)
 
         # 清空接收区按钮
@@ -732,7 +799,7 @@ class SerialTool(QMainWindow):
         
         # 接收区
         recv_group = QGroupBox("接收区")
-        recv_group.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+        recv_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         recv_layout = QVBoxLayout(recv_group)
         recv_layout.setContentsMargins(4, 4, 4, 4)
 
@@ -768,7 +835,7 @@ class SerialTool(QMainWindow):
         
         # 发送区
         send_group = QGroupBox("发送区")
-        send_group.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+        send_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         send_layout = QVBoxLayout(send_group)
         send_layout.setContentsMargins(4, 4, 4, 4)
         send_layout.setSpacing(4)
@@ -780,6 +847,7 @@ class SerialTool(QMainWindow):
         # 发送区设置：HEX发送
         self.check_hex_send = QCheckBox("HEX发送")
         self.check_hex_send.setFont(QFont("Microsoft YaHei", 9))
+        self.check_hex_send.stateChanged.connect(self._validate_hex_input)
         send_settings_layout.addWidget(self.check_hex_send)
 
         # 回车换行勾选选项
@@ -896,6 +964,7 @@ class SerialTool(QMainWindow):
         self.text_send.setMaximumHeight(45)
         self.text_send.setFont(QFont("Consolas", 11, QFont.Normal))
         self.text_send.setPlaceholderText("在此输入要发送的内容...")
+        self.text_send.textChanged.connect(self._validate_hex_input)
         send_layout.addWidget(self.text_send)
 
         # 发送按钮行
@@ -950,7 +1019,7 @@ class SerialTool(QMainWindow):
         
         # 多字符发送组
         multi_send_group = QGroupBox("多字符串发送")
-        multi_send_group.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+        multi_send_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         multi_send_group_layout = QVBoxLayout(multi_send_group)
         multi_send_group_layout.setContentsMargins(8, 8, 8, 8)
         multi_send_group_layout.setSpacing(8)
@@ -1194,7 +1263,8 @@ class SerialTool(QMainWindow):
         self.check_repeat.stateChanged.connect(self.toggle_repeat)
         
         # --- 状态栏 ---
-        self.status_msg = QLabel('<span style="color: green;">就绪</span>')
+        ok_color = self.theme_colors['ansi_fg']['32'].name()
+        self.status_msg = QLabel(f'<span style="color: {ok_color};">就绪</span>')
         self.status_msg.setFont(QFont("Microsoft YaHei", 9))
         self.statusBar().addWidget(self.status_msg)
 
@@ -1293,16 +1363,20 @@ class SerialTool(QMainWindow):
         if theme_name == 'dark':
             qss = DARK_QSS.replace('__ARROW_DARK__', self._arrow_dark_path)
             QApplication.instance().setStyleSheet(qss)
-            self.btn_theme.setText("☀ 亮色模式")
             self._set_titlebar_dark(True, color_hex='#282C34')
         else:
             qss = LIGHT_QSS.replace('__ARROW_LIGHT__', self._arrow_light_path)
             QApplication.instance().setStyleSheet(qss)
-            self.btn_theme.setText("◑ 暗黑模式")
             self._set_titlebar_dark(False)
 
-        # 2. 更新状态栏连接状态文字颜色
+        # 同步菜单栏暗黑模式勾选状态
+        if hasattr(self, 'act_dark_mode'):
+            self.act_dark_mode.setChecked(theme_name == 'dark')
+
+        # 2. 更新状态栏文字颜色（主题切换后刷新）
         self._refresh_status_connection()
+        if hasattr(self, '_current_status_text'):
+            self._set_status(self._current_status_text, self._current_status_level)
 
 
     def _set_titlebar_dark(self, dark=True, color_hex='#282C34'):
@@ -1446,11 +1520,15 @@ class SerialTool(QMainWindow):
         self._update_status_connection_text(is_connected)
 
     def _set_status(self, text, level="info"):
-        """更新状态栏消息，按级别着色"""
+        """更新状态栏消息，按级别着色（颜色取自主题令牌）"""
+        self._current_status_text = text
+        self._current_status_level = level
+        ok_color = self.theme_colors['ansi_fg']['32'].name()
+        err_color = self.theme_colors['text_error'].name()
         if level == "ready":
-            self.status_msg.setText(f'<span style="color: green;">{text}</span>')
+            self.status_msg.setText(f'<span style="color: {ok_color};">{text}</span>')
         elif level == "error":
-            self.status_msg.setText(f'<span style="color: red;">{text}</span>')
+            self.status_msg.setText(f'<span style="color: {err_color};">{text}</span>')
         else:
             label_color = self.theme_colors['text_normal'].name()
             self.status_msg.setText(f'<span style="color: {label_color};">{text}</span>')
@@ -1458,15 +1536,17 @@ class SerialTool(QMainWindow):
     def _update_status_connection_text(self, connected):
         """更新状态栏连接状态文字（主题感知）"""
         label_color = self.theme_colors['text_normal'].name()
+        ok_color = self.theme_colors['ansi_fg']['32'].name()
+        err_color = self.theme_colors['text_error'].name()
         if connected:
             self.status_connection.setText(
                 f'<span style="color: {label_color};">连接状态：</span>'
-                f'<span style="color: green;">已连接</span>'
+                f'<span style="color: {ok_color};">已连接</span>'
             )
         else:
             self.status_connection.setText(
                 f'<span style="color: {label_color};">连接状态：</span>'
-                f'<span style="color: red;">未连接</span>'
+                f'<span style="color: {err_color};">未连接</span>'
             )
 
     def toggle_theme(self):
@@ -1478,39 +1558,48 @@ class SerialTool(QMainWindow):
         self.append_text(f"[系统]: 已切换至{theme_display}\n")
     def handle_baud_change(self, index):
         """处理波特率选择变化"""
-        if self.combo_baud.itemText(index) == "自定义":
+        baud_text = self.combo_baud.itemText(index)
+        if baud_text == "自定义":
             # 记录当前选中的波特率（用于取消时恢复）
             current_baud = self.combo_baud.currentText()
             if current_baud == "自定义":
                 current_baud = '115200'  # 默认值
-            
+
             # 弹出输入对话框，让用户输入波特率
             from PyQt5.QtWidgets import QInputDialog
             baud_rate, ok = QInputDialog.getInt(self, "自定义波特率", "请输入波特率:", 115200, 1, 1000000)
-            
+
             # 断开信号连接，防止setCurrentIndex触发递归
             self.combo_baud.currentIndexChanged.disconnect(self.handle_baud_change)
-            
+
             try:
                 if ok:
                     baud_str = str(baud_rate)
                     # 检查是否已存在相同的波特率值
                     existing_index = self.combo_baud.findText(baud_str)
-                    
+
                     if existing_index >= 0:
                         # 如果已存在，直接选中已有的值
                         self.combo_baud.setCurrentIndex(existing_index)
+                        self.custom_baud = int(baud_str)
                     else:
                         # 如果不存在，在"自定义"选项之前插入新的波特率
                         self.combo_baud.insertItem(index, baud_str)
                         # 选中新插入的波特率（此时index位置就是新插入的项）
                         self.combo_baud.setCurrentIndex(index)
+                        self.custom_baud = baud_rate
                 else:
                     # 如果用户取消输入，恢复到之前的波特率
                     self.combo_baud.setCurrentText(current_baud)
             finally:
                 # 重新连接信号
                 self.combo_baud.currentIndexChanged.connect(self.handle_baud_change)
+        else:
+            # 选择预置波特率，同步 custom_baud
+            try:
+                self.custom_baud = int(baud_text)
+            except ValueError:
+                pass
 
     # --- 功能函数 ---
 
@@ -1663,25 +1752,25 @@ class SerialTool(QMainWindow):
                     try:
                         if self.serial_port.is_open:
                             self.serial_port.close()
-                    except:
-                        pass
+                    except Exception as e:
+                        print(f"关闭串口异常: {e}")
                     finally:
                         self.serial_port = None  # 清空串口引用
-                
+
                 # 确保线程被停止
                 if hasattr(self, 'read_thread') and self.read_thread:
                     try:
                         self.read_thread.stop()
-                    except:
-                        pass
-                
+                    except Exception as e:
+                        print(f"停止接收线程异常: {e}")
+
                 # 确保批量发送线程被停止
                 if hasattr(self, 'batch_thread') and self.batch_thread and self.batch_thread.isRunning():
                     try:
                         self.batch_thread.stop()
                         self.check_cycle_send.setChecked(False)
-                    except:
-                        pass
+                    except Exception as e:
+                        print(f"停止批量线程异常: {e}")
                 
                 # 更新状态栏显示错误
                 self._set_status(f"打开失败: {error_msg}", "error")
@@ -1853,6 +1942,26 @@ class SerialTool(QMainWindow):
     def on_file_send_progress(self, progress_msg):
         """文件发送进度回调"""
         self.append_text(f"{progress_msg}\n")
+
+    def _validate_hex_input(self):
+        """实时校验 HEX 发送输入框格式，无效时显示红色边框提示"""
+        if not self.check_hex_send.isChecked():
+            self.text_send.setStyleSheet("")
+            return
+        hex_str = self.text_send.toPlainText().replace(' ', '').replace('\n', '').replace('\r', '')
+        if not hex_str:
+            self.text_send.setStyleSheet("")
+            return
+        if len(hex_str) % 2 != 0:
+            self.text_send.setStyleSheet(
+                "border: 1px solid red; border-radius: 4px;")
+            return
+        try:
+            bytes.fromhex(hex_str)
+            self.text_send.setStyleSheet("")
+        except ValueError:
+            self.text_send.setStyleSheet(
+                "border: 1px solid red; border-radius: 4px;")
 
     def send_data(self):
         """发送数据"""
@@ -2366,7 +2475,7 @@ class SerialTool(QMainWindow):
                 formatted_segments = self.process_ansi_colors(line)
 
                 # 显示到界面
-                if self.check_timestamp.isChecked():
+                if self.act_timestamp.isChecked():
                     # 获取光标位置
                     cursor = self.text_recv.textCursor()
                     cursor.movePosition(QTextCursor.End)
@@ -2867,11 +2976,15 @@ class SerialTool(QMainWindow):
         if right_content.isVisible():
             right_content.hide()
             self.btn_toggle_multi_send.setText("显示多字符发送")
+            if hasattr(self, 'act_multi_send'):
+                self.act_multi_send.setChecked(False)
             # 调整左侧大小
             self.main_splitter.setSizes([1000, 0])
         else:
             right_content.show()
             self.btn_toggle_multi_send.setText("隐藏多字符发送")
+            if hasattr(self, 'act_multi_send'):
+                self.act_multi_send.setChecked(True)
             # 确保所有相关组件的大小策略正确
             right_content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.multi_send_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -2972,7 +3085,8 @@ class SerialTool(QMainWindow):
         close_button = QPushButton("关闭")
         close_button.clicked.connect(dialog.close)
         layout.addWidget(close_button)
-        
+
+        self._apply_dialog_dark(dialog)
         dialog.exec_()
 
     @pyqtSlot()
@@ -3497,6 +3611,605 @@ class SerialTool(QMainWindow):
             QMessageBox.critical(self, "错误", f"加载多字符项目失败: {e}")
             self.append_text(f"[错误]: 加载多字符项目失败: {e}\n")
 
+    def _toggle_timestamp(self, checked):
+        """切换时间戳显示（菜单触发，同步到复选框）"""
+        self.check_timestamp.blockSignals(True)
+        self.check_timestamp.setChecked(checked)
+        self.check_timestamp.blockSignals(False)
+
+    def save_log_manually(self):
+        """手动保存接收日志（Ctrl+S）"""
+        if not self.log_buffer:
+            QMessageBox.information(self, "提示", "接收区暂无数据可保存。")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "保存接收日志", self.save_directory,
+            "日志文件 (*.log *.txt);;所有文件 (*)"
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(self.text_recv.toPlainText())
+            self.append_text(f"[系统]: 日志已保存至 {file_path}\n")
+            self._set_status(f"日志已保存: {os.path.basename(file_path)}")
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", f"无法保存文件: {e}")
+
+    def export_data(self):
+        """导出接收区数据为文件"""
+        text = self.text_recv.toPlainText()
+        if not text.strip():
+            QMessageBox.information(self, "提示", "接收区暂无数据可导出。")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "导出接收数据", self.save_directory,
+            "文本文件 (*.txt);;CSV 文件 (*.csv);;所有文件 (*)"
+        )
+        if not file_path:
+            return
+
+        try:
+            encoding = 'utf-8-sig' if file_path.endswith('.csv') else 'utf-8'
+            with open(file_path, 'w', encoding=encoding) as f:
+                f.write(text)
+            self.append_text(f"[系统]: 数据已导出至 {file_path}\n")
+            self._set_status(f"导出成功: {os.path.basename(file_path)}")
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", f"无法导出数据: {e}")
+
+    def crc_calculator(self):
+        """CRC 计算器弹窗"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("CRC 计算器")
+        dialog.setMinimumSize(420, 280)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(8)
+
+        # 输入区
+        input_layout = QHBoxLayout()
+        input_layout.addWidget(QLabel("数据 (HEX):"))
+        input_edit = QLineEdit()
+        input_edit.setFont(QFont("Consolas", 9))
+        input_edit.setPlaceholderText("例如: 0103 或 010304")
+        input_layout.addWidget(input_edit)
+        layout.addLayout(input_layout)
+
+        # CRC 类型
+        type_layout = QHBoxLayout()
+        type_layout.addWidget(QLabel("算法:"))
+        combo_algo = QComboBox()
+        combo_algo.addItems(["Modbus CRC16", "CRC32", "Fletcher", "XOR8", "ADD8", "ADD16"])
+        combo_algo.setFont(QFont("Consolas", 9))
+        type_layout.addWidget(combo_algo)
+        type_layout.addStretch()
+        layout.addLayout(type_layout)
+
+        # 结果显示
+        result_label = QLabel("结果: —")
+        result_label.setFont(QFont("Consolas", 11, QFont.Bold))
+        result_label.setFrameStyle(QFrame.Panel | QFrame.Sunken)
+        result_label.setTextFormat(Qt.RichText)
+        result_label.setMinimumHeight(36)
+        result_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(result_label)
+
+        layout.addStretch()
+
+        # 按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        def on_calc():
+            hex_str = input_edit.text().strip().replace(' ', '')
+            if not hex_str:
+                result_label.setText("结果: 请输入数据")
+                return
+            try:
+                data = bytes.fromhex(hex_str)
+            except ValueError:
+                result_label.setText("结果: HEX 格式错误")
+                return
+
+            algo = combo_algo.currentText()
+            if algo == "Modbus CRC16":
+                crc = 0xFFFF
+                for b in data:
+                    crc ^= b
+                    for _ in range(8):
+                        if crc & 1:
+                            crc = (crc >> 1) ^ 0xA001
+                        else:
+                            crc >>= 1
+                result_label.setText(f"结果: 0x{crc:04X} ({crc})")
+            elif algo == "CRC32":
+                import zlib
+                crc = zlib.crc32(data) & 0xFFFFFFFF
+                result_label.setText(f"结果: 0x{crc:08X} ({crc})")
+            elif algo == "Fletcher":
+                sum1, sum2 = 0, 0
+                for b in data:
+                    sum1 = (sum1 + b) % 255
+                    sum2 = (sum2 + sum1) % 255
+                crc = (sum2 << 8) | sum1
+                result_label.setText(f"结果: 0x{crc:04X} ({crc})")
+            elif algo == "XOR8":
+                x = 0
+                for b in data:
+                    x ^= b
+                result_label.setText(f"结果: 0x{x:02X} ({x})")
+            elif algo == "ADD8":
+                s = sum(data) & 0xFF
+                result_label.setText(f"结果: 0x{s:02X} ({s})")
+            elif algo == "ADD16":
+                s = sum(data) & 0xFFFF
+                result_label.setText(f"结果: 0x{s:04X} ({s})")
+
+        calc_btn = QPushButton("计算")
+        calc_btn.setMinimumWidth(72)
+        calc_btn.clicked.connect(on_calc)
+        btn_layout.addWidget(calc_btn)
+
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dialog.close)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+        self._apply_dialog_dark(dialog)
+        dialog.exec_()
+
+    def hex_converter(self):
+        """HEX 转换器弹窗：HEX ↔ ASCII ↔ Decimal 互转"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("HEX 转换器")
+        dialog.setMinimumSize(480, 320)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+        layout = QFormLayout(dialog)
+        layout.setSpacing(8)
+
+        hex_edit = QLineEdit()
+        hex_edit.setFont(QFont("Consolas", 9))
+        hex_edit.setPlaceholderText("输入 HEX，如 48 65 6C 6C 6F")
+        layout.addRow("HEX:", hex_edit)
+
+        ascii_edit = QLineEdit()
+        ascii_edit.setFont(QFont("Consolas", 9))
+        ascii_edit.setPlaceholderText("输入 ASCII 文本")
+        layout.addRow("ASCII:", ascii_edit)
+
+        dec_edit = QLineEdit()
+        dec_edit.setFont(QFont("Consolas", 9))
+        dec_edit.setPlaceholderText("输入十进制（空格分隔或单个数值）")
+        layout.addRow("Decimal:", dec_edit)
+
+        # 实时转换：HEX → ASCII + Decimal
+        def on_hex_changed(text):
+            text = text.strip().replace(' ', '')
+            if not text:
+                return
+            try:
+                data = bytes.fromhex(text)
+                ascii_edit.blockSignals(True)
+                ascii_edit.setText(data.decode('ascii', errors='replace'))
+                ascii_edit.blockSignals(False)
+                dec_edit.blockSignals(True)
+                dec_edit.setText(' '.join(str(b) for b in data))
+                dec_edit.blockSignals(False)
+            except (ValueError, UnicodeDecodeError):
+                pass
+
+        def on_ascii_changed(text):
+            if not text:
+                return
+            data = text.encode('ascii', errors='replace')
+            hex_edit.blockSignals(True)
+            hex_edit.setText(data.hex(' ').upper())
+            hex_edit.blockSignals(False)
+            dec_edit.blockSignals(True)
+            dec_edit.setText(' '.join(str(b) for b in data))
+            dec_edit.blockSignals(False)
+
+        hex_edit.textEdited.connect(on_hex_changed)
+        ascii_edit.textEdited.connect(on_ascii_changed)
+
+        self._apply_dialog_dark(dialog)
+        dialog.exec_()
+
+    def serial_monitor(self):
+        """串口监视器：列出系统所有串口及详细信息"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("串口监视器")
+        dialog.setMinimumSize(600, 350)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(8)
+
+        table = QTableWidget()
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(["端口", "描述", "硬件ID", "制造商", "VID/PID"])
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        layout.addWidget(table)
+
+        def refresh():
+            table.setRowCount(0)
+            try:
+                from serial.tools import list_ports
+                ports = list_ports.comports()
+                table.setRowCount(len(ports))
+                for i, p in enumerate(ports):
+                    table.setItem(i, 0, QTableWidgetItem(p.device))
+                    table.setItem(i, 1, QTableWidgetItem(p.description))
+                    table.setItem(i, 2, QTableWidgetItem(p.hwid))
+                    table.setItem(i, 3, QTableWidgetItem(p.manufacturer or "—"))
+                    vid_pid = f"{p.vid:04X}:{p.pid:04X}" if p.vid and p.pid else "—"
+                    table.setItem(i, 4, QTableWidgetItem(vid_pid))
+            except Exception as e:
+                QMessageBox.warning(dialog, "错误", f"枚举串口失败: {e}")
+
+        # 按钮行
+        btn_layout = QHBoxLayout()
+        btn_refresh_monitor = QPushButton("刷新")
+        btn_refresh_monitor.setMinimumWidth(72)
+        btn_refresh_monitor.clicked.connect(refresh)
+        btn_layout.addWidget(btn_refresh_monitor)
+        btn_layout.addStretch()
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dialog.close)
+        btn_layout.addWidget(btn_close)
+        layout.addLayout(btn_layout)
+
+        refresh()
+        self._apply_dialog_dark(dialog)
+        dialog.exec_()
+
+    def oscilloscope(self):
+        """数据波形示波器：将串口接收的原始字节按数据类型解析为波形图"""
+        try:
+            import pyqtgraph as pg
+        except ImportError:
+            QMessageBox.warning(self, "缺少依赖",
+                "示波器功能需要 pyqtgraph 和 numpy 库。\n\n"
+                "请在终端执行以下命令安装：\n"
+                "  pip install pyqtgraph numpy")
+            return
+
+        if not hasattr(self, 'serial_port') or not self.serial_port or not self.serial_port.is_open:
+            QMessageBox.warning(self, "提示", "请先打开串口再使用示波器。")
+            return
+
+        # ── 数据类型定义 ──
+        DATA_TYPES = {
+            'uint8':    (1, 'B'),   # (字节数, struct格式)
+            'int8':     (1, 'b'),
+            'uint16_be':(2, '>H'),
+            'int16_be': (2, '>h'),
+            'uint32_be':(4, '>I'),
+            'float32':  (4, '>f'),
+        }
+
+        # ── 对话框 ──
+        dialog = QDialog(self)
+        dialog.setWindowTitle("数据波形（示波器）")
+        dialog.setMinimumSize(900, 550)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        main_layout = QHBoxLayout(dialog)
+        main_layout.setSpacing(8)
+
+        # ── 左侧控制面板 ──
+        panel = QWidget()
+        panel.setFixedWidth(160)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setSpacing(6)
+
+        lbl = QLabel("通道数")
+        lbl.setFont(QFont("Microsoft YaHei", 9))
+        panel_layout.addWidget(lbl)
+        spin_channels = QSpinBox()
+        spin_channels.setRange(1, 8)
+        spin_channels.setValue(1)
+        spin_channels.setFont(QFont("Consolas", 9))
+        panel_layout.addWidget(spin_channels)
+
+        lbl2 = QLabel("数据类型")
+        lbl2.setFont(QFont("Microsoft YaHei", 9))
+        panel_layout.addWidget(lbl2)
+        combo_dtype = QComboBox()
+        combo_dtype.addItems(list(DATA_TYPES.keys()))
+        combo_dtype.setCurrentText('uint8')
+        combo_dtype.setFont(QFont("Consolas", 9))
+        panel_layout.addWidget(combo_dtype)
+
+        lbl3 = QLabel("显示点数")
+        lbl3.setFont(QFont("Microsoft YaHei", 9))
+        panel_layout.addWidget(lbl3)
+        spin_points = QSpinBox()
+        spin_points.setRange(50, 5000)
+        spin_points.setValue(500)
+        spin_points.setSingleStep(100)
+        spin_points.setFont(QFont("Consolas", 9))
+        panel_layout.addWidget(spin_points)
+
+        panel_layout.addSpacing(8)
+
+        # 采样间隔
+        lbl4 = QLabel("刷新间隔(ms)")
+        lbl4.setFont(QFont("Microsoft YaHei", 9))
+        panel_layout.addWidget(lbl4)
+        spin_refresh = QSpinBox()
+        spin_refresh.setRange(20, 1000)
+        spin_refresh.setValue(50)
+        spin_refresh.setFont(QFont("Consolas", 9))
+        panel_layout.addWidget(spin_refresh)
+
+        panel_layout.addSpacing(8)
+
+        # 控制按钮
+        self.scope_running = False
+
+        def on_start():
+            self.scope_running = True
+            btn_start.setEnabled(False)
+            btn_pause.setEnabled(True)
+
+        def on_pause():
+            self.scope_running = False
+            btn_start.setEnabled(True)
+            btn_pause.setEnabled(False)
+
+        btn_start = QPushButton("▶ 开始")
+        btn_start.setFont(QFont("Microsoft YaHei", 9))
+        btn_start.clicked.connect(on_start)
+        panel_layout.addWidget(btn_start)
+
+        btn_pause = QPushButton("⏸ 暂停")
+        btn_pause.setFont(QFont("Microsoft YaHei", 9))
+        btn_pause.setEnabled(False)
+        btn_pause.clicked.connect(on_pause)
+        panel_layout.addWidget(btn_pause)
+
+        btn_clear = QPushButton("🗘 清除")
+        btn_clear.setFont(QFont("Microsoft YaHei", 9))
+        panel_layout.addWidget(btn_clear)
+
+        panel_layout.addStretch()
+
+        # 当前值标签
+        self.scope_value_label = QLabel("当前值: —")
+        self.scope_value_label.setFont(QFont("Consolas", 9))
+        self.scope_value_label.setWordWrap(True)
+        panel_layout.addWidget(self.scope_value_label)
+
+        main_layout.addWidget(panel)
+
+        # ── 右侧波形图 ──
+        plot_bg = '#2C313C' if self.current_theme == 'dark' else '#FFFFFF'
+        plot_widget = pg.PlotWidget()
+        plot_widget.setBackground(plot_bg)
+        plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        plot_widget.setLabel('left', '数值')
+        plot_widget.setLabel('bottom', '采样序号')
+        plot_widget.addLegend()
+        # 空状态提示文字
+        empty_color = (0xAB, 0xB2, 0xBF) if self.current_theme == 'dark' else (0x66, 0x66, 0x66)
+        empty_text = pg.TextItem('等待串口数据…', color=empty_color, anchor=(0.5, 0.5))
+        empty_text.setFont(QFont("Microsoft YaHei", 10))
+        plot_widget.addItem(empty_text)
+        main_layout.addWidget(plot_widget, stretch=1)
+
+        # ── 每通道曲线 + 环形缓冲区 ──
+        CHANNEL_COLORS = [
+            (0x61, 0xAF, 0xEF), (0x98, 0xC3, 0x79), (0xE0, 0x6C, 0x75),
+            (0xD1, 0x9A, 0x66), (0xC6, 0x78, 0xDD), (0x56, 0xB6, 0xC2),
+            (0xAB, 0xB2, 0xBF), (0xE5, 0xC0, 0x7B),
+        ]
+        curves = []
+        buffers = []
+
+        def rebuild_channels():
+            """重建通道曲线和缓冲区"""
+            nonlocal curves, buffers
+            curves.clear()
+            buffers.clear()
+            plot_widget.clear()
+            n = spin_channels.value()
+            for i in range(n):
+                r, g, b = CHANNEL_COLORS[i % len(CHANNEL_COLORS)]
+                pen = pg.mkPen(color=(r, g, b), width=1.5)
+                curve = plot_widget.plot([], [], pen=pen, name=f'CH{i+1}')
+                curves.append(curve)
+                buffers.append(deque(maxlen=spin_points.value()))
+            spin_points.valueChanged.connect(lambda v: [b.__setattr__('maxlen', v) for b in buffers])
+
+        rebuild_channels()
+        spin_channels.valueChanged.connect(lambda: rebuild_channels())
+
+        def on_clear():
+            for b in buffers:
+                b.clear()
+            for c in curves:
+                c.setData([], [])
+            empty_text.setVisible(True)
+            self.scope_value_label.setText('当前值: —')
+
+        btn_clear.clicked.connect(on_clear)
+
+        # ── 数据缓冲区与解析 ──
+        byte_buffer = bytearray()  # 未解析完的残留字节
+
+        def feed_data(data: bytes):
+            """串口数据回调：累积字节并按数据类型+通道数解析为数值"""
+            if not self.scope_running:
+                return
+            nonlocal byte_buffer
+            byte_buffer.extend(data)
+            # 防止数据格式不匹配导致无限增长（上限 1 MiB）
+            if len(byte_buffer) > 1024 * 1024:
+                del byte_buffer[:len(byte_buffer) - 512 * 1024]
+
+            dtype_key = combo_dtype.currentText()
+            elem_size, fmt = DATA_TYPES[dtype_key]
+            num_channels = spin_channels.value()
+            frame_size = elem_size * num_channels
+
+            # 尽可能解析完整帧
+            while len(byte_buffer) >= frame_size:
+                frame = bytes(byte_buffer[:frame_size])
+                del byte_buffer[:frame_size]
+
+                for ch in range(num_channels):
+                    chunk = frame[ch * elem_size : (ch + 1) * elem_size]
+                    try:
+                        val = struct.unpack(fmt, chunk)[0]
+                    except struct.error:
+                        val = 0
+                    buffers[ch].append(val)
+
+        # ── 定时刷新波形 ──
+        def update_plot():
+            if not self.scope_running:
+                return
+            if not buffers:
+                return
+            has_data = any(len(b) > 0 for b in buffers)
+            if has_data:
+                empty_text.setVisible(False)
+                for i, curve in enumerate(curves):
+                    if buffers[i]:
+                        curve.setData(list(buffers[i]))
+                # 更新当前值标签
+                vals = []
+                for i, buf in enumerate(buffers):
+                    if buf:
+                        vals.append(f'CH{i+1}: {buf[-1]}')
+                self.scope_value_label.setText('\n'.join(vals) if vals else '当前值: —')
+            else:
+                self.scope_value_label.setText('当前值: —')
+
+        refresh_timer = QTimer()
+        refresh_timer.timeout.connect(update_plot)
+        spin_refresh.valueChanged.connect(lambda v: refresh_timer.setInterval(v))
+        refresh_timer.setInterval(50)
+
+        # ── 挂接串口数据 ──
+        if hasattr(self, 'read_thread') and self.read_thread:
+            self.read_thread.receive_data_signal.connect(feed_data)
+
+        # ── 对话框生命周期 ──
+        on_start()
+        refresh_timer.start()
+
+        self._apply_dialog_dark(dialog)
+        dialog.exec_()
+
+        # 清理
+        refresh_timer.stop()
+        self.scope_running = False
+        if hasattr(self, 'read_thread') and self.read_thread:
+            try:
+                self.read_thread.receive_data_signal.disconnect(feed_data)
+            except (TypeError, RuntimeError):
+                pass
+
+    def show_usage(self):
+        """显示使用说明"""
+        msg = QMessageBox(QMessageBox.Information, "使用说明",
+            "<b>hight-flight 串口调试助手</b><br><br>"
+            "<b>基本操作：</b><br>"
+            "1. 选择串口和波特率，点击「打开串口」<br>"
+            "2. 在发送区输入数据，点击「发送」(Ctrl+Return)<br>"
+            "3. 接收区自动显示串口返回的数据<br><br>"
+            "<b>快捷键：</b><br>"
+            "• Ctrl+S — 保存接收日志<br>"
+            "• Ctrl+Return — 发送数据<br><br>"
+            "<b>校验：</b>选择校验算法后，发送时自动追加校验值<br>"
+            "<b>首/尾字段：</b>勾选后自动在发送数据前后添加指定字段<br>"
+            "<b>多字符发送：</b>可预设多条指令，支持循环/批量发送"
+        )
+        self._apply_dialog_dark(msg)
+        msg.exec_()
+
+    def show_about(self):
+        """显示关于对话框"""
+        msg = QMessageBox(QMessageBox.NoIcon, "关于",
+            f"<b>hight-flight 串口调试助手</b><br>"
+            f"版本: {VERSION}<br><br>"
+            "基于 PyQt5 的跨平台串口调试工具。<br>"
+            "支持 Modbus CRC、文件发送、多字符批量发送、<br>"
+            "亮色/暗黑双主题、ANSI 转义码解析等功能。<br><br>"
+            "<b>作者:</b> GAOXIANG<br>"
+            "<b>联系方式:</b> 770807059@qq.com"
+        )
+        self._apply_dialog_dark(msg)
+        msg.exec_()
+
+    def _apply_dialog_dark(self, dialog):
+        """为子对话框应用暗黑标题栏，与主窗口主题色 (#282C34) 完全统一"""
+        if self.current_theme != 'dark':
+            return
+
+        # 1. 设置完整暗色调色板（覆盖所有控件部件）
+        dark_palette = dialog.palette()
+        dark_palette.setColor(QPalette.Window, QColor('#282C34'))
+        dark_palette.setColor(QPalette.WindowText, QColor(0xAB, 0xB2, 0xBF))
+        dark_palette.setColor(QPalette.Base, QColor('#2C313C'))
+        dark_palette.setColor(QPalette.AlternateBase, QColor('#21252B'))
+        dark_palette.setColor(QPalette.Text, QColor(0xAB, 0xB2, 0xBF))
+        dark_palette.setColor(QPalette.Button, QColor('#2C313C'))
+        dark_palette.setColor(QPalette.ButtonText, QColor(0xAB, 0xB2, 0xBF))
+        dark_palette.setColor(QPalette.BrightText, QColor(0xFF, 0xFF, 0xFF))
+        dark_palette.setColor(QPalette.Highlight, QColor('#528BFF'))
+        dark_palette.setColor(QPalette.HighlightedText, QColor(0xFF, 0xFF, 0xFF))
+        dialog.setPalette(dark_palette)
+
+        # 2. Windows DWM API 标题栏着色
+        import platform
+        if platform.system() != 'Windows':
+            return
+        try:
+            import ctypes
+            hwnd = int(dialog.winId())
+            if not hwnd:
+                return
+
+            # Win10: 启用沉浸式暗黑模式（必须在 CAPTION_COLOR 之前）
+            value = ctypes.c_int(1)
+            for attr in (20, 19):
+                try:
+                    if ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                        ctypes.wintypes.HWND(hwnd),
+                        ctypes.c_uint(attr),
+                        ctypes.byref(value),
+                        ctypes.sizeof(value)) == 0:
+                        break
+                except Exception:
+                    continue
+
+            # Win11: 精确标题栏颜色 #282C34（必须紧随暗黑模式）
+            color_hex = '#2C313C'
+            try:
+                r = int(color_hex[1:3], 16)
+                g = int(color_hex[3:5], 16)
+                b = int(color_hex[5:7], 16)
+                colorref = ctypes.c_uint32((b << 16) | (g << 8) | r)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    ctypes.wintypes.HWND(hwnd),
+                    ctypes.c_uint(35),  # DWMWA_CAPTION_COLOR
+                    ctypes.byref(colorref),
+                    ctypes.sizeof(colorref))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def show_more_settings(self):
         """显示更多串口设置"""
         try:
@@ -3606,6 +4319,7 @@ class SerialTool(QMainWindow):
             layout.addLayout(button_layout)
             
             # 显示对话框
+            self._apply_dialog_dark(dialog)
             if dialog.exec_() == QDialog.Accepted:
                 # 应用设置
                 selected_port = combo_port_setup.currentText()
@@ -3928,7 +4642,10 @@ class SerialTool(QMainWindow):
                 
                 # 加载显示时间戳设置
                 if 'show_timestamp' in config:
+                    self.act_timestamp.setChecked(config['show_timestamp'])
+                    self.check_timestamp.blockSignals(True)
                     self.check_timestamp.setChecked(config['show_timestamp'])
+                    self.check_timestamp.blockSignals(False)
                 
                 # 加载首字段
                 if 'head_field' in config:
@@ -4130,7 +4847,7 @@ class SerialTool(QMainWindow):
             'save_directory': self.save_directory,
             'hex_recv': self.check_hex_recv.isChecked(),
             'hex_send': self.check_hex_send.isChecked(),
-            'show_timestamp': self.check_timestamp.isChecked(),
+            'show_timestamp': self.act_timestamp.isChecked(),
             'newline': self.check_newline.isChecked(),
             'rts': self.check_rts.isChecked(),
             'dtr': self.check_dtr.isChecked(),
