@@ -40,6 +40,6 @@
     "stop_bits": "1",
     "parity": "None",
     "flow_control": "None",
-    "encoding": "UTF-8",
-    "theme": "dark"
+    "encoding": "GBK",
+    "theme": "light"
 }

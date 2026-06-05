@@ -12,7 +12,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool
 from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon
 
 # --- 全局常量 --- 
-VERSION = "1.1.7"
+VERSION = "1.1.8"
 
 # --- 主题颜色常量 ---
 THEME_COLORS = {
@@ -97,7 +97,7 @@ QComboBox {
 }
 QComboBox:hover { border-color: #528BFF; }
 QComboBox:focus { border-color: #528BFF; }
-QComboBox:disabled { background-color: #21252B; color: #5C6370; }
+QComboBox:disabled { background-color: #21252B; color: #7A8294; }
 QComboBox::drop-down { border: none; width: 22px; }
 QComboBox::down-arrow { image: url(__ARROW_DARK__); width: 12px; height: 12px; }
 QComboBox QAbstractItemView {
@@ -113,7 +113,7 @@ QPushButton:hover    { background-color: #3E4451; }
 QPushButton:pressed  { background-color: #21252B; }
 QPushButton:checked  { background-color: #528BFF; color: #FFFFFF; }
 QPushButton:checked:hover { background-color: #61AFEF; }
-QPushButton:disabled { background-color: #21252B; color: #5C6370; }
+QPushButton:disabled { background-color: #21252B; color: #7A8294; }
 QCheckBox   { color: #ABB2BF; spacing: 6px; }
 QCheckBox::indicator {
     background-color: #2C313C; border: 1px solid #3E4451;
@@ -128,7 +128,7 @@ QSpinBox {
     border: 1px solid #3E4451; border-radius: 4px; padding: 4px 4px;
 }
 QSpinBox:focus { border-color: #528BFF; }
-QSpinBox:disabled { background-color: #21252B; color: #5C6370; }
+QSpinBox:disabled { background-color: #21252B; color: #7A8294; }
 QTableView, QTableWidget {
     background-color: #2C313C; color: #ABB2BF;
     border: 1px solid #3E4451; gridline-color: #3E4451;
@@ -226,7 +226,7 @@ QComboBox {
 }
 QComboBox:hover { border-color: #0078D4; }
 QComboBox:focus { border-color: #005A9E; }
-QComboBox:disabled { background-color: #F0F0F0; color: #888888; }
+QComboBox:disabled { background-color: #F0F0F0; color: #767676; }
 QComboBox::drop-down { border: none; width: 22px; }
 QComboBox::down-arrow { image: url(__ARROW_LIGHT__); width: 12px; height: 12px; }
 QComboBox QAbstractItemView {
@@ -242,7 +242,7 @@ QPushButton:hover    { background-color: #D0D0D0; }
 QPushButton:pressed  { background-color: #C0C0C0; }
 QPushButton:checked  { background-color: #0078D4; color: #FFFFFF; }
 QPushButton:checked:hover { background-color: #168BE0; }
-QPushButton:disabled { background-color: #F0F0F0; color: #888888; }
+QPushButton:disabled { background-color: #F0F0F0; color: #767676; }
 QCheckBox   { color: #333333; spacing: 6px; }
 QCheckBox::indicator {
     background-color: #FFFFFF; border: 1px solid #AAAAAA;
@@ -257,7 +257,7 @@ QSpinBox {
     border: 1px solid #CCCCCC; border-radius: 4px; padding: 4px 4px;
 }
 QSpinBox:focus { border-color: #005A9E; }
-QSpinBox:disabled { background-color: #F0F0F0; color: #888888; }
+QSpinBox:disabled { background-color: #F0F0F0; color: #767676; }
 QTableView, QTableWidget {
     background-color: rgba(255, 255, 255, 230); color: #333333;
     border: 1px solid #CCCCCC; gridline-color: #DDDDDD;
@@ -592,7 +592,7 @@ class SerialTool(QMainWindow):
         
         # 刷新按钮
         self.btn_refresh = QPushButton("刷新")
-        self.btn_refresh.setMaximumWidth(55)
+        self.btn_refresh.setMinimumWidth(56)
         self.btn_refresh.setFont(QFont("Microsoft YaHei", 9))
         self.btn_refresh.clicked.connect(self.refresh_ports)
         port_baud_layout.addWidget(self.btn_refresh)
@@ -637,7 +637,7 @@ class SerialTool(QMainWindow):
 
         serial_layout.addLayout(port_baud_layout)
         
-        # 第二行：显示和自动保存设置
+        # 第二行：显示、筛选与编码设置
         display_save_layout = QHBoxLayout()
         display_save_layout.setSpacing(4)
 
@@ -685,41 +685,45 @@ class SerialTool(QMainWindow):
         self.check_timestamp.setFont(QFont("Microsoft YaHei", 9))
         display_save_layout.addWidget(self.check_timestamp)
 
-        # 自动保存复选框
-        self.check_auto_save = QCheckBox("自动保存日志")
-        self.check_auto_save.setFont(QFont("Microsoft YaHei", 9))
-        self.check_auto_save.stateChanged.connect(self.toggle_auto_save)
-        display_save_layout.addWidget(self.check_auto_save)
-
-        display_save_layout.addSpacing(6)
-
-        # 保存路径（紧凑内联）
-        self.label_save_path = QLabel("路径:")
-        self.label_save_path.setFont(QFont("Microsoft YaHei", 9))
-        display_save_layout.addWidget(self.label_save_path)
-        self.line_edit_save_path = QLineEdit()
-        self.line_edit_save_path.setReadOnly(True)
-        self.line_edit_save_path.setText(self.save_directory)
-        self.line_edit_save_path.setFont(QFont("Consolas", 9))
-        self.line_edit_save_path.setMaximumWidth(200)
-        display_save_layout.addWidget(self.line_edit_save_path)
-        self.btn_browse_path = QPushButton("浏览")
-        self.btn_browse_path.setMinimumWidth(58)
-        self.btn_browse_path.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_browse_path.clicked.connect(self.browse_save_path)
-        display_save_layout.addWidget(self.btn_browse_path)
-
         # 清空接收区按钮
         self.btn_clear_recv = QPushButton("清空接收")
         self.btn_clear_recv.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_clear_recv.setMinimumSize(88, 30)
-        # 让按钮高度与同一行的"浏览"按钮对齐，不设死 fixed size 避免文字被裁剪
-        self.btn_clear_recv.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.btn_clear_recv.setMinimumWidth(80)
         self.btn_clear_recv.clicked.connect(self.clear_recv_area)
         display_save_layout.addWidget(self.btn_clear_recv)
         display_save_layout.addStretch()
 
         serial_layout.addLayout(display_save_layout)
+
+        # 第三行：自动保存与日志路径
+        auto_save_layout = QHBoxLayout()
+        auto_save_layout.setSpacing(4)
+
+        # 自动保存复选框
+        self.check_auto_save = QCheckBox("自动保存日志")
+        self.check_auto_save.setFont(QFont("Microsoft YaHei", 9))
+        self.check_auto_save.stateChanged.connect(self.toggle_auto_save)
+        auto_save_layout.addWidget(self.check_auto_save)
+
+        # 保存路径（紧凑内联）
+        self.label_save_path = QLabel("路径:")
+        self.label_save_path.setFont(QFont("Microsoft YaHei", 9))
+        auto_save_layout.addWidget(self.label_save_path)
+        self.line_edit_save_path = QLineEdit()
+        self.line_edit_save_path.setReadOnly(True)
+        self.line_edit_save_path.setText(self.save_directory)
+        self.line_edit_save_path.setFont(QFont("Consolas", 9))
+        self.line_edit_save_path.setMaximumWidth(280)
+        auto_save_layout.addWidget(self.line_edit_save_path)
+        self.btn_browse_path = QPushButton("浏览")
+        self.btn_browse_path.setMinimumWidth(56)
+        self.btn_browse_path.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_browse_path.clicked.connect(self.browse_save_path)
+        auto_save_layout.addWidget(self.btn_browse_path)
+
+        auto_save_layout.addStretch()
+
+        serial_layout.addLayout(auto_save_layout)
         
         main_layout.addWidget(serial_group)
 
@@ -735,33 +739,31 @@ class SerialTool(QMainWindow):
         self.text_recv = QTextEdit()
         self.text_recv.setReadOnly(True)
         self.text_recv.setFont(QFont("Consolas", 11, QFont.Normal))
+        self.text_recv.setPlaceholderText("等待接收数据…")
         recv_layout.addWidget(self.text_recv)
 
-        # 图示区域
-        graph_group = QGroupBox("数据统计")
-        graph_group.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
-        graph_layout = QHBoxLayout(graph_group)
-        graph_layout.setContentsMargins(4, 4, 4, 4)
-        graph_layout.setSpacing(8)
-        
+        # 数据统计行（扁平布局，无多余边框）
+        stats_layout = QHBoxLayout()
+        stats_layout.setSpacing(12)
+
         # 接收字节数统计
         self.label_rx_bytes = QLabel("接收字节: 0")
         self.label_rx_bytes.setFont(QFont("Consolas", 9))
-        graph_layout.addWidget(self.label_rx_bytes)
+        stats_layout.addWidget(self.label_rx_bytes)
 
         # 发送字节数统计
         self.label_tx_bytes = QLabel("发送字节: 0")
         self.label_tx_bytes.setFont(QFont("Consolas", 9))
-        graph_layout.addWidget(self.label_tx_bytes)
+        stats_layout.addWidget(self.label_tx_bytes)
 
         # 数据包数量统计
         self.label_packets = QLabel("数据包: 0")
         self.label_packets.setFont(QFont("Consolas", 9))
-        graph_layout.addWidget(self.label_packets)
-        
-        graph_layout.addStretch()
-        
-        recv_layout.addWidget(graph_group)
+        stats_layout.addWidget(self.label_packets)
+
+        stats_layout.addStretch()
+
+        recv_layout.addLayout(stats_layout)
         splitter.addWidget(recv_group)
         
         # 发送区
@@ -863,6 +865,28 @@ class SerialTool(QMainWindow):
         self.text_tail.setPlaceholderText("输入尾字段...")
         tail_field_layout.addWidget(self.text_tail)
         fields_layout.addLayout(tail_field_layout)
+
+        # 文件发送（内联到头尾字段行）
+        self.file_path_edit = QLineEdit()
+        self.file_path_edit.setFont(QFont("Consolas", 9))
+        self.file_path_edit.setPlaceholderText("选择要发送的文件...")
+        self.file_path_edit.setReadOnly(True)
+        self.file_path_edit.setMaximumWidth(180)
+        fields_layout.addWidget(self.file_path_edit)
+
+        self.btn_select_file = QPushButton("选择文件")
+        self.btn_select_file.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_select_file.setMinimumWidth(72)
+        self.btn_select_file.clicked.connect(self.select_file_to_send)
+        fields_layout.addWidget(self.btn_select_file)
+
+        self.btn_send_file = QPushButton("发送文件")
+        self.btn_send_file.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_send_file.setMinimumWidth(72)
+        self.btn_send_file.clicked.connect(self.send_file)
+        self.btn_send_file.setEnabled(False)  # 默认禁用，选择文件后启用
+        fields_layout.addWidget(self.btn_send_file)
+
         fields_layout.addStretch()
 
         send_layout.addLayout(fields_layout)
@@ -874,52 +898,25 @@ class SerialTool(QMainWindow):
         self.text_send.setPlaceholderText("在此输入要发送的内容...")
         send_layout.addWidget(self.text_send)
 
-        # 文件发送区域
-        file_send_layout = QHBoxLayout()
-        file_send_layout.setSpacing(4)
-        
-        # 文件路径显示
-        self.file_path_edit = QLineEdit()
-        self.file_path_edit.setFont(QFont("Consolas", 9))
-        self.file_path_edit.setPlaceholderText("选择要发送的文件...")
-        self.file_path_edit.setReadOnly(True)
-
-        self.btn_select_file = QPushButton("选择文件")
-        self.btn_select_file.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_select_file.setMinimumWidth(60)
-        self.btn_select_file.clicked.connect(self.select_file_to_send)
-
-        self.btn_send_file = QPushButton("发送文件")
-        self.btn_send_file.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_send_file.setMinimumWidth(60)
-        self.btn_send_file.clicked.connect(self.send_file)
-        self.btn_send_file.setEnabled(False)  # 默认禁用，选择文件后启用
-        
-        file_send_layout.addWidget(self.file_path_edit)
-        file_send_layout.addWidget(self.btn_select_file)
-        file_send_layout.addWidget(self.btn_send_file)
-        file_send_layout.addStretch()
-        send_layout.addLayout(file_send_layout)
-        
         # 发送按钮行
         send_buttons_layout = QHBoxLayout()
         send_buttons_layout.setSpacing(4)
 
         self.btn_send = QPushButton("发送")
         self.btn_send.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_send.setMinimumWidth(50)
+        self.btn_send.setMinimumWidth(80)
         self.btn_send.clicked.connect(self.send_data)
         self.btn_send.setShortcut("Ctrl+Return")
 
         self.btn_stop = QPushButton("停止")
         self.btn_stop.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_stop.setMinimumWidth(50)
+        self.btn_stop.setMinimumWidth(56)
         self.btn_stop.clicked.connect(self.stop_repeat)
         self.btn_stop.setEnabled(False)
 
         self.btn_clear_send = QPushButton("清空发送")
         self.btn_clear_send.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_clear_send.setMinimumWidth(50)
+        self.btn_clear_send.setMinimumWidth(72)
         self.btn_clear_send.clicked.connect(self.clear_send_area)
 
         send_buttons_layout.addWidget(self.btn_send)
@@ -929,21 +926,21 @@ class SerialTool(QMainWindow):
 
         self.btn_save_params = QPushButton("保存参数")
         self.btn_save_params.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_save_params.setMinimumWidth(60)
+        self.btn_save_params.setMinimumWidth(72)
         self.btn_save_params.clicked.connect(self.save_config)
         send_buttons_layout.addWidget(self.btn_save_params)
 
         self.btn_toggle_multi_send = QPushButton("显示多字符发送")
         self.btn_toggle_multi_send.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_toggle_multi_send.setMinimumWidth(100)
+        self.btn_toggle_multi_send.setMinimumWidth(110)
         self.btn_toggle_multi_send.clicked.connect(self.toggle_multi_send)
         send_buttons_layout.addWidget(self.btn_toggle_multi_send)
-        
+
         send_layout.addLayout(send_buttons_layout)
         splitter.addWidget(send_group)
         
-        # 设置分割器的初始大小比例，接收区占绝大部分，发送区紧凑
-        splitter.setSizes([2400, 100])
+        # 设置分割器的初始大小比例（接收区约 78%，发送区约 22%）
+        splitter.setSizes([700, 200])
         
         # 添加多字符发送区域（默认隐藏）
         self.multi_send_widget = QWidget()
@@ -1006,20 +1003,20 @@ class SerialTool(QMainWindow):
         # 保存/加载按钮
         btn_save = QPushButton("保存")
         btn_save.setFont(QFont("Microsoft YaHei", 9))
-        btn_save.setMinimumWidth(50)
+        btn_save.setMinimumWidth(56)
         btn_save.clicked.connect(self.save_multi_items)
         button_row_layout.addWidget(btn_save)
         
         btn_load = QPushButton("加载")
         btn_load.setFont(QFont("Microsoft YaHei", 9))
-        btn_load.setMinimumWidth(50)
+        btn_load.setMinimumWidth(56)
         btn_load.clicked.connect(self.load_multi_items)
         button_row_layout.addWidget(btn_load)
         
         # 帮助按钮
         btn_help = QPushButton("帮助")
         btn_help.setFont(QFont("Microsoft YaHei", 9))
-        btn_help.setMinimumWidth(50)
+        btn_help.setMinimumWidth(56)
         btn_help.clicked.connect(self.show_multi_send_help)
         button_row_layout.addWidget(btn_help)
         
@@ -1197,8 +1194,10 @@ class SerialTool(QMainWindow):
         self.check_repeat.stateChanged.connect(self.toggle_repeat)
         
         # --- 状态栏 ---
-        self.statusBar().showMessage("就绪")
-        
+        self.status_msg = QLabel('<span style="color: green;">就绪</span>')
+        self.status_msg.setFont(QFont("Microsoft YaHei", 9))
+        self.statusBar().addWidget(self.status_msg)
+
         # 添加状态栏组件
         # 使用富文本设置连接状态，只改变状态部分的颜色
         self.status_connection = QLabel()
@@ -1446,6 +1445,16 @@ class SerialTool(QMainWindow):
                         and self.serial_port.is_open)
         self._update_status_connection_text(is_connected)
 
+    def _set_status(self, text, level="info"):
+        """更新状态栏消息，按级别着色"""
+        if level == "ready":
+            self.status_msg.setText(f'<span style="color: green;">{text}</span>')
+        elif level == "error":
+            self.status_msg.setText(f'<span style="color: red;">{text}</span>')
+        else:
+            label_color = self.theme_colors['text_normal'].name()
+            self.status_msg.setText(f'<span style="color: {label_color};">{text}</span>')
+
     def _update_status_connection_text(self, connected):
         """更新状态栏连接状态文字（主题感知）"""
         label_color = self.theme_colors['text_normal'].name()
@@ -1638,7 +1647,7 @@ class SerialTool(QMainWindow):
                 # 更新状态栏
                 self._update_status_connection_text(True)
                 self.status_baud.setText(f"波特率: {baud_rate}")
-                self.statusBar().showMessage("就绪")  # 恢复就绪状态
+                self._set_status("就绪", "ready")  # 恢复就绪状态
                 
                 # 清除错误状态
                 self.error_state = False
@@ -1675,7 +1684,7 @@ class SerialTool(QMainWindow):
                         pass
                 
                 # 更新状态栏显示错误
-                self.statusBar().showMessage(f"打开失败: {error_msg}")
+                self._set_status(f"打开失败: {error_msg}", "error")
                 
                 # 设置错误状态
                 self.error_state = True
@@ -1706,7 +1715,7 @@ class SerialTool(QMainWindow):
             # 更新状态栏
             self._update_status_connection_text(False)
             self.status_baud.setText("波特率：115200")
-            self.statusBar().showMessage("就绪")  # 恢复就绪状态
+            self._set_status("就绪", "ready")  # 恢复就绪状态
             
             # 清除错误状态
             self.error_state = False
@@ -1773,6 +1782,7 @@ class SerialTool(QMainWindow):
 
         # 禁用发送按钮，防止重复发送
         self.btn_send_file.setEnabled(False)
+        self.btn_send_file.setText("发送中…")
         
         # 使用线程池发送文件，避免阻塞UI
         worker = FileOperationWorker(self._send_file_worker, self.selected_file_path, file_size)
@@ -1832,11 +1842,13 @@ class SerialTool(QMainWindow):
         
         # 重新启用发送按钮
         self.btn_send_file.setEnabled(True)
+        self.btn_send_file.setText("发送文件")
     
     def on_file_send_error(self, error):
         """文件发送错误回调"""
         self.append_text(f"[错误]: 文件发送错误: {error}\n")
         self.btn_send_file.setEnabled(True)
+        self.btn_send_file.setText("发送文件")
     
     def on_file_send_progress(self, progress_msg):
         """文件发送进度回调"""
@@ -2127,7 +2139,7 @@ class SerialTool(QMainWindow):
             # 更新状态栏
             self._update_status_connection_text(False)
             self.status_baud.setText("波特率: 115200")
-            self.statusBar().showMessage(f"串口读取错误: {error_msg}")
+            self._set_status(f"串口读取错误: {error_msg}", "error")
         except Exception as e:
             # UI更新失败不影响主要流程
             pass
@@ -2473,6 +2485,14 @@ class SerialTool(QMainWindow):
 
     def clear_recv_area(self):
         """清空接收区"""
+        # 确认对话框，防止误操作丢失数据
+        reply = QMessageBox.question(
+            self, "确认清空", "确定要清空接收区吗？\n所有已接收的数据将丢失。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
         self.text_recv.clear()
         # 清空日志缓冲区
         self.log_buffer.clear()
@@ -3690,7 +3710,7 @@ class SerialTool(QMainWindow):
             self.append_text(f"[系统]: 已创建新的日志文件: {self.log_file_path}\n")
             # 更新状态栏
             self.status_log.setText(f"日志文件: {os.path.basename(self.log_file_path)}")
-            self.statusBar().showMessage(f"已创建新的日志文件: {os.path.basename(self.log_file_path)}")
+            self._set_status(f"已创建新的日志文件: {os.path.basename(self.log_file_path)}")
 
         except Exception as e:
             error_msg = f"创建日志文件失败: {str(e)}"
@@ -3700,7 +3720,7 @@ class SerialTool(QMainWindow):
             self.log_file_size = 0
             # 更新状态栏
             self.status_log.setText("日志文件: 创建失败")
-            self.statusBar().showMessage(error_msg)
+            self._set_status(error_msg, "error")
 
     def _check_disk_space(self, required_bytes=1024):
         """检查磁盘空间是否充足"""
@@ -3752,7 +3772,7 @@ class SerialTool(QMainWindow):
             if not self._check_disk_space(data_size + 1024):
                 error_msg = "磁盘空间不足，无法写入数据"
                 self.append_text(f"[错误]: {error_msg}\n")
-                self.statusBar().showMessage(error_msg)
+                self._set_status(error_msg, "error")
                 return
 
             # 写入数据（使用 try-except-else-finally 确保文件句柄安全）
@@ -3798,7 +3818,7 @@ class SerialTool(QMainWindow):
                 finally:
                     self.current_log_file = None
             # 更新状态栏
-            self.statusBar().showMessage(error_msg)
+            self._set_status(error_msg, "error")
 
 
 
