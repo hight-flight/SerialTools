@@ -9,6 +9,10 @@ import shutil
 import sys
 import time
 import subprocess
+import warnings
+
+# 抑制 PyInstaller 钩子中第三方库的 DeprecationWarning（不影响打包）
+warnings.filterwarnings('ignore', category=DeprecationWarning, module=r'PyInstaller.*')
 
 # 配置常量
 MAIN_SCRIPT = 'serial_GUI.py'
@@ -54,12 +58,18 @@ def check_dependencies():
         import serial
         print("  - PyQt5: OK")
         print("  - pyserial: OK")
-        print("  [OK] 依赖检查通过")
-        return True
     except ImportError as e:
-        print(f"  [ERROR] 依赖缺失: {e}")
-        print("  请运行: pip install -r requirements.txt")
+        print(f"  [ERROR] 核心依赖缺失: {e}")
+        print("  请运行: pip install pyqt5 pyserial")
         return False
+    # 可选依赖（示波器功能需要）
+    try:
+        import pyqtgraph, numpy
+        print("  - pyqtgraph: OK（示波器可用）")
+    except ImportError:
+        print("  - pyqtgraph: 未安装（示波器将不可用，其他功能正常）")
+    print("  [OK] 依赖检查通过")
+    return True
 
 def png_to_ico(png_path, max_size=512):
     """将PNG图片转换为ICO格式，支持自适应尺寸"""
@@ -246,8 +256,23 @@ def build_application(icon_path=None):
         '--windowed',         # 无命令行窗口（GUI应用）
         '--name', APP_NAME,   # 可执行文件名
         '--add-data', f'{CONFIG_FILE}{path_sep}.',  # 添加配置文件（跨平台兼容）
-        '--hidden-import', 'pyqtgraph',  # 示波器懒加载依赖
-        '--hidden-import', 'numpy',      # pyqtgraph 底层依赖
+        # 懒加载依赖（示波器）
+        '--hidden-import', 'pyqtgraph',
+        '--hidden-import', 'numpy',
+        '--collect-submodules', 'pyqtgraph',  # 收集 pyqtgraph 全部子模块
+        # 串口枚举（lazy import 场景）
+        '--hidden-import', 'serial.tools.list_ports',
+        '--hidden-import', 'serial.tools.list_ports_common',
+        '--hidden-import', 'serial.tools.list_ports_linux',
+        '--hidden-import', 'serial.tools.list_ports_windows',
+        '--hidden-import', 'serial.tools.list_ports_osx',
+        # 排除无关大型库，减小体积 + 消除无关 warning
+        '--exclude-module', 'torch',
+        '--exclude-module', 'tensorflow',
+        '--exclude-module', 'tkinter',
+        '--exclude-module', 'matplotlib',
+        '--exclude-module', 'PIL',
+        '--exclude-module', 'cv2',
         MAIN_SCRIPT           # 主脚本
     ]
     

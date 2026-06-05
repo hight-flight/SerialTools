@@ -1,6 +1,7 @@
 import sys
 import os
 import datetime
+import time
 import struct
 import serial
 import serial.tools.list_ports
@@ -9,12 +10,12 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QComboBox, QPushButton,
                              QTextEdit, QCheckBox, QMessageBox, QSplitter, QSpinBox, QLineEdit, QProgressBar, QGroupBox, QDialog, QFormLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog, QFrame, QSizePolicy,
-                             QAction, QMenuBar)
+                             QAction, QMenuBar, QTabWidget, QRadioButton, QButtonGroup)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint
 from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon
 
 # --- 全局常量 --- 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 # --- 主题颜色常量 ---
 THEME_COLORS = {
@@ -72,7 +73,7 @@ THEME_COLORS = {
 
 DARK_QSS = """
 QMainWindow        { background-color: #282C34; }
-QMenuBar           { background-color: #21252B; color: #ABB2BF; border-bottom: 1px solid #181A1F; }
+QMenuBar           { background-color: #282C34; color: #ABB2BF; border-bottom: 1px solid #3E4451; }
 QMenuBar::item:selected { background-color: #3E4451; }
 QGroupBox {
     border: 1px solid #3E4451; border-radius: 6px;
@@ -143,7 +144,8 @@ QTableView::viewport, QTableWidget::viewport {
     background-color: #2C313C;
 }
 QTableView::item:hover, QTableWidget::item:hover {
-    background-color: rgba(82, 139, 255, 30);
+    background-color: rgba(82, 139, 255, 50);
+    color: #ABB2BF;
 }
 QHeaderView { background-color: #21252B; }
 QHeaderView::section {
@@ -199,6 +201,14 @@ QToolTip {
     background-color: #21252B; color: #ABB2BF;
     border: 1px solid #3E4451; border-radius: 4px; padding: 4px 8px;
 }
+QTabWidget::pane { border: 1px solid #3E4451; background-color: #282C34; }
+QTabBar::tab {
+    background-color: #21252B; color: #ABB2BF;
+    padding: 6px 16px; border: 1px solid #3E4451;
+    border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px;
+}
+QTabBar::tab:selected { background-color: #282C34; }
+QTabBar::tab:hover { background-color: #3E4451; }
 """
 
 LIGHT_QSS = """
@@ -274,7 +284,8 @@ QTableView::viewport, QTableWidget::viewport {
     background-color: rgba(255, 255, 255, 230);
 }
 QTableView::item:hover, QTableWidget::item:hover {
-    background-color: rgba(0, 120, 212, 20);
+    background-color: rgba(0, 120, 212, 60);
+    color: #333333;
 }
 QHeaderView { background-color: #E8E8E8; }
 QHeaderView::section {
@@ -330,6 +341,14 @@ QToolTip {
     background-color: #FFFFFF; color: #333333;
     border: 1px solid #CCCCCC; border-radius: 4px; padding: 4px 8px;
 }
+QTabWidget::pane { border: 1px solid #CCCCCC; background-color: #F5F5F5; }
+QTabBar::tab {
+    background-color: #E8E8E8; color: #333333;
+    padding: 6px 16px; border: 1px solid #CCCCCC;
+    border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px;
+}
+QTabBar::tab:selected { background-color: #F5F5F5; }
+QTabBar::tab:hover { background-color: #D0D0D0; }
 """
 
 # --- 文件操作工作类 ---
@@ -629,6 +648,9 @@ class SerialTool(QMainWindow):
         act_scope = QAction("数据波形（示波器）", self)
         act_scope.triggered.connect(self.oscilloscope)
         tool_menu.addAction(act_scope)
+        act_modbus = QAction("Modbus 工具", self)
+        act_modbus.triggered.connect(self.modbus_tool)
+        tool_menu.addAction(act_modbus)
 
         # 帮助菜单
         help_menu = menubar.addMenu("帮助(&H)")
@@ -1138,18 +1160,17 @@ class SerialTool(QMainWindow):
             hex_layout.setContentsMargins(0, 0, 0, 0)
             self.table_multi_send.setCellWidget(i, 0, hex_widget)
             
-            # 字符串（支持双击编辑按钮内容）
+            # 字符串（支持三击编辑按钮内容）
             string_item = QTableWidgetItem(item[1])
             string_item.setFlags(Qt.ItemIsEditable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.table_multi_send.setItem(i, 1, string_item)
             
-            # 发送按钮（支持双击编辑）
+            # 发送按钮（支持三击编辑）
             send_btn = QPushButton(item[2])
             send_btn.setFont(QFont("Microsoft YaHei", 9))
             send_btn.setMinimumWidth(70)  # 增加按钮宽度
             send_btn.clicked.connect(self.on_send_multi_btn_clicked)
             send_btn.setObjectName(f"btn_{i}")
-            # 安装事件过滤器来处理双击事件
             send_btn.installEventFilter(self)
             send_widget = QWidget()
             send_layout = QHBoxLayout(send_widget)
@@ -1181,7 +1202,6 @@ class SerialTool(QMainWindow):
         self.table_multi_send.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table_multi_send.setSelectionBehavior(QAbstractItemView.SelectRows)
         # 连接双击事件
-        self.table_multi_send.doubleClicked.connect(self.table_double_click)
         
         multi_send_group_layout.addWidget(self.table_multi_send)
         
@@ -2917,13 +2937,12 @@ class SerialTool(QMainWindow):
         # 字符串
         self.table_multi_send.setItem(row, 1, QTableWidgetItem(""))
         
-        # 发送按钮（支持双击编辑）
+        # 发送按钮（支持三击编辑）
         send_btn = QPushButton("无注释")
         send_btn.setFont(QFont("Microsoft YaHei", 9))
         send_btn.setMinimumWidth(70)  # 增加按钮宽度
         send_btn.clicked.connect(self.on_send_multi_btn_clicked)
         send_btn.setObjectName(f"btn_{row}")
-        # 安装事件过滤器来处理双击事件
         send_btn.installEventFilter(self)
         send_widget = QWidget()
         send_layout = QHBoxLayout(send_widget)
@@ -3045,9 +3064,9 @@ class SerialTool(QMainWindow):
            - 点击"点击发送"列的按钮，可单独发送对应行的内容
            - 按钮文本可自定义
         
-        5. 双击修改：
-           - 双击"字符串"列可编辑对应行的内容
-           - 双击"点击发送"按钮可修改按钮文本
+        5. 修改内容：
+           - 双击"字符串"列可编辑发送内容
+           - 快速三击"发送"按钮可修改按钮文字（0.6 秒内连击 3 次）
         
         6. 延时设置：
            - 在"延时(ms)"列设置每次发送后的等待时间
@@ -3087,7 +3106,8 @@ class SerialTool(QMainWindow):
         layout.addWidget(close_button)
 
         self._apply_dialog_dark(dialog)
-        dialog.exec_()
+        dialog.setAttribute(Qt.WA_DeleteOnClose)
+        dialog.show()
 
     @pyqtSlot()
     def stop_batch_send(self):
@@ -3408,45 +3428,30 @@ class SerialTool(QMainWindow):
             self.append_text(f"[错误]: 保存多字符项目失败: {e}\n")
 
     def eventFilter(self, obj, event):
-        """事件过滤器，处理双击编辑按钮文本和字符串输入框"""
-        if event.type() == event.MouseButtonDblClick:
-            # 检查是否是发送按钮
+        """事件过滤器：三击按钮编辑文本"""
+        if event.type() == event.MouseButtonPress:
             if obj.objectName().startswith("btn_"):
-                # 找出按钮所在的行
-                for row in range(self.table_multi_send.rowCount()):
-                    widget = self.table_multi_send.cellWidget(row, 2)
-                    if widget:
-                        layout = widget.layout()
-                        if layout and layout.itemAt(0).widget() == obj:
-                            # 打开编辑对话框
+                key = f'_tc_{obj.objectName()}'
+                now = time.time()
+                last = getattr(self, key, (0, 0))
+                if now - last[0] < 0.6:
+                    count = last[1] + 1
+                else:
+                    count = 1
+                setattr(self, key, (now, count))
+                if count >= 3:
+                    setattr(self, key, (0, 0))
+                    for row in range(self.table_multi_send.rowCount()):
+                        w = self.table_multi_send.cellWidget(row, 2)
+                        if w and w.layout() and w.layout().itemAt(0).widget() == obj:
                             new_text, ok = QInputDialog.getText(
-                                self, "编辑按钮文本", "请输入新的按钮文本:", 
-                                text=obj.text()
-                            )
+                                self, "编辑按钮", "按钮文字:", text=obj.text())
                             if ok and new_text:
                                 obj.setText(new_text)
                             break
         return super().eventFilter(obj, event)
     
-    def table_double_click(self, index):
-        """处理表格双击事件，双击字符串列时编辑对应按钮的内容"""
-        if index.column() == 1:  # 字符串列
-            row = index.row()
-            # 找出对应行的按钮
-            widget = self.table_multi_send.cellWidget(row, 2)
-            if widget:
-                layout = widget.layout()
-                if layout:
-                    send_btn = layout.itemAt(0).widget()
-                    if send_btn:
-                        # 打开编辑对话框
-                        new_text, ok = QInputDialog.getText(
-                            self, "编辑按钮文本", "请输入新的按钮文本:", 
-                            text=send_btn.text()
-                        )
-                        if ok and new_text:
-                            send_btn.setText(new_text)
-    
+
 
     
     def _try_decode_csv(self, file_path):
@@ -3572,7 +3577,7 @@ class SerialTool(QMainWindow):
                 string_value = item.get("string", "")
                 self.table_multi_send.setItem(i, 1, QTableWidgetItem(string_value))
 
-                # 发送按钮（支持双击编辑，恢复保存的按钮文本）
+                # 发送按钮（支持三击编辑，恢复保存的按钮文本）
                 button_text = item.get("button_text", "无注释")
                 send_btn = QPushButton(button_text)
                 send_btn.setFont(QFont("Microsoft YaHei", 9))
@@ -3580,7 +3585,7 @@ class SerialTool(QMainWindow):
                 send_btn.clicked.connect(self.on_send_multi_btn_clicked)
                 send_btn.setObjectName(f"btn_{i}")
                 # 安装事件过滤器来处理双击事件
-                send_btn.installEventFilter(self)
+                ""
                 send_widget = QWidget()
                 send_layout = QHBoxLayout(send_widget)
                 send_layout.addWidget(send_btn)
@@ -3761,7 +3766,8 @@ class SerialTool(QMainWindow):
 
         layout.addLayout(btn_layout)
         self._apply_dialog_dark(dialog)
-        dialog.exec_()
+        dialog.setAttribute(Qt.WA_DeleteOnClose)
+        dialog.show()
 
     def hex_converter(self):
         """HEX 转换器弹窗：HEX ↔ ASCII ↔ Decimal 互转"""
@@ -3819,7 +3825,8 @@ class SerialTool(QMainWindow):
         ascii_edit.textEdited.connect(on_ascii_changed)
 
         self._apply_dialog_dark(dialog)
-        dialog.exec_()
+        dialog.setAttribute(Qt.WA_DeleteOnClose)
+        dialog.show()
 
     def serial_monitor(self):
         """串口监视器：列出系统所有串口及详细信息"""
@@ -3832,9 +3839,11 @@ class SerialTool(QMainWindow):
         layout.setSpacing(8)
 
         table = QTableWidget()
-        table.setColumnCount(5)
-        table.setHorizontalHeaderLabels(["端口", "描述", "硬件ID", "制造商", "VID/PID"])
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        table.setColumnCount(6)
+        table.setHorizontalHeaderLabels(["序号", "端口", "描述", "硬件ID", "制造商", "VID/PID"])
+        table.setColumnWidth(0, 44)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         layout.addWidget(table)
@@ -3846,12 +3855,13 @@ class SerialTool(QMainWindow):
                 ports = list_ports.comports()
                 table.setRowCount(len(ports))
                 for i, p in enumerate(ports):
-                    table.setItem(i, 0, QTableWidgetItem(p.device))
-                    table.setItem(i, 1, QTableWidgetItem(p.description))
-                    table.setItem(i, 2, QTableWidgetItem(p.hwid))
-                    table.setItem(i, 3, QTableWidgetItem(p.manufacturer or "—"))
+                    table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
+                    table.setItem(i, 1, QTableWidgetItem(p.device))
+                    table.setItem(i, 2, QTableWidgetItem(p.description))
+                    table.setItem(i, 3, QTableWidgetItem(p.hwid))
+                    table.setItem(i, 4, QTableWidgetItem(p.manufacturer or "—"))
                     vid_pid = f"{p.vid:04X}:{p.pid:04X}" if p.vid and p.pid else "—"
-                    table.setItem(i, 4, QTableWidgetItem(vid_pid))
+                    table.setItem(i, 5, QTableWidgetItem(vid_pid))
             except Exception as e:
                 QMessageBox.warning(dialog, "错误", f"枚举串口失败: {e}")
 
@@ -3869,7 +3879,8 @@ class SerialTool(QMainWindow):
 
         refresh()
         self._apply_dialog_dark(dialog)
-        dialog.exec_()
+        dialog.setAttribute(Qt.WA_DeleteOnClose)
+        dialog.show()
 
     def oscilloscope(self):
         """数据波形示波器：将串口接收的原始字节按数据类型解析为波形图"""
@@ -3965,18 +3976,18 @@ class SerialTool(QMainWindow):
             btn_start.setEnabled(True)
             btn_pause.setEnabled(False)
 
-        btn_start = QPushButton("▶ 开始")
+        btn_start = QPushButton("开始")
         btn_start.setFont(QFont("Microsoft YaHei", 9))
         btn_start.clicked.connect(on_start)
         panel_layout.addWidget(btn_start)
 
-        btn_pause = QPushButton("⏸ 暂停")
+        btn_pause = QPushButton("暂停")
         btn_pause.setFont(QFont("Microsoft YaHei", 9))
         btn_pause.setEnabled(False)
         btn_pause.clicked.connect(on_pause)
         panel_layout.addWidget(btn_pause)
 
-        btn_clear = QPushButton("🗘 清除")
+        btn_clear = QPushButton("清除")
         btn_clear.setFont(QFont("Microsoft YaHei", 9))
         panel_layout.addWidget(btn_clear)
 
@@ -4108,31 +4119,433 @@ class SerialTool(QMainWindow):
         refresh_timer.start()
 
         self._apply_dialog_dark(dialog)
-        dialog.exec_()
+        dialog.setAttribute(Qt.WA_DeleteOnClose)
 
-        # 清理
-        refresh_timer.stop()
-        self.scope_running = False
-        if hasattr(self, 'read_thread') and self.read_thread:
+        def on_close():
+            refresh_timer.stop()
+            self.scope_running = False
+            if hasattr(self, 'read_thread') and self.read_thread:
+                try:
+                    self.read_thread.receive_data_signal.disconnect(feed_data)
+                except (TypeError, RuntimeError):
+                    pass
+        dialog.finished.connect(on_close)
+
+        dialog.show()
+
+    def modbus_tool(self):
+        """Modbus 工具：帧构建 + 帧解析"""
+        def modbus_crc16(data: bytes) -> int:
+            crc = 0xFFFF
+            for b in data:
+                crc ^= b
+                for _ in range(8):
+                    if crc & 1: crc = (crc >> 1) ^ 0xA001
+                    else:       crc >>= 1
+            return crc
+
+        FUNC_CODES = {
+            '01 (0x01) 读线圈':        (1,  'read_bits'),
+            '02 (0x02) 读离散输入':    (2,  'read_bits'),
+            '03 (0x03) 读保持寄存器':  (3,  'read_regs'),
+            '04 (0x04) 读输入寄存器':  (4,  'read_regs'),
+            '05 (0x05) 写单线圈':      (5,  'write_single'),
+            '06 (0x06) 写单寄存器':    (6,  'write_single'),
+            '15 (0x0F) 写多线圈':      (15, 'write_multi'),
+            '16 (0x10) 写多寄存器':    (16, 'write_multi'),
+        }
+        EXCEPTIONS = {1: '非法功能码', 2: '非法数据地址', 3: '非法数据值',
+                      4: '从站设备故障', 5: '确认', 6: '从站设备忙'}
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Modbus 工具")
+        dialog.setMinimumSize(580, 500)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        main_layout = QVBoxLayout(dialog)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(8)
+        tabs = QTabWidget()
+        main_layout.addWidget(tabs)
+
+        # ═══════════════════════════════════════
+        #  Tab 1: 帧构建
+        # ═══════════════════════════════════════
+        build_tab = QWidget()
+        bl = QVBoxLayout(build_tab)
+        bl.setContentsMargins(8, 8, 8, 8)
+        bl.setSpacing(8)
+
+        # ── 协议选择（互斥）──
+        proto_row = QHBoxLayout()
+        proto_row.addWidget(QLabel("协议:"))
+        radio_rtu = QRadioButton("RTU")
+        radio_rtu.setChecked(True)
+        proto_row.addWidget(radio_rtu)
+        radio_ascii = QRadioButton("ASCII")
+        proto_row.addWidget(radio_ascii)
+        radio_tcp = QRadioButton("TCP")
+        proto_row.addWidget(radio_tcp)
+        proto_group = QButtonGroup(dialog)
+        proto_group.addButton(radio_rtu, 0)
+        proto_group.addButton(radio_ascii, 1)
+        proto_group.addButton(radio_tcp, 2)
+        proto_row.addSpacing(16)
+        lbl_tcp_unit = QLabel("单元ID:")
+        proto_row.addWidget(lbl_tcp_unit)
+        spin_tcp_unit = QSpinBox()
+        spin_tcp_unit.setRange(0, 255)
+        spin_tcp_unit.setValue(1)
+        spin_tcp_unit.setFont(QFont("Consolas", 9))
+        proto_row.addWidget(spin_tcp_unit)
+        proto_row.addStretch()
+        bl.addLayout(proto_row)
+
+        # ── 参数表单 ──
+        form = QFormLayout()
+        form.setSpacing(6)
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        spin_slave = QSpinBox()
+        spin_slave.setRange(1, 247)
+        spin_slave.setValue(1)
+        spin_slave.setFont(QFont("Consolas", 9))
+        form.addRow("从站地址:", spin_slave)
+        lbl_slave = form.labelForField(spin_slave)
+
+        combo_func = QComboBox()
+        combo_func.addItems(list(FUNC_CODES.keys()))
+        combo_func.setCurrentIndex(2)
+        combo_func.setFont(QFont("Consolas", 9))
+        form.addRow("功能码:", combo_func)
+
+        spin_addr = QSpinBox()
+        spin_addr.setRange(0, 65535)
+        spin_addr.setPrefix("0x")
+        spin_addr.setDisplayIntegerBase(16)
+        spin_addr.setFont(QFont("Consolas", 9))
+        form.addRow("起始地址:", spin_addr)
+
+        spin_qty = QSpinBox()
+        spin_qty.setRange(1, 125)
+        spin_qty.setValue(1)
+        spin_qty.setFont(QFont("Consolas", 9))
+        form.addRow("数量:", spin_qty)
+
+        edit_data = QLineEdit()
+        edit_data.setFont(QFont("Consolas", 9))
+        edit_data.setPlaceholderText("例: 0064 00C8")
+        form.addRow("数据(HEX):", edit_data)
+
+        bl.addLayout(form)
+
+        # ── 动态显隐 ──
+        lbl_qty = form.labelForField(spin_qty)
+        lbl_data = form.labelForField(edit_data)
+
+        def sync_protocol_ui():
+            show_tcp = radio_tcp.isChecked()
+            lbl_slave.setVisible(not show_tcp)
+            spin_slave.setVisible(not show_tcp)
+            lbl_tcp_unit.setVisible(show_tcp)
+            spin_tcp_unit.setVisible(show_tcp)
+
+        proto_group.buttonClicked.connect(lambda: sync_protocol_ui())
+
+        def on_func_changed():
+            _, op = FUNC_CODES[combo_func.currentText()]
+            is_read = op in ('read_bits', 'read_regs')
+            lbl_qty.setVisible(is_read)
+            spin_qty.setVisible(is_read)
+            lbl_data.setVisible(not is_read)
+            edit_data.setVisible(not is_read)
+            if is_read:
+                spin_qty.setRange(1, 125 if op == 'read_regs' else 2000)
+
+        combo_func.currentIndexChanged.connect(on_func_changed)
+        on_func_changed()
+        sync_protocol_ui()
+
+        # ── 生成的帧（紧凑布局）──
+        result_group = QVBoxLayout()
+        result_group.setSpacing(2)
+        result_group.addWidget(QLabel("生成的帧:"))
+        result_frame = QTextEdit()
+        result_frame.setReadOnly(True)
+        result_frame.setFont(QFont("Consolas", 10))
+        result_frame.setMinimumHeight(64)
+        result_frame.setMaximumHeight(100)
+        result_group.addWidget(result_frame)
+        bl.addLayout(result_group)
+
+        # ── 构建逻辑 ──
+        def build_pdu(slave, func, addr, op):
+            raw = bytes([slave, func, (addr >> 8) & 0xFF, addr & 0xFF])
+            if op in ('read_bits', 'read_regs'):
+                q = spin_qty.value()
+                raw += bytes([(q >> 8) & 0xFF, q & 0xFF])
+            elif op == 'write_single':
+                try:
+                    v = int(edit_data.text().strip().replace(' ', ''), 16)
+                except ValueError:
+                    v = 0
+                raw += bytes([(v >> 8) & 0xFF, v & 0xFF])
+            elif op == 'write_multi':
+                ds = edit_data.text().strip().replace(' ', '')
+                try:
+                    db = bytes.fromhex(ds)
+                except ValueError:
+                    QMessageBox.warning(dialog, "格式错误", "数据(HEX) 格式无效")
+                    return None
+                n = len(db)
+                q = n if func == 15 else n // 2
+                raw += bytes([(q >> 8) & 0xFF, q & 0xFF, n]) + db
+            return raw
+
+        def on_build():
+            func, op = FUNC_CODES[combo_func.currentText()]
+            addr = spin_addr.value()
+
+            if radio_rtu.isChecked():
+                raw = build_pdu(spin_slave.value(), func, addr, op)
+                if raw is None: return
+                crc = modbus_crc16(raw)
+                frame = raw + bytes([crc & 0xFF, (crc >> 8) & 0xFF])
+                result_frame.setText(frame.hex(' ').upper())
+
+            elif radio_ascii.isChecked():
+                raw = build_pdu(spin_slave.value(), func, addr, op)
+                if raw is None: return
+                lrc = (-sum(raw)) & 0xFF
+                result_frame.setText(':' + raw.hex().upper() + f'{lrc:02X}')
+
+            elif radio_tcp.isChecked():
+                unit_id = spin_tcp_unit.value()
+                raw = build_pdu(unit_id, func, addr, op)
+                if raw is None: return
+                if not hasattr(self, 'modbus_tcp_tid'):
+                    self.modbus_tcp_tid = 0
+                self.modbus_tcp_tid = (self.modbus_tcp_tid + 1) % 65536
+                length = len(raw)
+                mbap = bytes([
+                    (self.modbus_tcp_tid >> 8) & 0xFF, self.modbus_tcp_tid & 0xFF,
+                    0, 0,
+                    (length >> 8) & 0xFF, length & 0xFF,
+                ])
+                result_frame.setText((mbap + raw).hex(' ').upper())
+
+        # ── 按钮行 ──
+        bbl = QHBoxLayout()
+        bbl.setSpacing(6)
+
+        btn_build = QPushButton("构建帧")
+        btn_build.clicked.connect(on_build)
+        bbl.addWidget(btn_build)
+
+        def copy_frame():
+            t = result_frame.toPlainText().strip()
+            if t:
+                QApplication.clipboard().setText(t)
+
+        bbl.addWidget(QPushButton("复制", clicked=copy_frame))
+
+        def send_frame():
+            t = result_frame.toPlainText().strip().replace(' ', '').lstrip(':')
+            if radio_ascii.isChecked():
+                t = t[:-2]  # 去掉 LRC 校验字节
+            if not t:
+                return
+            if not hasattr(self, 'serial_port') or not self.serial_port or not self.serial_port.is_open:
+                QMessageBox.warning(dialog, "提示", "请先打开串口再发送。")
+                return
             try:
-                self.read_thread.receive_data_signal.disconnect(feed_data)
-            except (TypeError, RuntimeError):
-                pass
+                data = bytes.fromhex(t)
+                with QMutexLocker(self.serial_mutex):
+                    self.serial_port.write(data)
+                self.tx_bytes += len(data)
+                self.label_tx_bytes.setText(f"发送字节: {self.tx_bytes}")
+                self._set_status("Modbus 帧已发送", "ready")
+            except Exception as e:
+                QMessageBox.critical(dialog, "发送失败", str(e))
+
+        bbl.addWidget(QPushButton("发送", clicked=send_frame))
+        bbl.addStretch()
+        bl.addLayout(bbl)
+        tabs.addTab(build_tab, "帧构建")
+
+        # ═══════════════════════════════════════
+        #  Tab 2: 帧解析
+        # ═══════════════════════════════════════
+        parse_tab = QWidget()
+        pl = QVBoxLayout(parse_tab)
+        pl.setContentsMargins(8, 8, 8, 8)
+        pl.setSpacing(8)
+
+        pl.addWidget(QLabel("输入帧 (HEX):"))
+        edit_input = QTextEdit()
+        edit_input.setFont(QFont("Consolas", 10))
+        edit_input.setPlaceholderText("输入 HEX 帧，例: 01 03 00 00 00 01 84 0A")
+        edit_input.setMaximumHeight(56)
+        pl.addWidget(edit_input)
+
+        mr = QHBoxLayout()
+        mr.addWidget(QLabel("模式:"))
+        combo_mode = QComboBox()
+        combo_mode.addItems(["自动检测", "RTU", "ASCII"])
+        combo_mode.setFont(QFont("Consolas", 9))
+        mr.addWidget(combo_mode)
+        mr.addStretch()
+
+        btn_parse = QPushButton("解析")
+        mr.addWidget(btn_parse)
+        pl.addLayout(mr)
+
+        result_parse = QTextEdit()
+        result_parse.setReadOnly(True)
+        result_parse.setFont(QFont("Consolas", 10))
+        pl.addWidget(result_parse)
+
+        def on_parse():
+            raw_text = edit_input.toPlainText().strip()
+            if not raw_text:
+                return
+            try:
+                clean = raw_text.replace(' ', '').replace('\r', '').replace('\n', '')
+                lrc_ok = None
+                lrc_byte = None
+                mode = combo_mode.currentText()
+                if mode == "ASCII" or (mode == "自动检测" and clean.startswith(':')):
+                    raw_all = bytes.fromhex(clean.lstrip(':').rstrip('\n'))
+                    lrc_byte = raw_all[-1]
+                    raw = raw_all[:-1]
+                    lrc_ok = (sum(raw) + lrc_byte) & 0xFF == 0
+                else:
+                    raw = bytes.fromhex(clean)
+
+                if len(raw) < 4:
+                    result_parse.setText("错误: 帧长度不足（最少 4 字节）")
+                    return
+
+                slave = raw[0]
+                func = raw[1]
+                is_exc = (func & 0x80) != 0
+                lines = [f"从站地址: {slave}"]
+
+                if is_exc:
+                    exc_name = EXCEPTIONS.get(raw[2], '未知异常')
+                    lines.append(f"功能码: {func} (0x{func:02X}) ← 异常响应")
+                    lines.append(f"异常码: {raw[2]} — {exc_name}")
+                else:
+                    name = next((k for k, v in FUNC_CODES.items() if v[0] == func),
+                                f'未知功能码 (0x{func:02X})')
+                    lines.append(f"功能码: {name}")
+                    op = FUNC_CODES.get(name, (None, ''))[1]
+
+                    if op in ('read_bits', 'read_regs'):
+                        byte_count = raw[2]
+                        lines.append(f"数据长度: {byte_count} 字节")
+                        if op == 'read_bits':
+                            for i in range(byte_count):
+                                bits = format(raw[3 + i], '08b')
+                                lines.append(f"线圈[{i * 8}-{i * 8 + 7}]: {bits}")
+                        else:
+                            for i in range(byte_count // 2):
+                                val = (raw[3 + i * 2] << 8) | raw[3 + i * 2 + 1]
+                                lines.append(f"寄存器[{i}]: {val} (0x{val:04X})")
+                    elif op == 'write_single':
+                        val = (raw[4] << 8) | raw[5]
+                        lines.append(f"地址: {(raw[2] << 8) | raw[3]}")
+                        lines.append(f"值: {val} (0x{val:04X})")
+                    elif op == 'write_multi':
+                        lines.append(f"起始地址: {(raw[2] << 8) | raw[3]}")
+                        lines.append(f"数量: {(raw[4] << 8) | raw[5]}")
+
+                # CRC / LRC 校验
+                if len(raw) >= 6 and not is_exc:
+                    payload = raw[:-2]
+                    expected = modbus_crc16(payload)
+                    actual = (raw[-1] << 8) | raw[-2]
+                    ok = "✅ 校验通过" if expected == actual else f"❌ 校验失败 (应为 0x{expected:04X})"
+                    lines.append(f"CRC: 0x{actual:04X}  {ok}")
+                elif lrc_ok is not None and lrc_byte is not None:
+                    ok = "✅ 校验通过" if lrc_ok else "❌ 校验失败"
+                    lines.append(f"LRC: 0x{lrc_byte:02X}  {ok}")
+
+                result_parse.setText('\n'.join(lines))
+            except (ValueError, IndexError) as e:
+                result_parse.setText(f"解析错误: {str(e) or 'HEX 格式无效'}")
+
+        btn_parse.clicked.connect(on_parse)
+        tabs.addTab(parse_tab, "帧解析")
+
+        # ── 底部 ──
+        bottom = QHBoxLayout()
+        bottom.addStretch()
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dialog.close)
+        bottom.addWidget(btn_close)
+        main_layout.addLayout(bottom)
+
+        self._apply_dialog_dark(dialog)
+        dialog.setAttribute(Qt.WA_DeleteOnClose)
+        dialog.show()
 
     def show_usage(self):
         """显示使用说明"""
         msg = QMessageBox(QMessageBox.Information, "使用说明",
-            "<b>hight-flight 串口调试助手</b><br><br>"
-            "<b>基本操作：</b><br>"
+            "<b>hight-flight 串口调试助手</b> v" + VERSION + "<br><br>"
+
+            "<b>━━ 主界面 ━━</b><br>"
+            "• 菜单栏：文件(保存/导出) | 视图(主题/显示) | 工具 | 帮助<br>"
+            "• 切换暗黑/明亮模式：视图 → 暗黑模式<br>"
+            "• 清空接收区会弹出确认提示<br><br>"
+
+            "<b>━━ 串口连接 ━━</b><br>"
             "1. 选择串口和波特率，点击「打开串口」<br>"
-            "2. 在发送区输入数据，点击「发送」(Ctrl+Return)<br>"
-            "3. 接收区自动显示串口返回的数据<br><br>"
-            "<b>快捷键：</b><br>"
-            "• Ctrl+S — 保存接收日志<br>"
-            "• Ctrl+Return — 发送数据<br><br>"
-            "<b>校验：</b>选择校验算法后，发送时自动追加校验值<br>"
-            "<b>首/尾字段：</b>勾选后自动在发送数据前后添加指定字段<br>"
-            "<b>多字符发送：</b>可预设多条指令，支持循环/批量发送"
+            "2. 波特率选「自定义」可输入任意值 (1～1000000)<br>"
+            "3. 「更多串口设置」可配数据位/停止位/校验位/流控制<br>"
+            "4. RTS/DTR 勾选后立即生效<br><br>"
+
+            "<b>━━ 发送数据 ━━</b><br>"
+            "• 在发送区输入内容，点击「发送」(Ctrl+Return)<br>"
+            "• HEX 发送：勾选后输入十六进制字符串，空格随意<br>"
+            "• 回车换行：勾选后发送内容末尾自动追加 \\r\\n<br>"
+            "• 重复发送：勾选后按间隔(ms)自动循环发送<br>"
+            "• 校验：选算法后自动计算校验值并追加到帧尾<br>"
+            "• 首/尾字段：勾选后自动在数据前后添加指定字节<br>"
+            "• 文件发送：选择文件→「发送文件」→ 通过串口发出<br><br>"
+
+            "<b>━━ 接收与显示 ━━</b><br>"
+            "• 接收区自动显示串口返回的数据<br>"
+            "• HEX 显示：勾选后数据以十六进制格式显示<br>"
+            "• 显示时间：勾选后每条数据前追加时间戳<br>"
+            "• 筛选：支持包含/忽略大小写/正则，逗号分隔多关键字<br>"
+            "• 编码：支持 UTF-8/GBK/GB2312/ASCII/ISO-8859-1/GB18030<br>"
+            "• 自动保存：勾选后全部接收数据持久化到日志文件<br><br>"
+
+            "<b>━━ 多字符发送 ━━</b><br>"
+            "• 可预设最多 N 条指令，每条独立设置 HEX/字符串/延时/顺序<br>"
+            "• 点击「发送」发送指令，快速三击按钮可编辑按钮文字<br>"
+            "• 循环发送：按顺序从小到大依次发送，可限循环次数<br>"
+            "• 支持保存/加载配置到文件<br><br>"
+
+            "<b>━━ 工具 ━━</b><br>"
+            "<b>CRC 计算器：</b>输入 HEX 数据，选算法即得校验值<br>"
+            "  支持 Modbus CRC16 / CRC32 / Fletcher / XOR8 / ADD8 / ADD16<br>"
+            "<b>HEX 转换器：</b>HEX ↔ ASCII ↔ Decimal 实时互转<br>"
+            "<b>串口监视器：</b>列出系统所有串口的端口/描述/硬件ID/制造商<br>"
+            "<b>Modbus 工具：</b><br>"
+            "  帧构建 — 选功能码+填参数→生成 RTU/ASCII/TCP 帧<br>"
+            "  帧解析 — 粘贴 Modbus 帧→自动解析字段与 CRC 校验<br>"
+            "<b>数据波形（示波器）：</b><br>"
+            "  将串口接收的原始字节按数据类型解析为实时波形<br>"
+            "  通道识别：N 通道 × M 字节/值 = 帧长，按帧循环取<br>"
+            "  例 — 2 通道 + uint8：AA BB CC DD → CH1:AA,CC CH2:BB,DD<br>"
+            "  例 — 2 通道 + uint16_be：00 64 00 C8 → CH1:100 CH2:200<br>"
+            "  单片机按固定帧格式连续发送 ADC 采样值即可显示波形<br><br>"
+
+            "<b>━━ 快捷键 ━━</b><br>"
+            "  Ctrl+Return — 发送数据<br>"
+            "  Ctrl+S — 保存接收日志"
         )
         self._apply_dialog_dark(msg)
         msg.exec_()
@@ -4152,24 +4565,18 @@ class SerialTool(QMainWindow):
         msg.exec_()
 
     def _apply_dialog_dark(self, dialog):
-        """为子对话框应用暗黑标题栏，与主窗口主题色 (#282C34) 完全统一"""
+        """为子对话框应用暗黑主题（QSS 显式注入 + DWM 标题栏着色）"""
         if self.current_theme != 'dark':
             return
-
-        # 1. 设置完整暗色调色板（覆盖所有控件部件）
-        dark_palette = dialog.palette()
-        dark_palette.setColor(QPalette.Window, QColor('#282C34'))
-        dark_palette.setColor(QPalette.WindowText, QColor(0xAB, 0xB2, 0xBF))
-        dark_palette.setColor(QPalette.Base, QColor('#2C313C'))
-        dark_palette.setColor(QPalette.AlternateBase, QColor('#21252B'))
-        dark_palette.setColor(QPalette.Text, QColor(0xAB, 0xB2, 0xBF))
-        dark_palette.setColor(QPalette.Button, QColor('#2C313C'))
-        dark_palette.setColor(QPalette.ButtonText, QColor(0xAB, 0xB2, 0xBF))
-        dark_palette.setColor(QPalette.BrightText, QColor(0xFF, 0xFF, 0xFF))
-        dark_palette.setColor(QPalette.Highlight, QColor('#528BFF'))
-        dark_palette.setColor(QPalette.HighlightedText, QColor(0xFF, 0xFF, 0xFF))
-        dialog.setPalette(dark_palette)
-
+        # 1. 显式注入当前主题 QSS（确保 modeless 对话框完整渲染）
+        dialog.setStyleSheet(QApplication.instance().styleSheet())
+        # 1.5 修复 QSS 无法覆盖的调色板角色
+        p = dialog.palette()
+        p.setColor(QPalette.Highlight, QColor('#3E4451'))       # 表格行选中背景
+        p.setColor(QPalette.HighlightedText, QColor('#ABB2BF')) # 表格行选中文字
+        p.setColor(QPalette.Button, QColor('#21252B'))           # 表头背景（Windows 原生样式用此角色）
+        p.setColor(QPalette.ButtonText, QColor('#ABB2BF'))      # 表头文字
+        dialog.setPalette(p)
         # 2. Windows DWM API 标题栏着色
         import platform
         if platform.system() != 'Windows':
@@ -4177,38 +4584,21 @@ class SerialTool(QMainWindow):
         try:
             import ctypes
             hwnd = int(dialog.winId())
-            if not hwnd:
-                return
-
-            # Win10: 启用沉浸式暗黑模式（必须在 CAPTION_COLOR 之前）
+            if not hwnd: return
             value = ctypes.c_int(1)
             for attr in (20, 19):
                 try:
                     if ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                        ctypes.wintypes.HWND(hwnd),
-                        ctypes.c_uint(attr),
-                        ctypes.byref(value),
-                        ctypes.sizeof(value)) == 0:
+                        ctypes.wintypes.HWND(hwnd), ctypes.c_uint(attr),
+                        ctypes.byref(value), ctypes.sizeof(value)) == 0:
                         break
-                except Exception:
-                    continue
-
-            # Win11: 精确标题栏颜色 #282C34（必须紧随暗黑模式）
-            color_hex = '#2C313C'
-            try:
-                r = int(color_hex[1:3], 16)
-                g = int(color_hex[3:5], 16)
-                b = int(color_hex[5:7], 16)
-                colorref = ctypes.c_uint32((b << 16) | (g << 8) | r)
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    ctypes.wintypes.HWND(hwnd),
-                    ctypes.c_uint(35),  # DWMWA_CAPTION_COLOR
-                    ctypes.byref(colorref),
-                    ctypes.sizeof(colorref))
-            except Exception:
-                pass
-        except Exception:
-            pass
+                except Exception: continue
+            r, g, b = 0x2C, 0x31, 0x3C
+            colorref = ctypes.c_uint32((b << 16) | (g << 8) | r)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                ctypes.wintypes.HWND(hwnd), ctypes.c_uint(35),
+                ctypes.byref(colorref), ctypes.sizeof(colorref))
+        except Exception: pass
 
     def show_more_settings(self):
         """显示更多串口设置"""
@@ -4728,7 +5118,6 @@ class SerialTool(QMainWindow):
                         button.clicked.connect(self.on_send_multi_btn_clicked)
                         # 为按钮设置唯一的对象名称，用于事件过滤器
                         button.setObjectName(f"btn_{row}")
-                        # 安装事件过滤器以支持双击编辑
                         button.installEventFilter(self)
                         button_widget = QWidget()
                         button_layout = QHBoxLayout(button_widget)
