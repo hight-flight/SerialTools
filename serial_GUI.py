@@ -1108,6 +1108,29 @@ class SerialTool(QMainWindow):
         self.stack_params.addWidget(tcp_server_page)  # index 3
 
         self.params_row.addWidget(self.stack_params)
+
+        # 自动保存（合并在参数行右侧，所有模式统一）
+        self.params_row.addSpacing(16)
+        self.check_auto_save = QCheckBox("自动保存日志")
+        self.check_auto_save.setFont(QFont("Microsoft YaHei", 9))
+        self.check_auto_save.stateChanged.connect(self.toggle_auto_save)
+        self.params_row.addWidget(self.check_auto_save)
+
+        self.label_save_path = QLabel("路径:")
+        self.label_save_path.setFont(QFont("Microsoft YaHei", 9))
+        self.params_row.addWidget(self.label_save_path)
+        self.line_edit_save_path = QLineEdit()
+        self.line_edit_save_path.setReadOnly(True)
+        self.line_edit_save_path.setText(self.save_directory)
+        self.line_edit_save_path.setFont(QFont("Consolas", 9))
+        self.line_edit_save_path.setMaximumWidth(240)
+        self.params_row.addWidget(self.line_edit_save_path)
+        self.btn_browse_path = QPushButton("浏览")
+        self.btn_browse_path.setMinimumWidth(56)
+        self.btn_browse_path.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_browse_path.clicked.connect(self.browse_save_path)
+        self.params_row.addWidget(self.btn_browse_path)
+
         serial_layout.addLayout(self.params_row)
 
         # 初始状态：串口模式，隐藏 mode_layout 按钮
@@ -1170,34 +1193,6 @@ class SerialTool(QMainWindow):
         display_save_layout.addStretch()
 
         serial_layout.addLayout(display_save_layout)
-
-        # 第四行：自动保存与日志路径
-        auto_save_layout = QHBoxLayout()
-        auto_save_layout.setSpacing(4)
-
-        self.check_auto_save = QCheckBox("自动保存日志")
-        self.check_auto_save.setFont(QFont("Microsoft YaHei", 9))
-        self.check_auto_save.stateChanged.connect(self.toggle_auto_save)
-        auto_save_layout.addWidget(self.check_auto_save)
-
-        self.label_save_path = QLabel("路径:")
-        self.label_save_path.setFont(QFont("Microsoft YaHei", 9))
-        auto_save_layout.addWidget(self.label_save_path)
-        self.line_edit_save_path = QLineEdit()
-        self.line_edit_save_path.setReadOnly(True)
-        self.line_edit_save_path.setText(self.save_directory)
-        self.line_edit_save_path.setFont(QFont("Consolas", 9))
-        self.line_edit_save_path.setMaximumWidth(280)
-        auto_save_layout.addWidget(self.line_edit_save_path)
-        self.btn_browse_path = QPushButton("浏览")
-        self.btn_browse_path.setMinimumWidth(56)
-        self.btn_browse_path.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_browse_path.clicked.connect(self.browse_save_path)
-        auto_save_layout.addWidget(self.btn_browse_path)
-
-        auto_save_layout.addStretch()
-
-        serial_layout.addLayout(auto_save_layout)
 
         main_layout.addWidget(serial_group)
 
