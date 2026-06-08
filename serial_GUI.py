@@ -993,6 +993,13 @@ class SerialTool(QMainWindow):
         port_layout.addWidget(self.combo_port)
         serial_page_layout.addLayout(port_layout)
 
+        # 串口模式刷新按钮（串口选择后面）
+        self.btn_refresh_serial = QPushButton("刷新")
+        self.btn_refresh_serial.setMinimumWidth(56)
+        self.btn_refresh_serial.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_refresh_serial.clicked.connect(self.refresh_ports)
+        serial_page_layout.addWidget(self.btn_refresh_serial)
+
         baud_layout = QHBoxLayout()
         baud_label = QLabel("波特率:")
         baud_label.setFont(QFont("Microsoft YaHei", 9))
@@ -1028,10 +1035,11 @@ class SerialTool(QMainWindow):
         udp_page_layout.setContentsMargins(0, 0, 0, 0)
         udp_page_layout.setSpacing(4)
         udp_page_layout.addWidget(QLabel("本地IP:", font=QFont("Microsoft YaHei", 9)))
-        self.edit_udp_local_ip = QLineEdit()
+        self.edit_udp_local_ip = QComboBox()
+        self.edit_udp_local_ip.setEditable(True)
         self.edit_udp_local_ip.setFont(QFont("Consolas", 9))
-        self.edit_udp_local_ip.setMaximumWidth(100)
-        self.edit_udp_local_ip.setText('0.0.0.0')
+        self.edit_udp_local_ip.setMinimumWidth(140)
+        self.edit_udp_local_ip.addItem('0.0.0.0')
         udp_page_layout.addWidget(self.edit_udp_local_ip)
         udp_page_layout.addWidget(QLabel("本地端口:", font=QFont("Microsoft YaHei", 9)))
         self.edit_udp_local_port = QSpinBox()
@@ -1083,10 +1091,11 @@ class SerialTool(QMainWindow):
         tcp_server_page_layout.setContentsMargins(0, 0, 0, 0)
         tcp_server_page_layout.setSpacing(4)
         tcp_server_page_layout.addWidget(QLabel("本地IP:", font=QFont("Microsoft YaHei", 9)))
-        self.edit_tcp_server_local_ip = QLineEdit()
+        self.edit_tcp_server_local_ip = QComboBox()
+        self.edit_tcp_server_local_ip.setEditable(True)
         self.edit_tcp_server_local_ip.setFont(QFont("Consolas", 9))
-        self.edit_tcp_server_local_ip.setMaximumWidth(100)
-        self.edit_tcp_server_local_ip.setText('0.0.0.0')
+        self.edit_tcp_server_local_ip.setMinimumWidth(140)
+        self.edit_tcp_server_local_ip.addItem('0.0.0.0')
         tcp_server_page_layout.addWidget(self.edit_tcp_server_local_ip)
         tcp_server_page_layout.addWidget(QLabel("本地端口:", font=QFont("Microsoft YaHei", 9)))
         self.edit_tcp_server_local_port = QSpinBox()
@@ -1104,6 +1113,7 @@ class SerialTool(QMainWindow):
         # 初始状态：串口模式，隐藏 mode_layout 按钮
         self.btn_switch.setVisible(False)
         self.btn_more_settings.setVisible(False)
+        self.btn_refresh.setVisible(False)
 
         # 第三行：显示、筛选与编码设置
         display_save_layout = QHBoxLayout()
@@ -2025,16 +2035,17 @@ class SerialTool(QMainWindow):
                 self.combo_mode.blockSignals(False)
                 return
             self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
-            self.btn_switch_serial.setChecked(False)
             self.toggle_connection()
         self.connection_mode = new_mode
         self.stack_params.setCurrentIndex(index)
         is_serial = (new_mode == 'serial')
-        # 按钮位置：串口模式在参数行右侧，其他模式在第一行
+        # 按钮位置：串口模式下按钮在参数行内，其他模式在第一行
         self.btn_switch_serial.setVisible(is_serial)
         self.btn_more_settings_serial.setVisible(is_serial)
+        self.btn_refresh_serial.setVisible(is_serial)
         self.btn_switch.setVisible(not is_serial)
         self.btn_more_settings.setVisible(not is_serial)
+        self.btn_refresh.setVisible(not is_serial)
         self.btn_refresh.setText("刷新" if is_serial else "获取本机IP")
         self.btn_more_settings.setEnabled(is_serial)
         self.btn_more_settings_serial.setEnabled(is_serial)
@@ -2059,16 +2070,31 @@ class SerialTool(QMainWindow):
             try:
                 hostname = socket.gethostname()
                 local_ip = socket.gethostbyname(hostname)
-                if mode == 'udp':
-                    self.edit_udp_local_ip.setText(local_ip)
-                elif mode == 'tcp_server':
-                    self.edit_tcp_server_local_ip.setText(local_ip)
+                all_ips = socket.gethostbyname_ex(hostname)[2]
+                if mode == 'udp' and hasattr(self, 'edit_udp_local_ip'):
+                    self.edit_udp_local_ip.clear()
+                    self.edit_udp_local_ip.addItems(all_ips)
+                    self.edit_udp_local_ip.setCurrentText(local_ip)
+                elif mode == 'tcp_server' and hasattr(self, 'edit_tcp_server_local_ip'):
+                    self.edit_tcp_server_local_ip.clear()
+                    self.edit_tcp_server_local_ip.addItems(all_ips)
+                    self.edit_tcp_server_local_ip.setCurrentText(local_ip)
             except Exception:
                 pass
 
     def toggle_connection(self):
         """打开或关闭通信连接（支持串口 / UDP / TCP Client / TCP Server）"""
-        if self.btn_switch.isChecked():
+        # 同步两套按钮的选中状态
+        s = self.sender()
+        if s is self.btn_switch_serial:
+            self.btn_switch.blockSignals(True)
+            self.btn_switch.setChecked(self.btn_switch_serial.isChecked())
+            self.btn_switch.blockSignals(False)
+        elif s is self.btn_switch:
+            self.btn_switch_serial.blockSignals(True)
+            self.btn_switch_serial.setChecked(self.btn_switch.isChecked())
+            self.btn_switch_serial.blockSignals(False)
+        if self.btn_switch.isChecked() or self.btn_switch_serial.isChecked():
             mode = self.connection_mode
             if hasattr(self, 'read_thread') and self.read_thread and self.read_thread.isRunning():
                 try:
@@ -2127,10 +2153,10 @@ class SerialTool(QMainWindow):
                     connection_desc = f"串口 {port_name}, 波特率 {baud_rate}"
                     self.combo_port.setEnabled(False)
                     self.combo_baud.setEnabled(False)
-                    self.btn_refresh.setEnabled(False)
+                    self.btn_refresh.setEnabled(False); self.btn_refresh_serial.setEnabled(False)
                     self.combo_mode.setEnabled(False)
                 elif mode == 'udp':
-                    local_ip = self.edit_udp_local_ip.text().strip() or '0.0.0.0'
+                    local_ip = self.edit_udp_local_ip.currentText().strip() or '0.0.0.0'
                     local_port = self.edit_udp_local_port.value()
                     remote_ip = self.edit_udp_remote_ip.text().strip() or '192.168.1.1'
                     remote_port = self.edit_udp_remote_port.value()
@@ -2139,7 +2165,7 @@ class SerialTool(QMainWindow):
                     self.combo_mode.setEnabled(False)
                     self.combo_port.setEnabled(False)
                     self.combo_baud.setEnabled(False)
-                    self.btn_refresh.setEnabled(False)
+                    self.btn_refresh.setEnabled(False); self.btn_refresh_serial.setEnabled(False)
                 elif mode == 'tcp_client':
                     remote_ip = self.edit_tcp_remote_ip.text().strip() or '192.168.1.1'
                     remote_port = self.edit_tcp_remote_port.value()
@@ -2148,16 +2174,16 @@ class SerialTool(QMainWindow):
                     self.combo_mode.setEnabled(False)
                     self.combo_port.setEnabled(False)
                     self.combo_baud.setEnabled(False)
-                    self.btn_refresh.setEnabled(False)
+                    self.btn_refresh.setEnabled(False); self.btn_refresh_serial.setEnabled(False)
                 elif mode == 'tcp_server':
-                    local_ip = self.edit_tcp_server_local_ip.text().strip() or '0.0.0.0'
+                    local_ip = self.edit_tcp_server_local_ip.currentText().strip() or '0.0.0.0'
                     local_port = self.edit_tcp_server_local_port.value()
                     self.transport.open_tcp_server(local_ip, str(local_port))
                     connection_desc = f"TCP Server {local_ip}:{local_port}"
                     self.combo_mode.setEnabled(False)
                     self.combo_port.setEnabled(False)
                     self.combo_baud.setEnabled(False)
-                    self.btn_refresh.setEnabled(False)
+                    self.btn_refresh.setEnabled(False); self.btn_refresh_serial.setEnabled(False)
                 else:
                     QMessageBox.warning(self, "错误", f"未知的连接模式: {mode}")
                     self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
@@ -2206,7 +2232,7 @@ class SerialTool(QMainWindow):
             self._sync_button_text("打开连接")
             self.combo_port.setEnabled(True)
             self.combo_baud.setEnabled(True)
-            self.btn_refresh.setEnabled(True)
+            self.btn_refresh.setEnabled(True); self.btn_refresh_serial.setEnabled(True)
             self.combo_mode.setEnabled(True)
 
     def select_file_to_send(self):
@@ -2637,7 +2663,7 @@ class SerialTool(QMainWindow):
             self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
             self.combo_port.setEnabled(True)
             self.combo_baud.setEnabled(True)
-            self.btn_refresh.setEnabled(True)
+            self.btn_refresh.setEnabled(True); self.btn_refresh_serial.setEnabled(True)
             
             # 更新状态栏
             self._update_status_connection_text(False)
@@ -5450,7 +5476,7 @@ class SerialTool(QMainWindow):
                         self.combo_baud.setCurrentIndex(baud_index)
 
                 if 'udp_local_ip' in config and hasattr(self, 'edit_udp_local_ip'):
-                    self.edit_udp_local_ip.setText(str(config['udp_local_ip']))
+                    self.edit_udp_local_ip.setCurrentText(str(config['udp_local_ip']))
                 if 'udp_local_port' in config and hasattr(self, 'edit_udp_local_port'):
                     try: self.edit_udp_local_port.setValue(int(config['udp_local_port']))
                     except: self.edit_udp_local_port.setValue(8080)
@@ -5465,7 +5491,7 @@ class SerialTool(QMainWindow):
                     try: self.edit_tcp_remote_port.setValue(int(config['tcp_remote_port']))
                     except: self.edit_tcp_remote_port.setValue(8888)
                 if 'tcp_server_local_ip' in config and hasattr(self, 'edit_tcp_server_local_ip'):
-                    self.edit_tcp_server_local_ip.setText(str(config['tcp_server_local_ip']))
+                    self.edit_tcp_server_local_ip.setCurrentText(str(config['tcp_server_local_ip']))
                 if 'tcp_server_local_port' in config and hasattr(self, 'edit_tcp_server_local_port'):
                     try: self.edit_tcp_server_local_port.setValue(int(config['tcp_server_local_port']))
                     except: self.edit_tcp_server_local_port.setValue(8888)
@@ -5694,13 +5720,13 @@ class SerialTool(QMainWindow):
             'connection_mode': getattr(self, 'connection_mode', 'serial'),
             'port': self.combo_port.currentText(),
             'baudrate': baudrate,
-            'udp_local_ip': self.edit_udp_local_ip.text().strip() if hasattr(self, 'edit_udp_local_ip') else '0.0.0.0',
+            'udp_local_ip': self.edit_udp_local_ip.currentText().strip() if hasattr(self, 'edit_udp_local_ip') else '0.0.0.0',
             'udp_local_port': self.edit_udp_local_port.value() if hasattr(self, 'edit_udp_local_port') else 8080,
             'udp_remote_ip': self.edit_udp_remote_ip.text().strip() if hasattr(self, 'edit_udp_remote_ip') else '192.168.1.100',
             'udp_remote_port': self.edit_udp_remote_port.value() if hasattr(self, 'edit_udp_remote_port') else 8888,
             'tcp_remote_ip': self.edit_tcp_remote_ip.text().strip() if hasattr(self, 'edit_tcp_remote_ip') else '192.168.1.100',
             'tcp_remote_port': self.edit_tcp_remote_port.value() if hasattr(self, 'edit_tcp_remote_port') else 8888,
-            'tcp_server_local_ip': self.edit_tcp_server_local_ip.text().strip() if hasattr(self, 'edit_tcp_server_local_ip') else '0.0.0.0',
+            'tcp_server_local_ip': self.edit_tcp_server_local_ip.currentText().strip() if hasattr(self, 'edit_tcp_server_local_ip') else '0.0.0.0',
             'tcp_server_local_port': self.edit_tcp_server_local_port.value() if hasattr(self, 'edit_tcp_server_local_port') else 8888,
             'auto_save': self.check_auto_save.isChecked(),
             'save_directory': self.save_directory,

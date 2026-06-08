@@ -14,7 +14,7 @@
     "save_directory": "D:\\script\\code_project\\serial_GUI\\logs",
     "hex_recv": false,
     "hex_send": false,
-    "show_timestamp": true,
+    "show_timestamp": false,
     "newline": true,
     "rts": false,
     "dtr": false,
