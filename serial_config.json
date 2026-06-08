@@ -1,11 +1,20 @@
 {
+    "connection_mode": "serial",
     "port": "COM3",
     "baudrate": 115200,
+    "udp_local_ip": "192.168.5.58",
+    "udp_local_port": 8080,
+    "udp_remote_ip": "192.168.1.100",
+    "udp_remote_port": 8888,
+    "tcp_remote_ip": "192.168.1.100",
+    "tcp_remote_port": 8888,
+    "tcp_server_local_ip": "192.168.5.58",
+    "tcp_server_local_port": 8888,
     "auto_save": false,
     "save_directory": "D:\\script\\code_project\\serial_GUI\\logs",
     "hex_recv": false,
     "hex_send": false,
-    "show_timestamp": false,
+    "show_timestamp": true,
     "newline": true,
     "rts": false,
     "dtr": false,
@@ -51,6 +60,6 @@
             "C:/Users/GAOXIANG/Desktop/dnode_v0.3.275.bin",
             "C:/Users/GAOXIANG/Desktop/dnode_v0.3.276.bin"
         ],
-        "last_ip": "172.16.3.99"
+        "last_ip": "192.168.5.58"
     }
 }

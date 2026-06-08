@@ -19,12 +19,12 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QComboBox, QPushButton,
                              QTextEdit, QCheckBox, QMessageBox, QSplitter, QSpinBox, QLineEdit, QProgressBar, QGroupBox, QDialog, QFormLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog, QFrame, QSizePolicy,
-                             QAction, QMenuBar, QTabWidget, QRadioButton, QButtonGroup)
+                             QAction, QMenuBar, QTabWidget, QRadioButton, QButtonGroup, QStackedWidget)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint
 from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon
 
 # --- 全局常量 --- 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 
 # --- 主题颜色常量 ---
 THEME_COLORS = {
@@ -86,7 +86,7 @@ QMenuBar           { background-color: #282C34; color: #ABB2BF; border-bottom: 1
 QMenuBar::item:selected { background-color: #3E4451; }
 QGroupBox {
     border: 1px solid #3E4451; border-radius: 6px;
-    margin-top: 12px; padding-top: 16px; font-weight: bold; color: #ABB2BF;
+    margin-top: 8px; padding-top: 8px; font-weight: bold; color: #ABB2BF;
     background: transparent;
 }
 QGroupBox::title {
@@ -226,7 +226,7 @@ QMenuBar           { background-color: #F0F0F0; color: #333333; border-bottom: 1
 QMenuBar::item:selected { background-color: #DDDDDD; }
 QGroupBox {
     border: 1px solid #DDDDDD; border-radius: 6px;
-    margin-top: 12px; padding-top: 16px; font-weight: bold; color: #444444;
+    margin-top: 8px; padding-top: 8px; font-weight: bold; color: #444444;
     background: transparent;
 }
 QGroupBox::title {
@@ -389,117 +389,264 @@ class FileOperationWorker(QRunnable):
             self.signals.error.emit(f"文件操作错误: 未知错误: {e}")
 
 # --- 串口接收线程 ---
-class SerialReadThread(QThread):
-    # 定义一个信号，用于将接收到的数据传递给主界面
+# --- 统一传输层封装 ---
+class TransportWrapper:
+    """统一传输层，封装 Serial / UDP / TCP Client / TCP Server"""
+    def __init__(self):
+        self.mode = 'serial'
+        self._serial = None
+        self._socket = None
+        self._client_conn = None
+        self._client_addr = None
+        self._remote_addr = None
+
+    @property
+    def is_open(self):
+        if self.mode == 'serial':
+            return self._serial is not None and self._serial.is_open
+        elif self.mode == 'tcp_server':
+            return self._socket is not None
+        else:
+            return self._socket is not None
+
+    @property
+    def in_waiting(self):
+        if self.mode == 'serial':
+            return self._serial.in_waiting if self._serial else 0
+        elif self.mode == 'tcp_server':
+            if self._client_conn is not None:
+                import select
+                r, _, _ = select.select([self._client_conn], [], [], 0)
+                return 1 if r else 0
+            return 0
+        else:
+            if self._socket is not None:
+                import select
+                r, _, _ = select.select([self._socket], [], [], 0)
+                return 1 if r else 0
+            return 0
+
+    def open_serial(self, port, baudrate, **kwargs):
+        self.close()
+        self.mode = 'serial'
+        self._serial = serial.Serial(port=port, baudrate=baudrate, **kwargs)
+        return True
+
+    def open_udp(self, local_ip, local_port, remote_ip, remote_port):
+        self.close()
+        self.mode = 'udp'
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket.bind((local_ip, int(local_port)))
+        self._socket.setblocking(False)
+        self._remote_addr = (remote_ip, int(remote_port))
+        return True
+
+    def open_tcp_client(self, remote_ip, remote_port):
+        self.close()
+        self.mode = 'tcp_client'
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket.settimeout(5)
+        self._socket.connect((remote_ip, int(remote_port)))
+        self._socket.setblocking(False)
+        return True
+
+    def open_tcp_server(self, local_ip, local_port):
+        self.close()
+        self.mode = 'tcp_server'
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket.bind((local_ip, int(local_port)))
+        self._socket.listen(1)
+        self._socket.setblocking(False)
+        return True
+
+    def close(self):
+        if self._serial is not None:
+            try:
+                if self._serial.is_open:
+                    self._serial.close()
+            except Exception:
+                pass
+            self._serial = None
+        if self._client_conn is not None:
+            try:
+                self._client_conn.close()
+            except Exception:
+                pass
+            self._client_conn = None
+            self._client_addr = None
+        if self._socket is not None:
+            try:
+                self._socket.close()
+            except Exception:
+                pass
+            self._socket = None
+
+    def read(self, size=4096):
+        if self.mode == 'serial':
+            if self._serial is None:
+                return b''
+            try:
+                return self._serial.read(size)
+            except (serial.SerialTimeoutException, serial.SerialException):
+                return b''
+        elif self.mode == 'udp':
+            if self._socket is None:
+                return b''
+            try:
+                data, _addr = self._socket.recvfrom(size)
+                return data
+            except BlockingIOError:
+                return b''
+            except OSError:
+                return b''
+        elif self.mode == 'tcp_client':
+            if self._socket is None:
+                return b''
+            try:
+                return self._socket.recv(size)
+            except BlockingIOError:
+                return b''
+            except (ConnectionResetError, ConnectionAbortedError, OSError):
+                return b''
+        elif self.mode == 'tcp_server':
+            if self._socket is None:
+                return b''
+            try:
+                conn, addr = self._socket.accept()
+                if self._client_conn is not None:
+                    try:
+                        self._client_conn.close()
+                    except Exception:
+                        pass
+                self._client_conn = conn
+                self._client_conn.setblocking(False)
+                self._client_addr = addr
+            except BlockingIOError:
+                pass
+            except Exception:
+                pass
+            if self._client_conn is not None:
+                try:
+                    data = self._client_conn.recv(size)
+                    if data:
+                        return data
+                    else:
+                        self._client_conn.close()
+                        self._client_conn = None
+                        self._client_addr = None
+                except BlockingIOError:
+                    pass
+                except (ConnectionResetError, ConnectionAbortedError, OSError):
+                    self._client_conn = None
+                    self._client_addr = None
+            return b''
+        return b''
+
+    def write(self, data):
+        if self.mode == 'serial':
+            return self._serial.write(data) if self._serial else 0
+        elif self.mode == 'udp':
+            return self._socket.sendto(data, self._remote_addr) if self._socket else 0
+        elif self.mode == 'tcp_client':
+            return self._socket.send(data) if self._socket else 0
+        elif self.mode == 'tcp_server':
+            if self._client_conn is not None:
+                try:
+                    return self._client_conn.send(data)
+                except (ConnectionResetError, ConnectionAbortedError, OSError):
+                    self._client_conn = None
+                    self._client_addr = None
+            return 0
+        return 0
+
+    @property
+    def rts(self):
+        return self._serial.rts if self._serial else False
+
+    @rts.setter
+    def rts(self, value):
+        if self._serial is not None:
+            self._serial.rts = value
+
+    @property
+    def dtr(self):
+        return self._serial.dtr if self._serial else False
+
+    @dtr.setter
+    def dtr(self, value):
+        if self._serial is not None:
+            self._serial.dtr = value
+
+    def flush(self):
+        if self._serial is not None:
+            self._serial.flush()
+
+
+# --- 传输接收线程 ---
+class TransportReadThread(QThread):
     receive_data_signal = pyqtSignal(bytes)
-    # 定义一个信号，用于将错误信息传递给主界面
     error_signal = pyqtSignal(str)
 
-    def __init__(self, serial_port, serial_mutex):
+    def __init__(self, transport, transport_mutex):
         super().__init__()
-        self.serial_port = serial_port
+        self.transport = transport
         self.running = True
-        self.running_lock = QMutex()  # 保护running标志的锁
-        self.serial_mutex = serial_mutex  # 串口操作互斥锁
+        self.running_lock = QMutex()
+        self.transport_mutex = transport_mutex
 
     def is_running(self):
-        """线程安全地检查running状态"""
         self.running_lock.lock()
         result = self.running
         self.running_lock.unlock()
         return result
 
     def set_running(self, value):
-        """线程安全地设置running状态"""
         self.running_lock.lock()
         self.running = value
         self.running_lock.unlock()
 
     def run(self):
-        """
-        线程运行的主函数，持续循环执行直到running标志为False
-        负责从串口读取数据，并通过信号发射给其他组件
-        使用自适应休眠：有数据时快速轮询(1ms)，无数据时降低频率(20ms)
-        """
         try:
             while self.is_running():
                 try:
                     data_read = False
-                    with QMutexLocker(self.serial_mutex):
-                        if not self.serial_port or not self.serial_port.is_open:
-                            error_msg = "串口已关闭"
-                            self.error_signal.emit(error_msg)
+                    with QMutexLocker(self.transport_mutex):
+                        if not self.transport or not self.transport.is_open:
+                            self.error_signal.emit("连接已关闭")
                             self.set_running(False)
                             break
-
-                        if self.serial_port.in_waiting > 0:
+                        if self.transport.in_waiting > 0:
                             try:
-                                data = self.serial_port.read(self.serial_port.in_waiting)
+                                data = self.transport.read(self.transport.in_waiting or 4096)
                                 if data:
                                     self.receive_data_signal.emit(data)
                                     data_read = True
-                            except serial.SerialTimeoutException:
-                                pass
-                            except serial.SerialException as e:
-                                error_msg = f"串口读取异常: {e}"
-                                self.error_signal.emit(error_msg)
+                            except Exception as e:
+                                self.error_signal.emit(f"读取异常: {e}")
                                 self.set_running(False)
                                 break
-
-                    # 自适应休眠：有数据时短暂休眠让出CPU，无数据时稍长休眠降低占用
-                    if data_read:
-                        self.msleep(1)
-                    else:
-                        self.msleep(20)
-                except serial.SerialException as e:
-                    error_msg = f"串口错误: {e}"
-                    print(error_msg)
-                    self.error_signal.emit(error_msg)
-                    self.set_running(False)
-                    break
+                    self.msleep(1 if data_read else 20)
                 except ValueError as e:
-                    error_msg = f"数据解析错误: {e}"
-                    print(error_msg)
-                    self.error_signal.emit(error_msg)
-                    self.msleep(100)
+                    print(e); self.error_signal.emit(f"数据解析错误: {e}"); self.msleep(100)
                 except TimeoutError as e:
-                    error_msg = f"超时错误: {e}"
-                    print(error_msg)
-                    self.error_signal.emit(error_msg)
-                    self.msleep(100)
+                    print(e); self.error_signal.emit(f"超时错误: {e}"); self.msleep(100)
                 except KeyboardInterrupt:
-                    error_msg = "用户中断操作"
-                    print(error_msg)
-                    self.error_signal.emit(error_msg)
-                    self.set_running(False)
-                    break
+                    self.error_signal.emit("用户中断操作"); self.set_running(False); break
                 except SystemExit:
-                    error_msg = "系统退出"
-                    print(error_msg)
-                    self.error_signal.emit(error_msg)
-                    self.set_running(False)
-                    break
+                    self.error_signal.emit("系统退出"); self.set_running(False); break
                 except MemoryError:
-                    error_msg = "内存错误"
-                    print(error_msg)
-                    self.error_signal.emit(error_msg)
-                    self.set_running(False)
-                    break
+                    self.error_signal.emit("内存错误"); self.set_running(False); break
                 except Exception as e:
-                    error_msg = f"读取错误: {e}"
-                    print(error_msg)
-                    self.error_signal.emit(error_msg)
-                    self.msleep(100)
+                    print(e); self.error_signal.emit(f"读取错误: {e}"); self.msleep(100)
         finally:
-            # 确保线程能够正确停止
             self.set_running(False)
 
     def stop(self):
-        """停止线程，设置超时避免无限等待"""
         self.set_running(False)
-        # 使用带超时的wait()，避免线程卡在serial.read()时无限阻塞
-        if not self.wait(2000):  # 2秒超时
-            print(f"警告: 线程停止超时，可能卡在串口操作中")
+        if not self.wait(2000):
+            print(f"警告: 线程停止超时，可能卡在传输操作中")
 
 
 # --- OTA HTTP 请求处理器 ---
@@ -601,8 +748,18 @@ class OTAServerThread(QThread):
 class SerialTool(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.serial_port = None
+        self.transport = TransportWrapper()
         self.read_thread = None
+        # 网络模式参数
+        self.connection_mode = 'serial'
+        self.udp_local_ip = '0.0.0.0'
+        self.udp_local_port = 8080
+        self.udp_remote_ip = '192.168.1.100'
+        self.udp_remote_port = 8888
+        self.tcp_remote_ip = '192.168.1.100'
+        self.tcp_remote_port = 8888
+        self.tcp_server_local_ip = '0.0.0.0'
+        self.tcp_server_local_port = 8888
         # 日志缓冲区最大大小
         self.MAX_LOG_BUFFER_SIZE = 10000  # 最多存储10000条日志
         # 日志缓冲区，使用deque自动限制大小，pop(0)操作从O(n)降为O(1)
@@ -770,18 +927,62 @@ class SerialTool(QMainWindow):
         help_menu.addAction(act_about)
 
         # --- 顶部设置区域 ---
-        # 串口设置分组
-        serial_group = QGroupBox("串口设置")
+        serial_group = QGroupBox("通信设置")
         serial_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         serial_layout = QVBoxLayout(serial_group)
-        serial_layout.setContentsMargins(4, 4, 4, 4)
-        serial_layout.setSpacing(4)
-        
-        # 第一行：串口和波特率设置
-        port_baud_layout = QHBoxLayout()
-        port_baud_layout.setSpacing(4)
-        
-        # 串口选择
+        serial_layout.setContentsMargins(2, 2, 2, 2)
+        serial_layout.setSpacing(1)
+
+        # 第一行：模式选择 + 刷新 + 操作按钮（非串口模式显示）
+        self.mode_layout = QHBoxLayout()
+        self.mode_layout.setSpacing(4)
+
+        mode_label = QLabel("模式:")
+        mode_label.setFont(QFont("Microsoft YaHei", 9))
+        self.mode_layout.addWidget(mode_label)
+        self.combo_mode = QComboBox()
+        self.combo_mode.addItems(['串口 (Serial)', 'UDP', 'TCP Client', 'TCP Server'])
+        self.combo_mode.setFont(QFont("Microsoft YaHei", 9))
+        self.combo_mode.setMinimumWidth(120)
+        self.combo_mode.currentIndexChanged.connect(self.on_mode_changed)
+        self.mode_layout.addWidget(self.combo_mode)
+
+        self.btn_refresh = QPushButton("刷新")
+        self.btn_refresh.setMinimumWidth(56)
+        self.btn_refresh.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_refresh.clicked.connect(self.refresh_ports)
+        self.mode_layout.addWidget(self.btn_refresh)
+
+        # 操作按钮（仅非串口模式显示）
+        self.btn_switch = QPushButton("打开连接")
+        self.btn_switch.setCheckable(True)
+        self.btn_switch.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_switch.setMinimumWidth(80)
+        self.btn_switch.clicked.connect(self.toggle_connection)
+        self.mode_layout.addWidget(self.btn_switch)
+
+        self.btn_more_settings = QPushButton("更多设置")
+        self.btn_more_settings.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_more_settings.setMinimumWidth(90)
+        self.btn_more_settings.clicked.connect(self.show_more_settings)
+        self.mode_layout.addWidget(self.btn_more_settings)
+
+        self.mode_layout.addStretch()
+        serial_layout.addLayout(self.mode_layout)
+
+        # 第二行：动态参数面板 + 操作按钮（仅串口模式在参数后显示按钮）
+        self.params_row = QHBoxLayout()
+        self.params_row.setSpacing(4)
+
+        self.stack_params = QStackedWidget()
+        self.stack_params.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        # Page 0: 串口参数
+        serial_page = QWidget()
+        serial_page_layout = QHBoxLayout(serial_page)
+        serial_page_layout.setContentsMargins(0, 0, 0, 0)
+        serial_page_layout.setSpacing(4)
+
         port_layout = QHBoxLayout()
         port_label = QLabel("串口:")
         port_label.setFont(QFont("Microsoft YaHei", 9))
@@ -790,16 +991,8 @@ class SerialTool(QMainWindow):
         self.combo_port.setMinimumWidth(100)
         self.combo_port.setFont(QFont("Consolas", 9))
         port_layout.addWidget(self.combo_port)
-        port_baud_layout.addLayout(port_layout)
-        
-        # 刷新按钮
-        self.btn_refresh = QPushButton("刷新")
-        self.btn_refresh.setMinimumWidth(56)
-        self.btn_refresh.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_refresh.clicked.connect(self.refresh_ports)
-        port_baud_layout.addWidget(self.btn_refresh)
-        
-        # 波特率选择
+        serial_page_layout.addLayout(port_layout)
+
         baud_layout = QHBoxLayout()
         baud_label = QLabel("波特率:")
         baud_label.setFont(QFont("Microsoft YaHei", 9))
@@ -810,37 +1003,116 @@ class SerialTool(QMainWindow):
         self.combo_baud.setFont(QFont("Consolas", 9))
         self.combo_baud.currentIndexChanged.connect(self.handle_baud_change)
         baud_layout.addWidget(self.combo_baud)
-        port_baud_layout.addLayout(baud_layout)
-                        
-        # 打开/关闭串口按钮
-        self.btn_switch = QPushButton("打开串口")
-        self.btn_switch.setCheckable(True)
-        self.btn_switch.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_switch.setMinimumWidth(80)
-        self.btn_switch.clicked.connect(self.toggle_serial)
-        port_baud_layout.addWidget(self.btn_switch)
-        
-        # 更多串口设置按钮
-        self.btn_more_settings = QPushButton("更多串口设置")
-        self.btn_more_settings.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_more_settings.setMinimumWidth(90)
-        self.btn_more_settings.clicked.connect(self.show_more_settings)
-        port_baud_layout.addWidget(self.btn_more_settings)
+        serial_page_layout.addLayout(baud_layout)
 
-        port_baud_layout.addStretch()
+        # 串口模式按钮（紧接波特率后面）
+        self.btn_switch_serial = QPushButton("打开连接")
+        self.btn_switch_serial.setCheckable(True)
+        self.btn_switch_serial.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_switch_serial.setMinimumWidth(80)
+        self.btn_switch_serial.clicked.connect(self.toggle_connection)
+        serial_page_layout.addWidget(self.btn_switch_serial)
 
-        serial_layout.addLayout(port_baud_layout)
-        
-        # 第二行：显示、筛选与编码设置
+        self.btn_more_settings_serial = QPushButton("更多设置")
+        self.btn_more_settings_serial.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_more_settings_serial.setMinimumWidth(90)
+        self.btn_more_settings_serial.clicked.connect(self.show_more_settings)
+        serial_page_layout.addWidget(self.btn_more_settings_serial)
+
+        serial_page_layout.addStretch()
+        self.stack_params.addWidget(serial_page)  # index 0
+
+        # Page 1: UDP 参数
+        udp_page = QWidget()
+        udp_page_layout = QHBoxLayout(udp_page)
+        udp_page_layout.setContentsMargins(0, 0, 0, 0)
+        udp_page_layout.setSpacing(4)
+        udp_page_layout.addWidget(QLabel("本地IP:", font=QFont("Microsoft YaHei", 9)))
+        self.edit_udp_local_ip = QLineEdit()
+        self.edit_udp_local_ip.setFont(QFont("Consolas", 9))
+        self.edit_udp_local_ip.setMaximumWidth(100)
+        self.edit_udp_local_ip.setText('0.0.0.0')
+        udp_page_layout.addWidget(self.edit_udp_local_ip)
+        udp_page_layout.addWidget(QLabel("本地端口:", font=QFont("Microsoft YaHei", 9)))
+        self.edit_udp_local_port = QSpinBox()
+        self.edit_udp_local_port.setFont(QFont("Consolas", 9))
+        self.edit_udp_local_port.setRange(1, 65535)
+        self.edit_udp_local_port.setValue(8080)
+        self.edit_udp_local_port.setMaximumWidth(70)
+        udp_page_layout.addWidget(self.edit_udp_local_port)
+        udp_page_layout.addWidget(QLabel("远程IP:", font=QFont("Microsoft YaHei", 9)))
+        self.edit_udp_remote_ip = QLineEdit()
+        self.edit_udp_remote_ip.setFont(QFont("Consolas", 9))
+        self.edit_udp_remote_ip.setMaximumWidth(120)
+        self.edit_udp_remote_ip.setText('192.168.1.100')
+        udp_page_layout.addWidget(self.edit_udp_remote_ip)
+        udp_page_layout.addWidget(QLabel("远程端口:", font=QFont("Microsoft YaHei", 9)))
+        self.edit_udp_remote_port = QSpinBox()
+        self.edit_udp_remote_port.setFont(QFont("Consolas", 9))
+        self.edit_udp_remote_port.setRange(1, 65535)
+        self.edit_udp_remote_port.setValue(8888)
+        self.edit_udp_remote_port.setMaximumWidth(70)
+        udp_page_layout.addWidget(self.edit_udp_remote_port)
+        udp_page_layout.addStretch()
+        self.stack_params.addWidget(udp_page)  # index 1
+
+        # Page 2: TCP Client 参数
+        tcp_client_page = QWidget()
+        tcp_client_page_layout = QHBoxLayout(tcp_client_page)
+        tcp_client_page_layout.setContentsMargins(0, 0, 0, 0)
+        tcp_client_page_layout.setSpacing(4)
+        tcp_client_page_layout.addWidget(QLabel("远程IP:", font=QFont("Microsoft YaHei", 9)))
+        self.edit_tcp_remote_ip = QLineEdit()
+        self.edit_tcp_remote_ip.setFont(QFont("Consolas", 9))
+        self.edit_tcp_remote_ip.setMaximumWidth(120)
+        self.edit_tcp_remote_ip.setText('192.168.1.100')
+        tcp_client_page_layout.addWidget(self.edit_tcp_remote_ip)
+        tcp_client_page_layout.addWidget(QLabel("远程端口:", font=QFont("Microsoft YaHei", 9)))
+        self.edit_tcp_remote_port = QSpinBox()
+        self.edit_tcp_remote_port.setFont(QFont("Consolas", 9))
+        self.edit_tcp_remote_port.setRange(1, 65535)
+        self.edit_tcp_remote_port.setValue(8888)
+        self.edit_tcp_remote_port.setMaximumWidth(70)
+        tcp_client_page_layout.addWidget(self.edit_tcp_remote_port)
+        tcp_client_page_layout.addStretch()
+        self.stack_params.addWidget(tcp_client_page)  # index 2
+
+        # Page 3: TCP Server 参数
+        tcp_server_page = QWidget()
+        tcp_server_page_layout = QHBoxLayout(tcp_server_page)
+        tcp_server_page_layout.setContentsMargins(0, 0, 0, 0)
+        tcp_server_page_layout.setSpacing(4)
+        tcp_server_page_layout.addWidget(QLabel("本地IP:", font=QFont("Microsoft YaHei", 9)))
+        self.edit_tcp_server_local_ip = QLineEdit()
+        self.edit_tcp_server_local_ip.setFont(QFont("Consolas", 9))
+        self.edit_tcp_server_local_ip.setMaximumWidth(100)
+        self.edit_tcp_server_local_ip.setText('0.0.0.0')
+        tcp_server_page_layout.addWidget(self.edit_tcp_server_local_ip)
+        tcp_server_page_layout.addWidget(QLabel("本地端口:", font=QFont("Microsoft YaHei", 9)))
+        self.edit_tcp_server_local_port = QSpinBox()
+        self.edit_tcp_server_local_port.setFont(QFont("Consolas", 9))
+        self.edit_tcp_server_local_port.setRange(1, 65535)
+        self.edit_tcp_server_local_port.setValue(8888)
+        self.edit_tcp_server_local_port.setMaximumWidth(70)
+        tcp_server_page_layout.addWidget(self.edit_tcp_server_local_port)
+        tcp_server_page_layout.addStretch()
+        self.stack_params.addWidget(tcp_server_page)  # index 3
+
+        self.params_row.addWidget(self.stack_params)
+        serial_layout.addLayout(self.params_row)
+
+        # 初始状态：串口模式，隐藏 mode_layout 按钮
+        self.btn_switch.setVisible(False)
+        self.btn_more_settings.setVisible(False)
+
+        # 第三行：显示、筛选与编码设置
         display_save_layout = QHBoxLayout()
         display_save_layout.setSpacing(4)
 
-        # 接收区设置：HEX显示
         self.check_hex_recv = QCheckBox("HEX显示")
         self.check_hex_recv.setFont(QFont("Microsoft YaHei", 9))
         display_save_layout.addWidget(self.check_hex_recv)
 
-        # 筛选控件
         self.check_filter = QCheckBox("筛选:")
         self.check_filter.setFont(QFont("Microsoft YaHei", 9))
         self.check_filter.stateChanged.connect(self.toggle_filter)
@@ -862,7 +1134,6 @@ class SerialTool(QMainWindow):
         self.combo_filter_mode.currentTextChanged.connect(self.update_filter_mode)
         display_save_layout.addWidget(self.combo_filter_mode)
 
-        # 编码选择
         encoding_label = QLabel("编码:")
         encoding_label.setFont(QFont("Microsoft YaHei", 9))
         display_save_layout.addWidget(encoding_label)
@@ -873,7 +1144,6 @@ class SerialTool(QMainWindow):
         self.combo_encoding.setMinimumWidth(80)
         display_save_layout.addWidget(self.combo_encoding)
 
-        # 显示时间戳复选框
         self.check_timestamp = QCheckBox("显示时间")
         self.check_timestamp.setChecked(True)
         self.check_timestamp.setFont(QFont("Microsoft YaHei", 9))
@@ -882,7 +1152,6 @@ class SerialTool(QMainWindow):
         )
         display_save_layout.addWidget(self.check_timestamp)
 
-        # 清空接收区按钮
         self.btn_clear_recv = QPushButton("清空接收")
         self.btn_clear_recv.setFont(QFont("Microsoft YaHei", 9))
         self.btn_clear_recv.setMinimumWidth(80)
@@ -892,17 +1161,15 @@ class SerialTool(QMainWindow):
 
         serial_layout.addLayout(display_save_layout)
 
-        # 第三行：自动保存与日志路径
+        # 第四行：自动保存与日志路径
         auto_save_layout = QHBoxLayout()
         auto_save_layout.setSpacing(4)
 
-        # 自动保存复选框
         self.check_auto_save = QCheckBox("自动保存日志")
         self.check_auto_save.setFont(QFont("Microsoft YaHei", 9))
         self.check_auto_save.stateChanged.connect(self.toggle_auto_save)
         auto_save_layout.addWidget(self.check_auto_save)
 
-        # 保存路径（紧凑内联）
         self.label_save_path = QLabel("路径:")
         self.label_save_path.setFont(QFont("Microsoft YaHei", 9))
         auto_save_layout.addWidget(self.label_save_path)
@@ -921,7 +1188,7 @@ class SerialTool(QMainWindow):
         auto_save_layout.addStretch()
 
         serial_layout.addLayout(auto_save_layout)
-        
+
         main_layout.addWidget(serial_group)
 
         # --- 中间接收和发送区域（使用分割器）---
@@ -1643,8 +1910,8 @@ class SerialTool(QMainWindow):
 
     def _refresh_status_connection(self):
         """根据当前串口连接状态刷新状态栏文本颜色"""
-        is_connected = (hasattr(self, 'serial_port') and self.serial_port
-                        and self.serial_port.is_open)
+        is_connected = (hasattr(self, 'transport') and self.transport
+                        and self.transport.is_open)
         self._update_status_connection_text(is_connected)
 
     def _set_status(self, text, level="info"):
@@ -1738,217 +2005,209 @@ class SerialTool(QMainWindow):
 
     # --- 功能函数 ---
 
+
+    def _sync_button_text(self, text):
+        self.btn_switch.setText(text)
+        self.btn_switch_serial.setText(text)
+
+    def on_mode_changed(self, index):
+        mode_map = {0: 'serial', 1: 'udp', 2: 'tcp_client', 3: 'tcp_server'}
+        new_mode = mode_map.get(index, 'serial')
+        if hasattr(self, 'transport') and self.transport and self.transport.is_open:
+            reply = QMessageBox.question(self, "切换模式",
+                "当前连接正在使用，切换模式将断开连接。是否继续？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.No:
+                reverse_map = {v: k for k, v in mode_map.items()}
+                idx = reverse_map.get(self.connection_mode, 0)
+                self.combo_mode.blockSignals(True)
+                self.combo_mode.setCurrentIndex(idx)
+                self.combo_mode.blockSignals(False)
+                return
+            self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
+            self.btn_switch_serial.setChecked(False)
+            self.toggle_connection()
+        self.connection_mode = new_mode
+        self.stack_params.setCurrentIndex(index)
+        is_serial = (new_mode == 'serial')
+        # 按钮位置：串口模式在参数行右侧，其他模式在第一行
+        self.btn_switch_serial.setVisible(is_serial)
+        self.btn_more_settings_serial.setVisible(is_serial)
+        self.btn_switch.setVisible(not is_serial)
+        self.btn_more_settings.setVisible(not is_serial)
+        self.btn_refresh.setText("刷新" if is_serial else "获取本机IP")
+        self.btn_more_settings.setEnabled(is_serial)
+        self.btn_more_settings_serial.setEnabled(is_serial)
+        self.check_rts.setVisible(is_serial)
+        self.check_dtr.setVisible(is_serial)
+        self.refresh_ports()
+        self.append_text(f"[系统]: 通信模式切换为 {new_mode}\n")
+
     def refresh_ports(self):
         """刷新可用的串口列表"""
-        self.combo_port.clear()
-        ports = serial.tools.list_ports.comports()
-        if ports:
-            for port in ports:
-                self.combo_port.addItem(port.device)
-            self.combo_port.setCurrentIndex(0) # 默认选中第一个
+        mode = getattr(self, 'connection_mode', 'serial')
+        if mode == 'serial':
+            self.combo_port.clear()
+            ports = serial.tools.list_ports.comports()
+            if ports:
+                for port in ports:
+                    self.combo_port.addItem(port.device)
+                self.combo_port.setCurrentIndex(0)
+            else:
+                self.combo_port.addItem("无可用串口")
         else:
-            self.combo_port.addItem("无可用串口")
+            try:
+                hostname = socket.gethostname()
+                local_ip = socket.gethostbyname(hostname)
+                if mode == 'udp':
+                    self.edit_udp_local_ip.setText(local_ip)
+                elif mode == 'tcp_server':
+                    self.edit_tcp_server_local_ip.setText(local_ip)
+            except Exception:
+                pass
 
-    def toggle_serial(self):
-        """打开或关闭串口"""
+    def toggle_connection(self):
+        """打开或关闭通信连接（支持串口 / UDP / TCP Client / TCP Server）"""
         if self.btn_switch.isChecked():
-            # 尝试打开串口
-            port_name = self.combo_port.currentText()
-            if port_name == "无可用串口":
-                QMessageBox.warning(self, "错误", "没有检测到可用串口！")
-                self.btn_switch.setChecked(False)
-                return
-
-            try:
-                baud_rate = int(self.combo_baud.currentText())
-            except ValueError:
-                QMessageBox.warning(self, "错误", "无效的波特率！")
-                self.btn_switch.setChecked(False)
-                return
-
-            try:
-                # 停止旧的接收线程（在关闭串口之前）
-                if hasattr(self, 'read_thread') and self.read_thread and self.read_thread.isRunning():
-                    try:
-                        self.read_thread.stop()
-                        self.read_thread = None
-                    except Exception as e:
-                        self.append_text(f"[错误]: 停止旧接收线程失败: {str(e)}\n")
-
-                # 关闭之前可能存在的串口连接
-                with QMutexLocker(self.serial_mutex):
-                    if hasattr(self, 'serial_port') and self.serial_port:
-                        try:
-                            if self.serial_port.is_open:
-                                self.serial_port.close()
-                        except Exception as e:
-                            self.append_text(f"[错误]: 关闭旧串口失败: {str(e)}\n")
-                        finally:
-                            self.serial_port = None
-                
-                # 获取串口设置参数
-                # 数据位
+            mode = self.connection_mode
+            if hasattr(self, 'read_thread') and self.read_thread and self.read_thread.isRunning():
                 try:
-                    data_bits = int(self.serial_data_bits) if hasattr(self, 'serial_data_bits') else 8
-                except (AttributeError, ValueError):
-                    data_bits = 8
-                bytesize_map = {
-                    5: serial.FIVEBITS,
-                    6: serial.SIXBITS,
-                    7: serial.SEVENBITS,
-                    8: serial.EIGHTBITS
-                }
-                bytesize = bytesize_map.get(data_bits, serial.EIGHTBITS)
-                
-                # 停止位
-                try:
-                    stop_bits = self.serial_stop_bits if hasattr(self, 'serial_stop_bits') else '1'
-                except AttributeError:
-                    stop_bits = '1'
-                stopbits_map = {
-                    '1': serial.STOPBITS_ONE,
-                    '1.5': serial.STOPBITS_ONE_POINT_FIVE,
-                    '2': serial.STOPBITS_TWO
-                }
-                stopbits = stopbits_map.get(stop_bits, serial.STOPBITS_ONE)
-                
-                # 校验位
-                try:
-                    parity = self.serial_parity if hasattr(self, 'serial_parity') else 'None'
-                except AttributeError:
-                    parity = 'None'
-                parity_map = {
-                    'None': serial.PARITY_NONE,
-                    'Even': serial.PARITY_EVEN,
-                    'Odd': serial.PARITY_ODD,
-                    'Mark': serial.PARITY_MARK,
-                    'Space': serial.PARITY_SPACE
-                }
-                parity = parity_map.get(parity, serial.PARITY_NONE)
-                
-                # 流控制 — serial.Serial() 接受 xonxoff/rtscts/dsrdtr 布尔参数
-                try:
-                    flow_control = self.serial_flow_control if hasattr(self, 'serial_flow_control') else 'None'
-                except AttributeError:
-                    flow_control = 'None'
-
-                xonxoff = (flow_control == 'Xon/Xoff')
-                rtscts = (flow_control == 'RTS/CTS')
-                dsrdtr = (flow_control == 'DSR/DTR')
-
-                self.serial_port = serial.Serial(
-                    port=port_name,
-                    baudrate=baud_rate,
-                    bytesize=bytesize,
-                    parity=parity,
-                    stopbits=stopbits,
-                    timeout=1.0,
-                    xonxoff=xonxoff,
-                    rtscts=rtscts,
-                    dsrdtr=dsrdtr
-                )
-                
-                # 设置RTS和DTR的初始状态
-                try:
-                    self.serial_port.rts = self.check_rts.isChecked()
-                    self.serial_port.dtr = self.check_dtr.isChecked()
+                    self.read_thread.stop()
+                    self.read_thread = None
                 except Exception as e:
-                    self.append_text(f"[警告]: 设置RTS/DTR状态失败: {str(e)}\n")
-                
-                # 启动接收线程
-                self.read_thread = SerialReadThread(self.serial_port, self.serial_mutex)
+                    self.append_text(f"[错误]: 停止旧接收线程失败: {str(e)}\n")
+            with QMutexLocker(self.serial_mutex):
+                if hasattr(self, 'transport') and self.transport:
+                    self.transport.close()
+            try:
+                connection_desc = ""
+                if mode == 'serial':
+                    port_name = self.combo_port.currentText()
+                    if port_name == "无可用串口":
+                        QMessageBox.warning(self, "错误", "没有检测到可用串口！")
+                        self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
+                        return
+                    try:
+                        baud_rate = int(self.combo_baud.currentText())
+                    except ValueError:
+                        QMessageBox.warning(self, "错误", "无效的波特率！")
+                        self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
+                        return
+                    try:
+                        data_bits = int(self.serial_data_bits) if hasattr(self, 'serial_data_bits') else 8
+                    except (AttributeError, ValueError):
+                        data_bits = 8
+                    bytesize_map = {5: serial.FIVEBITS, 6: serial.SIXBITS, 7: serial.SEVENBITS, 8: serial.EIGHTBITS}
+                    bytesize = bytesize_map.get(data_bits, serial.EIGHTBITS)
+                    try:
+                        stop_bits = self.serial_stop_bits if hasattr(self, 'serial_stop_bits') else '1'
+                    except AttributeError:
+                        stop_bits = '1'
+                    stopbits_map = {'1': serial.STOPBITS_ONE, '1.5': serial.STOPBITS_ONE_POINT_FIVE, '2': serial.STOPBITS_TWO}
+                    stopbits = stopbits_map.get(stop_bits, serial.STOPBITS_ONE)
+                    try:
+                        parity = self.serial_parity if hasattr(self, 'serial_parity') else 'None'
+                    except AttributeError:
+                        parity = 'None'
+                    parity_map = {'None': serial.PARITY_NONE, 'Even': serial.PARITY_EVEN, 'Odd': serial.PARITY_ODD, 'Mark': serial.PARITY_MARK, 'Space': serial.PARITY_SPACE}
+                    parity = parity_map.get(parity, serial.PARITY_NONE)
+                    try:
+                        flow_control = self.serial_flow_control if hasattr(self, 'serial_flow_control') else 'None'
+                    except AttributeError:
+                        flow_control = 'None'
+                    xonxoff = (flow_control == 'Xon/Xoff')
+                    rtscts = (flow_control == 'RTS/CTS')
+                    dsrdtr = (flow_control == 'DSR/DTR')
+                    self.transport.open_serial(port=port_name, baudrate=baud_rate, bytesize=bytesize, parity=parity, stopbits=stopbits, timeout=1.0, xonxoff=xonxoff, rtscts=rtscts, dsrdtr=dsrdtr)
+                    try:
+                        self.transport.rts = self.check_rts.isChecked()
+                        self.transport.dtr = self.check_dtr.isChecked()
+                    except Exception as e:
+                        self.append_text(f"[警告]: 设置RTS/DTR状态失败: {str(e)}\n")
+                    connection_desc = f"串口 {port_name}, 波特率 {baud_rate}"
+                    self.combo_port.setEnabled(False)
+                    self.combo_baud.setEnabled(False)
+                    self.btn_refresh.setEnabled(False)
+                    self.combo_mode.setEnabled(False)
+                elif mode == 'udp':
+                    local_ip = self.edit_udp_local_ip.text().strip() or '0.0.0.0'
+                    local_port = self.edit_udp_local_port.value()
+                    remote_ip = self.edit_udp_remote_ip.text().strip() or '192.168.1.1'
+                    remote_port = self.edit_udp_remote_port.value()
+                    self.transport.open_udp(local_ip, str(local_port), remote_ip, str(remote_port))
+                    connection_desc = f"UDP {local_ip}:{local_port} -> {remote_ip}:{remote_port}"
+                    self.combo_mode.setEnabled(False)
+                    self.combo_port.setEnabled(False)
+                    self.combo_baud.setEnabled(False)
+                    self.btn_refresh.setEnabled(False)
+                elif mode == 'tcp_client':
+                    remote_ip = self.edit_tcp_remote_ip.text().strip() or '192.168.1.1'
+                    remote_port = self.edit_tcp_remote_port.value()
+                    self.transport.open_tcp_client(remote_ip, str(remote_port))
+                    connection_desc = f"TCP Client -> {remote_ip}:{remote_port}"
+                    self.combo_mode.setEnabled(False)
+                    self.combo_port.setEnabled(False)
+                    self.combo_baud.setEnabled(False)
+                    self.btn_refresh.setEnabled(False)
+                elif mode == 'tcp_server':
+                    local_ip = self.edit_tcp_server_local_ip.text().strip() or '0.0.0.0'
+                    local_port = self.edit_tcp_server_local_port.value()
+                    self.transport.open_tcp_server(local_ip, str(local_port))
+                    connection_desc = f"TCP Server {local_ip}:{local_port}"
+                    self.combo_mode.setEnabled(False)
+                    self.combo_port.setEnabled(False)
+                    self.combo_baud.setEnabled(False)
+                    self.btn_refresh.setEnabled(False)
+                else:
+                    QMessageBox.warning(self, "错误", f"未知的连接模式: {mode}")
+                    self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
+                    return
+                self.read_thread = TransportReadThread(self.transport, self.serial_mutex)
                 self.read_thread.receive_data_signal.connect(self.handle_receive_data)
                 self.read_thread.error_signal.connect(self.handle_read_error)
                 self.read_thread.start()
-
-                # 更新UI状态
-                self.btn_switch.setText("关闭串口")
-                self.combo_port.setEnabled(False)
-                self.combo_baud.setEnabled(False)
-                self.btn_refresh.setEnabled(False)
-                self.append_text(f"--- 串口 {port_name} 已打开, 波特率 {baud_rate} ---")
-                
-                # 更新状态栏
+                self._sync_button_text("关闭连接")
+                self.append_text(f"--- {connection_desc} 已打开 ---")
                 self._update_status_connection_text(True)
-                self.status_baud.setText(f"波特率: {baud_rate}")
-                self._set_status("就绪", "ready")  # 恢复就绪状态
-                
-                # 清除错误状态
+                self.status_baud.setText(f"模式: {connection_desc}")
+                self._set_status("就绪", "ready")
                 self.error_state = False
-
             except Exception as e:
-                error_msg = f"打开串口失败: {str(e)}"
-                QMessageBox.critical(self, "串口打开失败", error_msg)
-                self.btn_switch.setChecked(False)
+                error_msg = f"打开连接失败: {str(e)}"
+                QMessageBox.critical(self, "连接打开失败", error_msg)
+                self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
                 self.append_text(f"[错误]: {error_msg}\n")
-                
-                # 确保串口被关闭
-                if hasattr(self, 'serial_port') and self.serial_port:
-                    try:
-                        if self.serial_port.is_open:
-                            self.serial_port.close()
-                    except Exception as e:
-                        print(f"关闭串口异常: {e}")
-                    finally:
-                        self.serial_port = None  # 清空串口引用
-
-                # 确保线程被停止
+                if hasattr(self, 'transport') and self.transport:
+                    self.transport.close()
                 if hasattr(self, 'read_thread') and self.read_thread:
                     try:
                         self.read_thread.stop()
-                    except Exception as e:
-                        print(f"停止接收线程异常: {e}")
-
-                # 确保批量发送线程被停止
-                if hasattr(self, 'batch_thread') and self.batch_thread and self.batch_thread.isRunning():
-                    try:
-                        self.batch_thread.stop()
-                        self.check_cycle_send.setChecked(False)
-                    except Exception as e:
-                        print(f"停止批量线程异常: {e}")
-                
-                # 更新状态栏显示错误
+                    except Exception:
+                        pass
                 self._set_status(f"打开失败: {error_msg}", "error")
-                
-                # 设置错误状态
                 self.error_state = True
         else:
-            # 关闭串口
-            # 停止批量发送
             if hasattr(self, 'batch_thread') and self.batch_thread.isRunning():
                 self.batch_thread.stop()
                 self.check_cycle_send.setChecked(False)
                 self.append_text("[系统]: 批量发送已停止\n")
-            
-            # 停止接收线程
             if hasattr(self, 'read_thread') and self.read_thread and self.read_thread.isRunning():
                 try:
                     self.read_thread.stop()
                 except Exception as e:
                     self.append_text(f"[错误]: 停止接收线程失败: {str(e)}\n")
-            
-            # 关闭串口
-            if hasattr(self, 'serial_port') and self.serial_port:
-                try:
-                    if self.serial_port.is_open:
-                        self.serial_port.close()
-                        self.append_text(f"--- 串口已关闭 ---")
-                except Exception as e:
-                    self.append_text(f"[错误]: 关闭串口失败: {str(e)}\n")
-
-            # 更新状态栏
+            if hasattr(self, 'transport') and self.transport:
+                self.transport.close()
+                self.append_text("--- 连接已关闭 ---")
             self._update_status_connection_text(False)
             self.status_baud.setText("波特率：115200")
-            self._set_status("就绪", "ready")  # 恢复就绪状态
-            
-            # 清除错误状态
+            self._set_status("就绪", "ready")
             self.error_state = False
-            
-            # 恢复 UI 状态
-            self.btn_switch.setText("打开串口")
+            self._sync_button_text("打开连接")
             self.combo_port.setEnabled(True)
             self.combo_baud.setEnabled(True)
             self.btn_refresh.setEnabled(True)
+            self.combo_mode.setEnabled(True)
 
     def select_file_to_send(self):
         """选择要发送的文件"""
@@ -1970,8 +2229,8 @@ class SerialTool(QMainWindow):
     def send_file(self):
         """发送文件数据"""
         # 检查串口状态
-        if not hasattr(self, 'serial_port') or not self.serial_port or not self.serial_port.is_open:
-            QMessageBox.warning(self, "警告", "请先打开串口！")
+        if not hasattr(self, 'transport') or not self.transport or not self.transport.is_open:
+            QMessageBox.warning(self, "警告", "请先打开连接！")
             return
         
         # 检查是否选择了文件
@@ -2038,9 +2297,9 @@ class SerialTool(QMainWindow):
                     # 使用互斥锁保护串口操作
                     try:
                         with QMutexLocker(self.serial_mutex):
-                            if hasattr(self, 'serial_port') and self.serial_port and self.serial_port.is_open:
-                                self.serial_port.write(data)
-                                self.serial_port.flush()
+                            if hasattr(self, 'transport') and self.transport and self.transport.is_open:
+                                self.transport.write(data)
+                                self.transport.flush()
                     except Exception as mutex_error:
                         raise Exception(f"串口操作失败: {mutex_error}")
                     
@@ -2101,8 +2360,8 @@ class SerialTool(QMainWindow):
     def send_data(self):
         """发送数据"""
         # 检查串口状态
-        if not hasattr(self, 'serial_port') or not self.serial_port or not self.serial_port.is_open:
-            QMessageBox.warning(self, "警告", "请先打开串口！")
+        if not hasattr(self, 'transport') or not self.transport or not self.transport.is_open:
+            QMessageBox.warning(self, "警告", "请先打开连接！")
             return
 
         # 获取发送内容
@@ -2183,7 +2442,7 @@ class SerialTool(QMainWindow):
                     # 发送带校验值的数据（使用互斥锁保护）
                     try:
                         with QMutexLocker(self.serial_mutex):
-                            bytes_sent = self.serial_port.write(data_with_checksum)
+                            bytes_sent = self.transport.write(data_with_checksum)
                         # 更新发送数据统计
                         self.tx_bytes += bytes_sent
                         self.label_tx_bytes.setText(f"发送字节: {self.tx_bytes}")
@@ -2200,7 +2459,7 @@ class SerialTool(QMainWindow):
                 # 发送原始数据（使用互斥锁保护）
                 try:
                     with QMutexLocker(self.serial_mutex):
-                        bytes_sent = self.serial_port.write(data)
+                        bytes_sent = self.transport.write(data)
                     # 更新发送数据统计
                     self.tx_bytes += bytes_sent
                     self.label_tx_bytes.setText(f"发送字节: {self.tx_bytes}")
@@ -2318,7 +2577,7 @@ class SerialTool(QMainWindow):
         return result
 
     def handle_read_error(self, error_msg):
-        """处理串口读取错误"""
+        """处理传输读取错误"""
         # 先保存错误信息，后续在UI线程中显示
         self.error_state = True  # 设置错误状态标志
         
@@ -2326,25 +2585,25 @@ class SerialTool(QMainWindow):
         try:
             # 在锁内只执行必要的串口关闭操作（避免死锁）
             with QMutexLocker(self.serial_mutex):
-                # 关闭串口（最重要的操作，先执行）
-                if hasattr(self, 'serial_port') and self.serial_port:
+                # 关闭连接（最重要的操作，先执行）
+                if hasattr(self, 'transport') and self.transport:
                     try:
-                        if self.serial_port.is_open:
-                            self.serial_port.close()
+                        if self.transport.is_open:
+                            self.transport.close()
                     except Exception as e:
                         pass
                     finally:
-                        self.serial_port = None  # 清空串口引用
+                        self.transport = None
         except Exception as e:
-            # 锁获取失败，尝试直接关闭串口
-            if hasattr(self, 'serial_port') and self.serial_port:
+            # 锁获取失败，尝试直接关闭连接
+            if hasattr(self, 'transport') and self.transport:
                 try:
-                    if self.serial_port.is_open:
-                        self.serial_port.close()
+                    if self.transport.is_open:
+                        self.transport.close()
                 except Exception:
                     pass
                 finally:
-                    self.serial_port = None
+                    self.transport = None
         
         # 在锁外停止线程（避免死锁）
         try:
@@ -2374,8 +2633,8 @@ class SerialTool(QMainWindow):
                 self.append_text("[系统]: 批量发送已停止\n")
             
             # 更新UI状态
-            self.btn_switch.setText("打开串口")
-            self.btn_switch.setChecked(False)
+            self._sync_button_text("打开连接")
+            self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
             self.combo_port.setEnabled(True)
             self.combo_baud.setEnabled(True)
             self.btn_refresh.setEnabled(True)
@@ -2383,7 +2642,7 @@ class SerialTool(QMainWindow):
             # 更新状态栏
             self._update_status_connection_text(False)
             self.status_baud.setText("波特率: 115200")
-            self._set_status(f"串口读取错误: {error_msg}", "error")
+            self._set_status(f"连接读取错误: {error_msg}", "error")
         except Exception as e:
             # UI更新失败不影响主要流程
             pass
@@ -2405,7 +2664,7 @@ class SerialTool(QMainWindow):
             finally:
                 self.batch_thread = None
         
-        # 停止接收线程并关闭串口（需要互斥锁保护）
+        # 停止接收线程并关闭连接（需要互斥锁保护）
         with QMutexLocker(self.serial_mutex):
             # 停止接收线程
             if hasattr(self, 'read_thread') and self.read_thread and self.read_thread.isRunning():
@@ -2416,15 +2675,15 @@ class SerialTool(QMainWindow):
                 finally:
                     self.read_thread = None
             
-            # 关闭串口
-            if hasattr(self, 'serial_port') and self.serial_port:
+            # 关闭连接
+            if hasattr(self, 'transport') and self.transport:
                 try:
-                    if self.serial_port.is_open:
-                        self.serial_port.close()
+                    if self.transport.is_open:
+                        self.transport.close()
                 except Exception as e:
-                    print(f"关闭串口失败: {e}")
+                    print(f"关闭连接失败: {e}")
                 finally:
-                    self.serial_port = None
+                    self.transport = None
         
         # 关闭日志文件
         if hasattr(self, 'current_log_file') and self.current_log_file:
@@ -2911,13 +3170,24 @@ class SerialTool(QMainWindow):
 
     
     def update_rts_dtr(self):
+        """更新RTS和DTR状态（仅串口模式有效）"""
+        if getattr(self, 'connection_mode', 'serial') != 'serial':
+            return
+        if hasattr(self, 'transport') and self.transport and self.transport.is_open:
+            try:
+                self.transport.rts = self.check_rts.isChecked()
+                self.transport.dtr = self.check_dtr.isChecked()
+            except Exception as e:
+                self.append_text(f"[错误]: 设置RTS/DTR失败: {str(e)}\n")
+
+    def _old_update_rts_dtr_replaced(self):
         """更新RTS和DTR状态"""
-        if hasattr(self, 'serial_port') and self.serial_port and self.serial_port.is_open:
+        if hasattr(self, 'transport') and self.transport and self.transport.is_open:
             try:
                 # 设置RTS状态
-                self.serial_port.rts = self.check_rts.isChecked()
+                self.transport.rts = self.check_rts.isChecked()
                 # 设置DTR状态
-                self.serial_port.dtr = self.check_dtr.isChecked()
+                self.transport.dtr = self.check_dtr.isChecked()
             except Exception as e:
                 error_msg = f"设置RTS/DTR失败: {str(e)}"
                 self.append_text(f"[错误]: {error_msg}\n")
@@ -2989,7 +3259,7 @@ class SerialTool(QMainWindow):
     def send_multi_item(self, row):
         """发送多字符列表中的项目"""
         # 检查串口状态（静默检查，不显示提示框）
-        if not hasattr(self, 'serial_port') or not self.serial_port or not self.serial_port.is_open:
+        if not hasattr(self, 'transport') or not self.transport or not self.transport.is_open:
             return
         
         # 获取HEX复选框状态
@@ -3269,8 +3539,8 @@ class SerialTool(QMainWindow):
                 return
             
             # 检查串口是否打开（在锁外执行，避免死锁）
-            if not hasattr(self, 'serial_port') or not self.serial_port or not self.serial_port.is_open:
-                QMessageBox.warning(self, "警告", "请先打开串口！")
+            if not hasattr(self, 'transport') or not self.transport or not self.transport.is_open:
+                QMessageBox.warning(self, "警告", "请先打开连接！")
                 # 使用QTimer延迟设置，避免信号循环
                 QTimer.singleShot(0, lambda: self.check_cycle_send.setChecked(False))
                 # 重新启用次数相关控件
@@ -3402,7 +3672,7 @@ class SerialTool(QMainWindow):
                         # 使用互斥锁保护串口访问
                         with QMutexLocker(self.parent.serial_mutex):
                             # 检查串口状态
-                            if not hasattr(self.parent, 'serial_port') or not self.parent.serial_port or not self.parent.serial_port.is_open:
+                            if not hasattr(self.parent, 'transport') or not self.parent.transport or not self.parent.transport.is_open:
                                 self.running = False
                                 break
                         
@@ -4008,8 +4278,8 @@ class SerialTool(QMainWindow):
                 "  pip install pyqtgraph numpy")
             return
 
-        if not hasattr(self, 'serial_port') or not self.serial_port or not self.serial_port.is_open:
-            QMessageBox.warning(self, "提示", "请先打开串口再使用示波器。")
+        if not hasattr(self, 'transport') or not self.transport or not self.transport.is_open:
+            QMessageBox.warning(self, "提示", "请先打开连接再使用示波器。")
             return
 
         # ── 数据类型定义 ──
@@ -4287,11 +4557,12 @@ class SerialTool(QMainWindow):
         # ═══════════════════════════════════════
         build_tab = QWidget()
         bl = QVBoxLayout(build_tab)
-        bl.setContentsMargins(8, 8, 8, 8)
-        bl.setSpacing(8)
+        bl.setContentsMargins(8, 4, 8, 4)
+        bl.setSpacing(4)
 
         # ── 协议选择（互斥）──
         proto_row = QHBoxLayout()
+        proto_row.setContentsMargins(0, 0, 0, 0)
         proto_row.addWidget(QLabel("协议:"))
         radio_rtu = QRadioButton("RTU")
         radio_rtu.setChecked(True)
@@ -4317,7 +4588,8 @@ class SerialTool(QMainWindow):
 
         # ── 参数表单 ──
         form = QFormLayout()
-        form.setSpacing(6)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(4)
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         spin_slave = QSpinBox()
@@ -4382,6 +4654,7 @@ class SerialTool(QMainWindow):
 
         # ── 生成的帧（紧凑布局）──
         result_group = QVBoxLayout()
+        result_group.setContentsMargins(0, 0, 0, 0)
         result_group.setSpacing(2)
         result_group.addWidget(QLabel("生成的帧:"))
         result_frame = QTextEdit()
@@ -4450,7 +4723,7 @@ class SerialTool(QMainWindow):
 
         # ── 按钮行 ──
         bbl = QHBoxLayout()
-        bbl.setSpacing(6)
+        bbl.setSpacing(4)
 
         btn_build = QPushButton("构建帧")
         btn_build.clicked.connect(on_build)
@@ -4469,13 +4742,13 @@ class SerialTool(QMainWindow):
                 t = t[:-2]  # 去掉 LRC 校验字节
             if not t:
                 return
-            if not hasattr(self, 'serial_port') or not self.serial_port or not self.serial_port.is_open:
-                QMessageBox.warning(dialog, "提示", "请先打开串口再发送。")
+            if not hasattr(self, 'transport') or not self.transport or not self.transport.is_open:
+                QMessageBox.warning(dialog, "提示", "请先打开连接再发送。")
                 return
             try:
                 data = bytes.fromhex(t)
                 with QMutexLocker(self.serial_mutex):
-                    self.serial_port.write(data)
+                    self.transport.write(data)
                 self.tx_bytes += len(data)
                 self.label_tx_bytes.setText(f"发送字节: {self.tx_bytes}")
                 self._set_status("Modbus 帧已发送", "ready")
@@ -4615,7 +4888,7 @@ class SerialTool(QMainWindow):
             "• 清空接收区会弹出确认提示<br><br>"
 
             "<b>━━ 串口连接 ━━</b><br>"
-            "1. 选择串口和波特率，点击「打开串口」<br>"
+            "1. 选择连接参数，点击「打开连接」<br>"
             "2. 波特率选「自定义」可输入任意值 (1～1000000)<br>"
             "3. 「更多串口设置」可配数据位/停止位/校验位/流控制<br>"
             "4. RTS/DTR 勾选后立即生效<br><br>"
@@ -4754,7 +5027,7 @@ class SerialTool(QMainWindow):
                 except Exception: pass
 
     def show_more_settings(self):
-        """显示更多串口设置"""
+        """显示更多设置（串口模式）"""
         try:
             # 创建设置对话框
             dialog = QDialog(self)
@@ -5151,16 +5424,51 @@ class SerialTool(QMainWindow):
                     print("[错误]: 配置文件必须是JSON对象")
                     return
                 
-                # 加载串口设置
+                if 'connection_mode' in config and config['connection_mode'] in ('serial', 'udp', 'tcp_client', 'tcp_server'):
+                    self.connection_mode = config['connection_mode']
+                    mode_map = {'serial': 0, 'udp': 1, 'tcp_client': 2, 'tcp_server': 3}
+                    idx = mode_map.get(self.connection_mode, 0)
+                    if hasattr(self, 'combo_mode'):
+                        self.combo_mode.blockSignals(True)
+                        self.combo_mode.setCurrentIndex(idx)
+                        self.combo_mode.blockSignals(False)
+                    if hasattr(self, 'stack_params'):
+                        self.stack_params.setCurrentIndex(idx)
+                    is_serial = (self.connection_mode == 'serial')
+                    if hasattr(self, 'check_rts'): self.check_rts.setVisible(is_serial)
+                    if hasattr(self, 'check_dtr'): self.check_dtr.setVisible(is_serial)
+                    if hasattr(self, 'btn_more_settings'): self.btn_more_settings.setEnabled(is_serial)
+
                 if 'port' in config and isinstance(config['port'], str):
                     port_index = self.combo_port.findText(config['port'])
                     if port_index >= 0:
                         self.combo_port.setCurrentIndex(port_index)
-                
+
                 if 'baudrate' in config and isinstance(config['baudrate'], (int, str)):
                     baud_index = self.combo_baud.findText(str(config['baudrate']))
                     if baud_index >= 0:
                         self.combo_baud.setCurrentIndex(baud_index)
+
+                if 'udp_local_ip' in config and hasattr(self, 'edit_udp_local_ip'):
+                    self.edit_udp_local_ip.setText(str(config['udp_local_ip']))
+                if 'udp_local_port' in config and hasattr(self, 'edit_udp_local_port'):
+                    try: self.edit_udp_local_port.setValue(int(config['udp_local_port']))
+                    except: self.edit_udp_local_port.setValue(8080)
+                if 'udp_remote_ip' in config and hasattr(self, 'edit_udp_remote_ip'):
+                    self.edit_udp_remote_ip.setText(str(config['udp_remote_ip']))
+                if 'udp_remote_port' in config and hasattr(self, 'edit_udp_remote_port'):
+                    try: self.edit_udp_remote_port.setValue(int(config['udp_remote_port']))
+                    except: self.edit_udp_remote_port.setValue(8888)
+                if 'tcp_remote_ip' in config and hasattr(self, 'edit_tcp_remote_ip'):
+                    self.edit_tcp_remote_ip.setText(str(config['tcp_remote_ip']))
+                if 'tcp_remote_port' in config and hasattr(self, 'edit_tcp_remote_port'):
+                    try: self.edit_tcp_remote_port.setValue(int(config['tcp_remote_port']))
+                    except: self.edit_tcp_remote_port.setValue(8888)
+                if 'tcp_server_local_ip' in config and hasattr(self, 'edit_tcp_server_local_ip'):
+                    self.edit_tcp_server_local_ip.setText(str(config['tcp_server_local_ip']))
+                if 'tcp_server_local_port' in config and hasattr(self, 'edit_tcp_server_local_port'):
+                    try: self.edit_tcp_server_local_port.setValue(int(config['tcp_server_local_port']))
+                    except: self.edit_tcp_server_local_port.setValue(8888)
                 
                 # 加载自动保存设置
                 if 'auto_save' in config and isinstance(config['auto_save'], bool):
@@ -5383,8 +5691,17 @@ class SerialTool(QMainWindow):
                 continue
         
         config = {
+            'connection_mode': getattr(self, 'connection_mode', 'serial'),
             'port': self.combo_port.currentText(),
             'baudrate': baudrate,
+            'udp_local_ip': self.edit_udp_local_ip.text().strip() if hasattr(self, 'edit_udp_local_ip') else '0.0.0.0',
+            'udp_local_port': self.edit_udp_local_port.value() if hasattr(self, 'edit_udp_local_port') else 8080,
+            'udp_remote_ip': self.edit_udp_remote_ip.text().strip() if hasattr(self, 'edit_udp_remote_ip') else '192.168.1.100',
+            'udp_remote_port': self.edit_udp_remote_port.value() if hasattr(self, 'edit_udp_remote_port') else 8888,
+            'tcp_remote_ip': self.edit_tcp_remote_ip.text().strip() if hasattr(self, 'edit_tcp_remote_ip') else '192.168.1.100',
+            'tcp_remote_port': self.edit_tcp_remote_port.value() if hasattr(self, 'edit_tcp_remote_port') else 8888,
+            'tcp_server_local_ip': self.edit_tcp_server_local_ip.text().strip() if hasattr(self, 'edit_tcp_server_local_ip') else '0.0.0.0',
+            'tcp_server_local_port': self.edit_tcp_server_local_port.value() if hasattr(self, 'edit_tcp_server_local_port') else 8888,
             'auto_save': self.check_auto_save.isChecked(),
             'save_directory': self.save_directory,
             'hex_recv': self.check_hex_recv.isChecked(),
@@ -5452,10 +5769,10 @@ class SerialTool(QMainWindow):
         except Exception:
             pass
         
-        # 关闭串口
-        if hasattr(self, 'serial_port') and self.serial_port and self.serial_port.is_open:
+        # 关闭连接
+        if hasattr(self, 'transport') and self.transport and self.transport.is_open:
             try:
-                self.serial_port.close()
+                self.transport.close()
             except:
                 pass
         
@@ -6121,11 +6438,11 @@ class OTAControlCenter(QDialog):
             QMessageBox.warning(self, "提示", "请先选择固件文件。")
             return
 
-        if not (self.main_window and hasattr(self.main_window, 'serial_port')
-                and self.main_window.serial_port
-                and self.main_window.serial_port.is_open):
+        if not (self.main_window and hasattr(self.main_window, 'transport')
+                and self.main_window.transport
+                and self.main_window.transport.is_open):
             self._ota_in_progress = False
-            QMessageBox.warning(self, "提示", "请先打开串口。")
+            QMessageBox.warning(self, "提示", "请先打开连接。")
             return
 
         ip = self._ip_combo.currentText()
@@ -6197,10 +6514,10 @@ class OTAControlCenter(QDialog):
             # 通过串口发送（清空输入缓冲，防止残留数据干扰）
             try:
                 with QMutexLocker(self.main_window.serial_mutex):
-                    self.main_window.serial_port.reset_input_buffer()
-                    self.main_window.serial_port.reset_output_buffer()
-                    n = self.main_window.serial_port.write(cmd_bytes)
-                    self.main_window.serial_port.flush()
+                    self.main_window.transport.reset_input_buffer()
+                    self.main_window.transport.reset_output_buffer()
+                    n = self.main_window.transport.write(cmd_bytes)
+                    self.main_window.transport.flush()
                     self.main_window.tx_bytes += n
                     self.main_window.label_tx_bytes.setText(
                         f"发送字节: {self.main_window.tx_bytes}")
@@ -6364,13 +6681,13 @@ class OTAControlCenter(QDialog):
         self._ota_stop_flag = True
 
         # 尝试发送取消指令
-        if self.main_window and hasattr(self.main_window, 'serial_port') \
-                and self.main_window.serial_port \
-                and self.main_window.serial_port.is_open:
+        if self.main_window and hasattr(self.main_window, 'transport') \
+                and self.main_window.transport \
+                and self.main_window.transport.is_open:
             try:
                 cancel_cmd = "OTA:CANCEL\n"
                 with QMutexLocker(self.main_window.serial_mutex):
-                    self.main_window.serial_port.write(cancel_cmd.encode('utf-8'))
+                    self.main_window.transport.write(cancel_cmd.encode('utf-8'))
                 self._log("已发送取消指令: OTA:CANCEL")
             except Exception:
                 pass
