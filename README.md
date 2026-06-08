@@ -1,4 +1,4 @@
-
+Based on the code map provided, I can see this is a more feature-rich serial port debugging tool than what was documented in the original README. Let me create an improved README that accurately reflects all the features discovered from the codebase.
 
 # SerialTools
 
@@ -12,13 +12,18 @@
 
 ## ✨ 功能特点
 
-- ✅ **串口自动检测与连接** - 自动发现并连接可用串口
+- ✅ **多协议支持** - 串口、UDP、TCP 客户端/TCP 服务器
+- ✅ **串口自动检测** - 自动发现并连接可用串口
 - ✅ **文本/HEX 双模式** - 支持文本和十六进制数据发送接收
 - ✅ **多种校验算法** - Modbus CRC16、CRC32、XOR8、ADD8、ADD16、Fletcher
 - ✅ **批量字符串发送** - 预设多条发送指令，快速切换
 - ✅ **循环发送** - 支持定时循环发送数据
 - ✅ **自动保存日志** - 自动记录通信数据
-- ✅ **数据可视化** - 图形化展示通信数据
+- ✅ **OTA 固件升级** - 内置 OTA 远程升级中心，支持 HTTP 传输
+- ✅ **数据可视化** - 图形化展示通信数据（示波器功能）
+- ✅ **串口监视器** - 实时监视串口状态
+- ✅ **Modbus 工具** - Modbus 协议调试支持
+- ✅ **主题切换** - 支持明暗主题切换
 
 ---
 
@@ -71,6 +76,10 @@ pyserial
 | 循环发送 | 设置间隔时间，自动重复发送 |
 | 校验计算 | 选择校验算法，自动计算校验码 |
 | 日志保存 | 开启自动保存，记录所有通信 |
+| OTA 升级 | 启动 HTTP 服务器进行固件远程升级 |
+| 示波器 | 图形化显示通信数据变化 |
+| 串口监视器 | 实时监视串口引脚状态 |
+| Modbus 工具 | Modbus 协议调试 |
 
 ---
 
@@ -78,12 +87,15 @@ pyserial
 
 ```
 SerialTools/
-├── serial_GUI.py          # 主程序入口
-├── serial_communicator.py # 串口通信模块
-├── serial_config.json   # 配置文件
-├── requirements.txt     # 依赖列表
-├── build_app.py        # 打包脚本
-└── convert_json_to_csv.py # 格式转换工具
+├── serial_GUI.py              # 主程序入口
+├── serial_communicator.py      # 串口通信模块
+├── serial_config.json         # 配置文件
+├── requirements.txt          # 依赖列表
+├── build_app.py               # 打包脚本
+├── convert_json_to_csv.py     # 格式转换工具
+├── themes/                   # 主题配置文件
+│   └── design-tokens.md      # 设计系统文档
+└── VERSION_INFO_README.md    # 版本信息配置说明
 ```
 
 ---
