@@ -23,8 +23,10 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint
 from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon
 
-# --- 全局常量 --- 
-VERSION = "1.2.3"
+from json_viewer import JsonViewerDialog
+
+# --- 全局常量 ---
+VERSION = "1.2.4"
 
 # --- 主题颜色常量 ---
 THEME_COLORS = {
@@ -914,6 +916,9 @@ class SerialTool(QMainWindow):
         act_modbus = QAction("Modbus 工具", self)
         act_modbus.triggered.connect(self.modbus_tool)
         tool_menu.addAction(act_modbus)
+        act_json = QAction("JSON 数据分析面板(&J)", self)
+        act_json.triggered.connect(self.json_viewer)
+        tool_menu.addAction(act_json)
         tool_menu.addSeparator()
         act_ota = QAction("OTA 升级控制中心(&O)", self)
         act_ota.triggered.connect(self.open_ota_center)
@@ -1968,6 +1973,14 @@ class SerialTool(QMainWindow):
                     self._apply_dialog_theme(self._ota_dialog)
             except RuntimeError:
                 pass
+        # 同步 JSON 数据分析面板主题
+        if hasattr(self, '_json_viewer_dlg') and self._json_viewer_dlg is not None:
+            try:
+                if self._json_viewer_dlg.isVisible():
+                    self._json_viewer_dlg.set_theme(is_dark=(new_theme == 'dark'))
+                    self._apply_dialog_theme(self._json_viewer_dlg)
+            except RuntimeError:
+                pass
         theme_display = "暗黑模式" if new_theme == 'dark' else "亮色模式"
         self.append_text(f"[系统]: 已切换至{theme_display}\n")
     def handle_baud_change(self, index):
@@ -2193,6 +2206,12 @@ class SerialTool(QMainWindow):
                 self.read_thread = TransportReadThread(self.transport, self.serial_mutex)
                 self.read_thread.receive_data_signal.connect(self.handle_receive_data)
                 self.read_thread.error_signal.connect(self.handle_read_error)
+                # 如果 JSON 面板已打开，重新连接到新的 read_thread
+                if hasattr(self, '_json_viewer_dlg') and self._json_viewer_dlg is not None:
+                    try:
+                        self.read_thread.receive_data_signal.connect(self._json_viewer_dlg.feed_raw_data)
+                    except (TypeError, RuntimeError):
+                        pass
                 self.read_thread.start()
                 self._sync_button_text("关闭连接")
                 self.append_text(f"--- {connection_desc} 已打开 ---")
@@ -4949,6 +4968,45 @@ class SerialTool(QMainWindow):
         self._apply_dialog_theme(dialog)
         dialog.setAttribute(Qt.WA_DeleteOnClose)
         dialog.show()
+
+    def json_viewer(self):
+        """JSON 数据分析面板：监听串口/网络流，实时捕获和可视化 JSON 数据"""
+        if hasattr(self, '_json_viewer_dlg') and self._json_viewer_dlg is not None:
+            try:
+                self._json_viewer_dlg.set_theme(is_dark=(self.current_theme == 'dark'))
+                self._json_viewer_dlg.show()
+                self._json_viewer_dlg.raise_()
+                self._json_viewer_dlg.activateWindow()
+                return
+            except RuntimeError:
+                self._json_viewer_dlg = None
+
+        arrow_paths = {
+            'dark': getattr(self, '_arrow_dark_path', ''),
+            'light': getattr(self, '_arrow_light_path', ''),
+        }
+        dlg = JsonViewerDialog(None, theme_callback=self._apply_dialog_theme, arrow_paths=arrow_paths)
+        self._json_viewer_dlg = dlg
+
+        # 连接串口数据信号
+        if hasattr(self, 'read_thread') and self.read_thread:
+            self.read_thread.receive_data_signal.connect(dlg.feed_raw_data)
+
+        # 对话框关闭时的清理
+        def on_finished():
+            if hasattr(self, 'read_thread') and self.read_thread:
+                try:
+                    self.read_thread.receive_data_signal.disconnect(dlg.feed_raw_data)
+                except (TypeError, RuntimeError):
+                    pass
+            if self._json_viewer_dlg is dlg:
+                self._json_viewer_dlg = None
+
+        dlg.finished.connect(on_finished)
+        dlg.set_theme(is_dark=(self.current_theme == 'dark'))
+        self._apply_dialog_theme(dlg)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.show()
 
     def show_usage(self):
         """显示使用说明"""
