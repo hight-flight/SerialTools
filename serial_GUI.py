@@ -33,6 +33,7 @@ THEME_COLORS = {
         'text_send':      QColor(0, 0, 255),
         'text_system':    QColor(128, 128, 128),
         'text_error':     QColor(255, 0, 0),
+        'highlight_bg':   QColor(255, 235, 60, 140),  # 明亮模式高亮背景（半透明黄）
         'ansi_default_fg': QColor(0, 0, 0),
         # ANSI 前景色映射（亮色模式使用原色）
         'ansi_fg': {
@@ -58,6 +59,7 @@ THEME_COLORS = {
         'text_send':      QColor(0x61, 0xAF, 0xEF),
         'text_system':    QColor(0x5C, 0x63, 0x70),
         'text_error':     QColor(0xE0, 0x6C, 0x75),
+        'highlight_bg':   QColor(200, 160, 0, 100),   # 暗黑模式高亮背景（半透明暖金）
         'ansi_default_fg': QColor(0xAB, 0xB2, 0xBF),
         # ANSI 前景色映射（暗底提亮）
         'ansi_fg': {
@@ -1160,7 +1162,7 @@ class SerialTool(QMainWindow):
         display_save_layout.addWidget(self.edit_filter)
 
         self.combo_filter_mode = QComboBox()
-        self.combo_filter_mode.addItems(["包含", "忽略大小写", "正则"])
+        self.combo_filter_mode.addItems(["包含", "忽略大小写", "正则", "高亮显示"])
         self.combo_filter_mode.setFont(QFont("Microsoft YaHei", 9))
         self.combo_filter_mode.setMaximumWidth(90)
         self.combo_filter_mode.setEnabled(False)
@@ -1707,6 +1709,8 @@ class SerialTool(QMainWindow):
         self.filter_enabled = self.check_filter.isChecked()
         self.edit_filter.setEnabled(self.filter_enabled)
         self.combo_filter_mode.setEnabled(self.filter_enabled)
+        # 切换「高亮显示」时不需要刷新已有内容（高亮只在新增文本时生效）
+        # 关闭筛选时需要清除已有的高亮（简单处理：清不掉的旧高亮不处理）
 
     def update_filter_text(self, text):
         """更新筛选关键字"""
@@ -1722,7 +1726,10 @@ class SerialTool(QMainWindow):
         - "包含": 大小写敏感子串匹配
         - "忽略大小写": 大小写不敏感子串匹配
         - "正则": 正则表达式匹配
+        - "高亮显示": 不做筛选，始终显示（高亮在 append_text 中处理）
         """
+        if self.filter_mode == "高亮显示":
+            return True
         import re
         keywords = [kw.strip() for kw in self.filter_text.split(',') if kw.strip()]
         if not keywords:
@@ -2917,7 +2924,7 @@ class SerialTool(QMainWindow):
         # 开始一个编辑块，提高性能
         cursor = self.text_recv.textCursor()
         cursor.beginEditBlock()
-        
+
         # 检查行数限制，超过时删除前面的内容
         block_count = self.text_recv.document().blockCount()
         if block_count >= self.MAX_DISPLAY_LINES:
@@ -2928,22 +2935,46 @@ class SerialTool(QMainWindow):
                 cursor.movePosition(QTextCursor.NextBlock, QTextCursor.KeepAnchor)
                 if not cursor.atEnd():
                     cursor.removeSelectedText()
-        
+
         # 移动到文本末尾
         cursor.movePosition(QTextCursor.End)
-        
+
+        # 记录插入起始位置（用于后续高亮）
+        hl_start = cursor.position()
+
         # 添加带格式的文本段
         for text, format in formatted_segments:
             cursor.movePosition(QTextCursor.End)
             cursor.setCharFormat(format)
             cursor.insertText(text)
-        
+
         # 结束编辑块
         cursor.endEditBlock()
-        
+
+        # 高亮显示模式：对刚插入的文本叠加背景色（不区分大小写）
+        if self.filter_enabled and self.filter_mode == "高亮显示":
+            full_text = ''.join(text for text, fmt in formatted_segments)
+            if full_text:
+                keywords = [kw.strip() for kw in self.filter_text.split(',') if kw.strip()]
+                if keywords:
+                    tc = self.theme_colors
+                    hl_fmt = QTextCharFormat()
+                    hl_fmt.setBackground(tc['highlight_bg'])
+                    for kw in keywords:
+                        kw_lower = kw.lower()
+                        offset = 0
+                        while True:
+                            idx = full_text.lower().find(kw_lower, offset)
+                            if idx == -1:
+                                break
+                            cursor.setPosition(hl_start + idx)
+                            cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, len(kw))
+                            cursor.mergeCharFormat(hl_fmt)
+                            offset = idx + len(kw)
+
         # 确保文本可见
         self.text_recv.ensureCursorVisible()
-        
+
         # 滚动到底部
         self.text_recv.verticalScrollBar().setValue(self.text_recv.verticalScrollBar().maximum())
 
@@ -3000,10 +3031,31 @@ class SerialTool(QMainWindow):
         
         # 插入文本
         cursor.insertText(display_text + '\n')
-        
+
+        # 高亮显示模式：对刚插入的文本叠加背景色（不区分大小写）
+        if self.filter_enabled and self.filter_mode == "高亮显示":
+            keywords = [kw.strip() for kw in self.filter_text.split(',') if kw.strip()]
+            if keywords:
+                end_pos = cursor.position()
+                insert_start = end_pos - len(display_text) - 1  # -1 for \n
+                hl_fmt = QTextCharFormat()
+                hl_fmt.setBackground(tc['highlight_bg'])
+                for kw in keywords:
+                    search_text = display_text
+                    kw_lower = kw.lower()
+                    offset = 0
+                    while True:
+                        idx = search_text.lower().find(kw_lower, offset)
+                        if idx == -1:
+                            break
+                        cursor.setPosition(insert_start + idx)
+                        cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, len(kw))
+                        cursor.mergeCharFormat(hl_fmt)
+                        offset = idx + len(kw)
+
         # 确保文本可见
         self.text_recv.ensureCursorVisible()
-        
+
         # 滚动到底部
         self.text_recv.verticalScrollBar().setValue(self.text_recv.verticalScrollBar().maximum())
 
@@ -4565,7 +4617,7 @@ class SerialTool(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Modbus 工具")
-        dialog.setMinimumSize(580, 500)
+        dialog.setMinimumSize(580, 380)
         dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         main_layout = QVBoxLayout(dialog)
         main_layout.setContentsMargins(8, 8, 8, 8)
