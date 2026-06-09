@@ -8,7 +8,6 @@ JSON 数据分析面板 — 独立模块
 """
 
 import sys
-import os
 import json
 import re
 import time
@@ -31,7 +30,7 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtGui import (
     QFont, QColor, QSyntaxHighlighter, QTextCharFormat,
-    QPixmap, QStandardItemModel, QStandardItem, QCursor,
+    QStandardItemModel, QStandardItem, QCursor,
 )
 
 try:
@@ -1362,8 +1361,8 @@ class CaptureListWidget(QWidget):
 class JsonCaptureThread(QThread):
     """后台线程：从 bytes 流中提取 JSON 对象"""
 
-    MODE_JSON_OBJECT = 0     # 提取 JSON 对象（{...} 或 [...]）
-    MODE_LINE_BY_LINE = 1    # 逐行尝试解析
+    MODE_LINE_BY_LINE = 0    # 逐行尝试解析
+    MODE_JSON_OBJECT = 1     # 提取 JSON 对象（{...} 或 [...]）
     MODE_REGEX = 2           # 自定义正则
 
     items_ready = pyqtSignal(list)  # [(raw_text, obj, summary, parse_error), ...]
@@ -1371,7 +1370,7 @@ class JsonCaptureThread(QThread):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.running = False
-        self.filter_mode = self.MODE_JSON_OBJECT
+        self.filter_mode = self.MODE_LINE_BY_LINE
         self.custom_regex = ""       # 自定义正则模式
         self._queue: deque[bytes] = deque()
         self._queue_mutex = QMutex()
@@ -1598,7 +1597,7 @@ class JsonViewerDialog(QDialog):
         flt_label.setFont(QFont("Microsoft YaHei", 9))
         ctrl_layout.addWidget(flt_label)
         self.combo_filter_mode = QComboBox()
-        self.combo_filter_mode.addItems(["提取 JSON 对象", "所有行尝试解析", "自定义正则"])
+        self.combo_filter_mode.addItems(["所有行尝试解析", "提取 JSON 对象", "自定义正则"])
         self.combo_filter_mode.setFont(QFont("Microsoft YaHei", 9))
         self.combo_filter_mode.setToolTip("选择数据解析策略")
         ctrl_layout.addWidget(self.combo_filter_mode)
