@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python -c \"import py_compile; py_compile.compile\\('serial_GUI.py', doraise=True\\); print\\('serial_GUI.py: OK'\\)\")",
-      "Bash(python -c \"import py_compile; py_compile.compile\\('build_app.py', doraise=True\\); print\\('build_app.py: OK'\\)\")",
-      "WebSearch"
-    ]
-  }
-}
