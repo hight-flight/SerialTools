@@ -2,6 +2,8 @@
 主题模块：颜色常量、QSS 样式表、对话框主题应用工具函数。
 """
 
+VERSION = "1.2.5"
+
 import platform
 
 from PyQt5.QtGui import QColor, QPalette

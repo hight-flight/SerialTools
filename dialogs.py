@@ -10,10 +10,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 
-from theme import apply_dialog_theme
-
-# --- 全局常量 ---
-VERSION = "1.2.4"
+from theme import apply_dialog_theme, VERSION
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -21,12 +21,9 @@ from json_viewer import JsonViewerDialog
 from dialogs import (show_crc_calculator, show_hex_converter,
                          show_serial_monitor, show_usage_dialog,
                          show_about_dialog)
-from theme import THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme
+from theme import THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, VERSION
 from transport import TransportWrapper, TransportReadThread
 from ota_center import OTAControlCenter
-
-# --- 全局常量 ---
-VERSION = "1.2.4"
 
 # --- 文件操作工作类 ---
 class WorkerSignals(QObject):
