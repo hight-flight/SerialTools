@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-JSON 数据分析面板 — 独立模块
+数据分析面板 — 独立模块
 功能：实时捕获串口/网络 JSON 数据流，列表/树形/表格/图表展示分析
 
 依赖：PyQt5, pyqtgraph, numpy（标准库之外）
@@ -49,6 +49,62 @@ BATCH_UPDATE_MS = 30                # 批量更新间隔 ms（低延迟）
 CHART_REFRESH_MS = 50               # 图表刷新间隔 ms
 SEARCH_DEBOUNCE_MS = 200            # 搜索防抖 ms
 SUMMARY_MAX_LEN = 60                # 摘要截断长度
+
+# ── 色彩令牌（与 theme.py 主主题对齐，统一管理所有硬编码色值）──
+_VIEWER_TOKENS = {
+    'dark': {
+        'bg_page':        '#282C34',
+        'bg_card':        '#2C313C',
+        'bg_header':      '#21252B',
+        'bg_alt':         '#252830',
+        'bg_readonly':    '#252526',
+        'bg_menu':        '#21252B',
+        'text_primary':   '#ABB2BF',
+        'text_secondary': '#8B95A5',
+        'text_muted':     '#888888',
+        'text_inverse':   '#FFFFFF',
+        'border_default': '#3E4451',
+        'border_light':   '#2C313C',
+        'accent':         '#528BFF',
+        'accent_hover':   '#61AFEF',
+        'accent_surface': '#3E5A8C',
+        'hover_row':      'rgba(82, 139, 255, 60)',
+        'hover_header':   '#2C313C',
+        'selection_bg':   '#3E5A8C',
+        'selection_fg':   '#FFFFFF',
+        'danger':         '#E06C75',
+        'success':        '#98C379',
+        'warning':        '#E5C07B',
+        'chart_bg':       '#2C313C',
+        'chart_text':     '#ABB2BF',
+    },
+    'light': {
+        'bg_page':        '#F5F5F5',
+        'bg_card':        '#FFFFFF',
+        'bg_header':      '#E8E8E8',
+        'bg_alt':         '#F5F5F5',
+        'bg_readonly':    '#F0F0F0',
+        'bg_menu':        '#FFFFFF',
+        'text_primary':   '#333333',
+        'text_secondary': '#333333',
+        'text_muted':     '#888888',
+        'text_inverse':   '#FFFFFF',
+        'border_default': '#CCCCCC',
+        'border_light':   '#E0E0E0',
+        'accent':         '#0078D4',
+        'accent_hover':   '#168BE0',
+        'accent_surface': '#0078D4',
+        'hover_row':      'rgba(0, 120, 212, 50)',
+        'hover_header':   '#D0D0D0',
+        'selection_bg':   '#0078D4',
+        'selection_fg':   '#FFFFFF',
+        'danger':         '#E06C75',
+        'success':        '#508C50',
+        'warning':        '#C07020',
+        'chart_bg':       '#FFFFFF',
+        'chart_text':     '#666666',
+    },
+}
 
 CURVE_COLORS = [
     (0x61, 0xAF, 0xEF), (0x98, 0xC3, 0x79), (0xE0, 0x6C, 0x75),
@@ -669,13 +725,14 @@ class ChartTrackerWidget(QWidget):
     alert_state_changed = pyqtSignal(bool)  # Feature 2: 告警状态变化信号
     toggle_data_table_requested = pyqtSignal()  # Feature 4: 请求切换数据表格显隐
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, is_dark=True):
         super().__init__(parent)
         if not HAS_PYQTGRAPH:
             layout = QVBoxLayout(self)
             layout.addWidget(QLabel("⚠ 需要安装 pyqtgraph 和 numpy 以启用图表功能"))
             return
 
+        self._is_dark = is_dark
         self._paused = False
         self._tracked: dict[str, dict] = {}  # path -> {chip, curve, buffer, viewbox, ...}
         self._color_idx = 0
@@ -712,9 +769,9 @@ class ChartTrackerWidget(QWidget):
         layout.addWidget(chips_wrapper)
 
         # ── 绘图区 ──
-        plot_bg = '#2C313C'
+        t = _VIEWER_TOKENS['dark' if is_dark else 'light']
         self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setBackground(plot_bg)
+        self.plot_widget.setBackground(t['chart_bg'])
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         self.plot_widget.setLabel('bottom', '采样点')
         self.plot_widget.addLegend()
@@ -722,7 +779,8 @@ class ChartTrackerWidget(QWidget):
         # 启用鼠标交互
         self.plot_widget.setMouseTracking(True)
 
-        self.empty_text = pg.TextItem('在上方树形视图拖拽字段或在下框输入路径，回车开始跟踪', color=(0xAB, 0xB2, 0xBF), anchor=(0.5, 0.5))
+        text_color_rgb = (0xAB, 0xB2, 0xBF) if is_dark else (0x66, 0x66, 0x66)
+        self.empty_text = pg.TextItem('在上方树形视图拖拽字段或在下框输入路径，回车开始跟踪', color=text_color_rgb, anchor=(0.5, 0.5))
         self.empty_text.setFont(QFont("Microsoft YaHei", 10))
         self.plot_widget.addItem(self.empty_text)
 
@@ -730,12 +788,12 @@ class ChartTrackerWidget(QWidget):
         self.stats_overlay = QLabel(self.plot_widget.viewport())
         self.stats_overlay.setFont(QFont("Consolas", 8))
         self.stats_overlay.setStyleSheet(
-            "QLabel {"
-            "  background-color: rgba(0,0,0,0.55);"
-            "  color: #ABB2BF;"
-            "  border-radius: 4px;"
-            "  padding: 4px 8px;"
-            "}"
+            f"QLabel {{"
+            f"  background-color: rgba(0,0,0,0.55);"
+            f"  color: {t['text_primary']};"
+            f"  border-radius: 4px;"
+            f"  padding: 4px 8px;"
+            f"}}"
         )
         self.stats_overlay.setMinimumWidth(220)
         self.stats_overlay.hide()
@@ -781,6 +839,7 @@ class ChartTrackerWidget(QWidget):
 
         self.btn_pause = QPushButton("暂停")
         self.btn_pause.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_pause.setCheckable(True)
         self.btn_pause.setToolTip("暂停/继续图表更新 (Space)")
         self.btn_pause.clicked.connect(self._toggle_pause)
         btn_row.addWidget(self.btn_pause)
@@ -796,6 +855,7 @@ class ChartTrackerWidget(QWidget):
         # Feature 5: 散点图模式切换按钮（始终可见）
         self.btn_scatter_mode = QPushButton("切换散点图")
         self.btn_scatter_mode.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_scatter_mode.setCheckable(True)
         self.btn_scatter_mode.setToolTip("在折线图和散点图之间切换")
         self.btn_scatter_mode.clicked.connect(self._toggle_chart_mode)
         btn_row.addWidget(self.btn_scatter_mode)
@@ -804,7 +864,7 @@ class ChartTrackerWidget(QWidget):
         self.scatter_frame = QFrame()
         self.scatter_frame.setFrameShape(QFrame.StyledPanel)
         self.scatter_frame.setStyleSheet(
-            "QFrame { border: 1px solid #3E4451; border-radius: 4px; padding: 2px 4px; }"
+            f"QFrame {{ border: 1px solid {t['border_default']}; border-radius: 4px; padding: 2px 4px; }}"
         )
         self.scatter_frame.hide()
         scatter_layout = QHBoxLayout(self.scatter_frame)
@@ -879,33 +939,32 @@ class ChartTrackerWidget(QWidget):
         """响应主题切换，更新绘图区背景和告警边框"""
         if not HAS_PYQTGRAPH:
             return
-        plot_bg = '#2C313C' if is_dark else '#FFFFFF'
-        self.plot_widget.setBackground(plot_bg)
-        text_color = (0xAB, 0xB2, 0xBF) if is_dark else (0x66, 0x66, 0x66)
-        self.empty_text.setColor(text_color)
+        self._is_dark = is_dark
+        t = _VIEWER_TOKENS['dark' if is_dark else 'light']
+        self.plot_widget.setBackground(t['chart_bg'])
+        text_color_rgb = (0xAB, 0xB2, 0xBF) if is_dark else (0x66, 0x66, 0x66)
+        self.empty_text.setColor(text_color_rgb)
         # 统计浮层主题
         if is_dark:
             self.stats_overlay.setStyleSheet(
-                "QLabel { background-color: rgba(0,0,0,0.55); color: #ABB2BF;"
-                " border-radius: 4px; padding: 4px 8px; }"
+                f"QLabel {{ background-color: rgba(0,0,0,0.55); color: {t['text_primary']};"
+                f" border-radius: 4px; padding: 4px 8px; }}"
             )
         else:
             self.stats_overlay.setStyleSheet(
-                "QLabel { background-color: rgba(240,240,240,0.85); color: #333333;"
-                " border-radius: 4px; padding: 4px 8px; border: 1px solid #CCCCCC; }"
+                f"QLabel {{ background-color: rgba(240,240,240,0.85); color: {t['text_primary']};"
+                f" border-radius: 4px; padding: 4px 8px; border: 1px solid {t['border_default']}; }}"
             )
         # 更新告警边框颜色（非告警状态也同步主题边框色）
         self._cached_alert_border = None  # 强制下次刷新
         if not self._alert_active_global:
-            border = '#3E4451' if is_dark else '#CCCCCC'
-            self._cached_alert_border = border
+            self._cached_alert_border = t['border_default']
             self.plot_widget.setStyleSheet(
-                f"PlotWidget {{ border: 2px solid {border}; border-radius: 4px; }}"
+                f"PlotWidget {{ border: 2px solid {t['border_default']}; border-radius: 4px; }}"
             )
         # 散点图控件组边框同步主题
-        sf_border = '#3E4451' if is_dark else '#CCCCCC'
         self.scatter_frame.setStyleSheet(
-            f"QFrame {{ border: 1px solid {sf_border}; border-radius: 4px; padding: 2px 4px; }}"
+            f"QFrame {{ border: 1px solid {t['border_default']}; border-radius: 4px; padding: 2px 4px; }}"
         )
 
     # --- 字段管理 ---
@@ -1129,7 +1188,8 @@ class ChartTrackerWidget(QWidget):
         """根据告警状态更新图表边框（仅状态变化时设置 QSS）"""
         if not hasattr(self, 'plot_widget'):
             return
-        alert_border = "#E06C75" if self._alert_active_global else "#3E4451"
+        t = _VIEWER_TOKENS['dark' if self._is_dark else 'light']
+        alert_border = t['danger'] if self._alert_active_global else t['border_default']
         cached = getattr(self, '_cached_alert_border', None)
         if cached == alert_border:
             return
@@ -1150,6 +1210,7 @@ class ChartTrackerWidget(QWidget):
         if self._chart_mode == 'line':
             self._chart_mode = 'scatter'
             self.btn_scatter_mode.setText("切换折线图")
+            self.btn_scatter_mode.setChecked(True)
             # 隐藏所有折线
             for entry in self._tracked.values():
                 entry['curve'].hide()
@@ -1164,6 +1225,7 @@ class ChartTrackerWidget(QWidget):
         else:
             self._chart_mode = 'line'
             self.btn_scatter_mode.setText("切换散点图")
+            self.btn_scatter_mode.setChecked(False)
             # 隐藏散点控件组
             self.scatter_frame.hide()
             self.scatter_curve.hide()
@@ -1374,7 +1436,7 @@ class ChartTrackerWidget(QWidget):
 
     # --- 内部控制 ---
     def _toggle_pause(self):
-        self._paused = not self._paused
+        self._paused = self.btn_pause.isChecked()
         self.btn_pause.setText("继续" if self._paused else "暂停")
 
     def _on_chip_removed(self, chip):
@@ -1561,36 +1623,25 @@ class StatsPanelWidget(QWidget):
         self._apply_table_style(is_dark)
 
     def _apply_table_style(self, is_dark: bool):
-        if is_dark:
-            self.table.setStyleSheet("""
-                QTableWidget {
-                    background-color: #2C313C; color: #ABB2BF;
-                    border: 1px solid #3E4451; gridline-color: #2C313C;
-                    selection-background-color: #3E5A8C; selection-color: #FFFFFF;
-                    alternate-background-color: #252830;
-                }
-                QTableWidget::item { padding: 3px 8px; }
-                QHeaderView { background-color: #21252B; color: #8B95A5; border: none; }
-                QHeaderView::section {
-                    background-color: #21252B; color: #8B95A5;
-                    border: 1px solid #2C313C; padding: 4px 6px; font-weight: bold;
-                }
-            """)
-        else:
-            self.table.setStyleSheet("""
-                QTableWidget {
-                    background-color: #FFFFFF; color: #333333;
-                    border: 1px solid #CCCCCC; gridline-color: #E0E0E0;
-                    selection-background-color: #0078D4; selection-color: #FFFFFF;
-                    alternate-background-color: #F5F5F5;
-                }
-                QTableWidget::item { padding: 3px 8px; }
-                QHeaderView { background-color: #E8E8E8; color: #333333; border: none; }
-                QHeaderView::section {
-                    background-color: #E8E8E8; color: #333333;
-                    border: 1px solid #CCCCCC; padding: 4px 6px; font-weight: bold;
-                }
-            """)
+        self._is_dark = is_dark
+        t = _VIEWER_TOKENS['dark' if is_dark else 'light']
+        self.table.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {t['bg_card']};
+                color: {t['text_primary']};
+                border: 1px solid {t['border_default']};
+                gridline-color: {t['bg_card']};
+                selection-background-color: {t['selection_bg']};
+                selection-color: {t['selection_fg']};
+                alternate-background-color: {t['bg_alt']};
+            }}
+            QTableWidget::item {{ padding: 3px 8px; }}
+            QHeaderView {{ background-color: {t['bg_header']}; color: {t['text_secondary']}; border: none; }}
+            QHeaderView::section {{
+                background-color: {t['bg_header']}; color: {t['text_secondary']};
+                border: 1px solid {t['border_light']}; padding: 4px 6px; font-weight: bold;
+            }}
+        """)
 
     def refresh(self):
         tracked = self._chart_tracker._tracked
@@ -1644,10 +1695,10 @@ class DataTableWidget(QWidget):
 
     DEFAULT_ROWS = 50
 
-    def __init__(self, chart_tracker, parent=None):
+    def __init__(self, chart_tracker, parent=None, is_dark=True):
         super().__init__(parent)
         self._chart_tracker = chart_tracker
-        self._is_dark = True
+        self._is_dark = is_dark
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1684,7 +1735,7 @@ class DataTableWidget(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
-        self._apply_table_style(True)
+        self._apply_table_style(is_dark)
 
         # 空状态提示
         self.table.setRowCount(1)
@@ -1702,36 +1753,25 @@ class DataTableWidget(QWidget):
         self._apply_table_style(is_dark)
 
     def _apply_table_style(self, is_dark: bool):
-        if is_dark:
-            self.table.setStyleSheet("""
-                QTableWidget {
-                    background-color: #2C313C; color: #ABB2BF;
-                    border: 1px solid #3E4451; gridline-color: #2C313C;
-                    selection-background-color: #3E5A8C; selection-color: #FFFFFF;
-                    alternate-background-color: #252830;
-                }
-                QTableWidget::item { padding: 2px 6px; }
-                QHeaderView { background-color: #21252B; color: #8B95A5; border: none; }
-                QHeaderView::section {
-                    background-color: #21252B; color: #8B95A5;
-                    border: 1px solid #2C313C; padding: 3px 6px; font-weight: bold;
-                }
-            """)
-        else:
-            self.table.setStyleSheet("""
-                QTableWidget {
-                    background-color: #FFFFFF; color: #333333;
-                    border: 1px solid #CCCCCC; gridline-color: #E0E0E0;
-                    selection-background-color: #0078D4; selection-color: #FFFFFF;
-                    alternate-background-color: #F5F5F5;
-                }
-                QTableWidget::item { padding: 2px 6px; }
-                QHeaderView { background-color: #E8E8E8; color: #333333; border: none; }
-                QHeaderView::section {
-                    background-color: #E8E8E8; color: #333333;
-                    border: 1px solid #CCCCCC; padding: 3px 6px; font-weight: bold;
-                }
-            """)
+        self._is_dark = is_dark
+        t = _VIEWER_TOKENS['dark' if is_dark else 'light']
+        self.table.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {t['bg_card']};
+                color: {t['text_primary']};
+                border: 1px solid {t['border_default']};
+                gridline-color: {t['bg_card']};
+                selection-background-color: {t['selection_bg']};
+                selection-color: {t['selection_fg']};
+                alternate-background-color: {t['bg_alt']};
+            }}
+            QTableWidget::item {{ padding: 2px 6px; }}
+            QHeaderView {{ background-color: {t['bg_header']}; color: {t['text_secondary']}; border: none; }}
+            QHeaderView::section {{
+                background-color: {t['bg_header']}; color: {t['text_secondary']};
+                border: 1px solid {t['border_light']}; padding: 3px 6px; font-weight: bold;
+            }}
+        """)
 
     def refresh(self):
         tracked = self._chart_tracker._tracked
@@ -1829,6 +1869,14 @@ class DetailViewerWidget(QWidget):
         self.tree_view = _DragTreeView()
         self.tree_model = QStandardItemModel()
         self.tree_model.setHorizontalHeaderLabels(["键", "值"])
+        # 初始空状态引导提示
+        hint_key = QStandardItem("← 点击左侧列表项查看详情")
+        hint_key.setForeground(QColor(0x88, 0x88, 0x88))
+        hint_key.setEditable(False)
+        hint_val = QStandardItem("树形/表格/原始文本/统计 四视图切换")
+        hint_val.setForeground(QColor(0x88, 0x88, 0x88))
+        hint_val.setEditable(False)
+        self.tree_model.appendRow([hint_key, hint_val])
         self.tree_view.setModel(self.tree_model)
         self.tree_view.setColumnWidth(0, 220)
         self.tree_view.header().setStretchLastSection(True)
@@ -1972,7 +2020,7 @@ class DetailViewerWidget(QWidget):
         act_copy = menu.addAction(f"复制值: {val[:50]}")
         act_copy_path = menu.addAction(f"复制路径: {path}")
         menu.addSeparator()
-        act_chart = menu.addAction("📈 添加到图表跟踪")
+        act_chart = menu.addAction("添加到图表跟踪")
 
         action = menu.exec_(self.tree_view.viewport().mapToGlobal(pos))
         if action == act_copy:
@@ -2044,14 +2092,10 @@ class DetailViewerWidget(QWidget):
         # 更新语法高亮
         self.highlighter._init_formats(is_dark)
         # 更新原始文本视图背景
-        if is_dark:
-            self.raw_view.setStyleSheet(
-                "QPlainTextEdit { background-color: #2C313C; color: #ABB2BF; }"
-            )
-        else:
-            self.raw_view.setStyleSheet(
-                "QPlainTextEdit { background-color: #FFFFFF; color: #333333; }"
-            )
+        t = _VIEWER_TOKENS['dark' if is_dark else 'light']
+        self.raw_view.setStyleSheet(
+            f"QPlainTextEdit {{ background-color: {t['bg_card']}; color: {t['text_primary']}; }}"
+        )
         # 统计面板主题
         if hasattr(self, 'stats_panel') and self.stats_panel:
             self.stats_panel.set_theme(is_dark)
@@ -2098,7 +2142,7 @@ class CaptureListWidget(QWidget):
 
     item_selected = pyqtSignal(int)     # 选中条目序号（用于详情查看）
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, is_dark=True):
         super().__init__(parent)
 
         layout = QVBoxLayout(self)
@@ -2127,8 +2171,9 @@ class CaptureListWidget(QWidget):
         self.table.customContextMenuRequested.connect(self._on_context_menu)
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
 
-        # 固定表格样式：确保文字在任何主题下清晰可读
-        self._apply_table_style()
+        # 固定表格样式：根据传入主题初始化，避免主题切换闪烁
+        self._is_dark = is_dark
+        self._apply_table_style(is_dark)
         layout.addWidget(self.table)
 
         # ── 底栏 ──
@@ -2149,52 +2194,33 @@ class CaptureListWidget(QWidget):
 
     def set_theme(self, is_dark: bool):
         """响应主题切换，更新表格配色"""
+        self._is_dark = is_dark
         self._apply_table_style(is_dark)
 
     def _apply_table_style(self, is_dark=True):
         """根据主题应用表格样式，确保文字/背景对比度清晰"""
-        if is_dark:
-            self.table.setStyleSheet("""
-                QTableView {
-                    background-color: #2C313C;
-                    color: #ABB2BF;
-                    border: 1px solid #3E4451;
-                    gridline-color: #2C313C;
-                    selection-background-color: #3E5A8C;
-                    selection-color: #FFFFFF;
-                    alternate-background-color: #252830;
-                }
-                QTableView::item { padding: 2px 6px; }
-                QTableView::item:hover { background-color: rgba(82, 139, 255, 40); }
-                QTableView::item:selected { background-color: #3E5A8C; color: #FFFFFF; }
-                QHeaderView { background-color: #21252B; color: #8B95A5; border: none; }
-                QHeaderView::section {
-                    background-color: #21252B; color: #8B95A5;
-                    border: 1px solid #2C313C; padding: 4px 6px; font-weight: bold;
-                }
-                QHeaderView::section:hover { background-color: #2C313C; }
-            """)
-        else:
-            self.table.setStyleSheet("""
-                QTableView {
-                    background-color: #FFFFFF;
-                    color: #333333;
-                    border: 1px solid #CCCCCC;
-                    gridline-color: #E0E0E0;
-                    selection-background-color: #0078D4;
-                    selection-color: #FFFFFF;
-                    alternate-background-color: #F5F5F5;
-                }
-                QTableView::item { padding: 2px 6px; }
-                QTableView::item:hover { background-color: rgba(0, 120, 212, 30); }
-                QTableView::item:selected { background-color: #0078D4; color: #FFFFFF; }
-                QHeaderView { background-color: #E8E8E8; color: #333333; border: none; }
-                QHeaderView::section {
-                    background-color: #E8E8E8; color: #333333;
-                    border: 1px solid #CCCCCC; padding: 4px 6px; font-weight: bold;
-                }
-                QHeaderView::section:hover { background-color: #D0D0D0; }
-            """)
+        self._is_dark = is_dark
+        t = _VIEWER_TOKENS['dark' if is_dark else 'light']
+        self.table.setStyleSheet(f"""
+            QTableView {{
+                background-color: {t['bg_card']};
+                color: {t['text_primary']};
+                border: 1px solid {t['border_default']};
+                gridline-color: {t['bg_card']};
+                selection-background-color: {t['selection_bg']};
+                selection-color: {t['selection_fg']};
+                alternate-background-color: {t['bg_alt']};
+            }}
+            QTableView::item {{ padding: 2px 6px; }}
+            QTableView::item:hover {{ background-color: {t['hover_row']}; }}
+            QTableView::item:selected {{ background-color: {t['selection_bg']}; color: {t['selection_fg']}; }}
+            QHeaderView {{ background-color: {t['bg_header']}; color: {t['text_secondary']}; border: none; }}
+            QHeaderView::section {{
+                background-color: {t['bg_header']}; color: {t['text_secondary']};
+                border: 1px solid {t['border_light']}; padding: 4px 6px; font-weight: bold;
+            }}
+            QHeaderView::section:hover {{ background-color: {t['hover_header']}; }}
+        """)
 
     # --- 数据操作 ---
     def append_items(self, items: list[dict]):
@@ -2715,6 +2741,12 @@ class ProtocolEditorDialog(QDialog):
         self.fields_table.horizontalHeader().setStretchLastSection(True)
         self.fields_table.setEditTriggers(QAbstractItemView.AllEditTriggers)
         self.fields_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        # 设置合理列宽，避免类型下拉框被截断
+        self.fields_table.setColumnWidth(0, 100)   # 名称
+        self.fields_table.setColumnWidth(1, 110)   # 类型（uint16_le 等长文本）
+        self.fields_table.setColumnWidth(2, 60)    # 偏移
+        self.fields_table.setColumnWidth(3, 60)    # 缩放
+        self.fields_table.setColumnWidth(4, 60)    # 单位
         fields_layout.addWidget(self.fields_table)
 
         btn_field_row = QHBoxLayout()
@@ -2979,12 +3011,13 @@ class ProtocolEditorDialog(QDialog):
 #  主对话框
 # ──────────────────────────────────────────────
 class JsonViewerDialog(QDialog):
-    """JSON 数据分析面板 — 主对话框"""
+    """数据分析面板 — 主对话框"""
 
-    def __init__(self, parent=None, theme_callback=None, arrow_paths=None):
+    def __init__(self, parent=None, theme_callback=None, arrow_paths=None, is_dark=True):
         super().__init__(parent)
         self._theme_callback = theme_callback      # 父窗口的 _apply_dialog_theme 方法
         self._arrow_paths = arrow_paths or {}      # 箭头图标路径
+        self._is_dark = is_dark                    # 初始主题状态
         self._capture_running = False
         self._capture_count = 0
         self._capture_rate = 0
@@ -2992,7 +3025,7 @@ class JsonViewerDialog(QDialog):
         self._seq_counter = 0
         self._protocol_template: ProtocolTemplate | None = None  # 二进制协议模板
 
-        self.setWindowTitle("JSON 数据分析面板")
+        self.setWindowTitle("数据分析面板")
         self.resize(1200, 800)
         self.setMinimumSize(900, 600)
         # 作为独立工具窗口：允许最小化/最大化，不强制置顶
@@ -3011,35 +3044,39 @@ class JsonViewerDialog(QDialog):
         main_layout.setContentsMargins(6, 6, 6, 6)
         main_layout.setSpacing(4)
 
-        # ── 顶部控制栏 ──
-        ctrl_widget = QWidget()
-        ctrl_layout = QHBoxLayout(ctrl_widget)
-        ctrl_layout.setContentsMargins(4, 2, 4, 2)
-        ctrl_layout.setSpacing(6)
+        # ── 顶部控制栏（双行布局：操作区 + 状态栏）──
+        ctrl_container = QWidget()
+        ctrl_container_layout = QVBoxLayout(ctrl_container)
+        ctrl_container_layout.setContentsMargins(0, 0, 0, 0)
+        ctrl_container_layout.setSpacing(4)
+
+        # 第一行：过滤 + 搜索 + 操作按钮
+        ctrl_row1 = QHBoxLayout()
+        ctrl_row1.setSpacing(6)
 
         # ─ 过滤模式 ─
         flt_label = QLabel("过滤:")
         flt_label.setFont(QFont("Microsoft YaHei", 9))
-        ctrl_layout.addWidget(flt_label)
+        ctrl_row1.addWidget(flt_label)
         self.combo_filter_mode = QComboBox()
         self.combo_filter_mode.addItems(["所有行尝试解析", "提取 JSON 对象", "自定义正则", "二进制协议解析"])
         self.combo_filter_mode.setFont(QFont("Microsoft YaHei", 9))
         self.combo_filter_mode.setToolTip("选择数据解析策略")
         self.combo_filter_mode.currentIndexChanged.connect(self._on_filter_mode_changed)
-        ctrl_layout.addWidget(self.combo_filter_mode)
+        ctrl_row1.addWidget(self.combo_filter_mode)
 
         # 协议状态（仅二进制模式可见）
         self.lbl_protocol = QLabel("协议: 未选择")
         self.lbl_protocol.setFont(QFont("Microsoft YaHei", 9))
         self.lbl_protocol.setVisible(False)
-        ctrl_layout.addWidget(self.lbl_protocol)
+        ctrl_row1.addWidget(self.lbl_protocol)
 
         self.btn_edit_protocol = QPushButton("编辑协议")
         self.btn_edit_protocol.setFont(QFont("Microsoft YaHei", 9))
         self.btn_edit_protocol.setToolTip("编辑二进制协议模板（字段定义、帧同步方式）")
         self.btn_edit_protocol.setVisible(False)
         self.btn_edit_protocol.clicked.connect(self._open_protocol_editor)
-        ctrl_layout.addWidget(self.btn_edit_protocol)
+        ctrl_row1.addWidget(self.btn_edit_protocol)
 
         # 搜索
         self.edit_search = QLineEdit()
@@ -3047,31 +3084,31 @@ class JsonViewerDialog(QDialog):
         self.edit_search.setFont(QFont("Microsoft YaHei", 9))
         self.edit_search.setMaximumWidth(160)
         self.edit_search.setToolTip("输入关键字实时过滤列表 (Ctrl+F)")
-        ctrl_layout.addWidget(self.edit_search)
+        ctrl_row1.addWidget(self.edit_search)
 
-        ctrl_layout.addSpacing(8)
+        ctrl_row1.addSpacing(8)
 
         # ─ 操作按钮 ─
-        self.btn_start = QPushButton("▶ 开始监听")
+        self.btn_start = QPushButton("开始监听")
         self.btn_start.setFont(QFont("Microsoft YaHei", 9))
         self.btn_start.setToolTip("开始从数据源捕获 (Ctrl+Enter)")
         self.btn_start.clicked.connect(self._start_capture)
-        ctrl_layout.addWidget(self.btn_start)
+        ctrl_row1.addWidget(self.btn_start)
 
-        self.btn_stop = QPushButton("■ 停止")
+        self.btn_stop = QPushButton("停止捕获")
         self.btn_stop.setFont(QFont("Microsoft YaHei", 9))
         self.btn_stop.setEnabled(False)
         self.btn_stop.setToolTip("停止捕获 (Ctrl+Enter)")
         self.btn_stop.clicked.connect(self._stop_capture)
-        ctrl_layout.addWidget(self.btn_stop)
+        ctrl_row1.addWidget(self.btn_stop)
 
         self.btn_clear = QPushButton("清空全部")
         self.btn_clear.setFont(QFont("Microsoft YaHei", 9))
         self.btn_clear.setToolTip("清空所有捕获数据和图表")
         self.btn_clear.clicked.connect(self._clear_all)
-        ctrl_layout.addWidget(self.btn_clear)
+        ctrl_row1.addWidget(self.btn_clear)
 
-        ctrl_layout.addStretch()
+        ctrl_row1.addStretch()
 
         # ─ 帮助 ─
         self.btn_help = QPushButton("?")
@@ -3079,13 +3116,14 @@ class JsonViewerDialog(QDialog):
         self.btn_help.setFixedWidth(28)
         self.btn_help.setToolTip("查看使用说明")
         self.btn_help.clicked.connect(self._show_help)
-        ctrl_layout.addWidget(self.btn_help)
+        ctrl_row1.addWidget(self.btn_help)
 
-        # ─ 状态指示 ─
+        ctrl_container_layout.addLayout(ctrl_row1)
+
+        # 第二行：状态指示（独立一行，有足够空间展示完整信息）
         self.lbl_status = QLabel("状态: 就绪 | 捕获 0 条 | 速率 0/s")
         self.lbl_status.setFont(QFont("Consolas", 10))
         self.lbl_status.setTextFormat(Qt.PlainText)
-        self.lbl_status.setMinimumWidth(280)
         self.lbl_status.setStyleSheet(
             "QLabel {"
             "  background-color: rgba(128,128,128,0.12);"
@@ -3093,21 +3131,21 @@ class JsonViewerDialog(QDialog):
             "  padding: 3px 10px;"
             "}"
         )
-        ctrl_layout.addWidget(self.lbl_status)
+        ctrl_container_layout.addWidget(self.lbl_status)
 
-        main_layout.addWidget(ctrl_widget)
+        main_layout.addWidget(ctrl_container)
 
         # ──── 主分割器（左右） ────
         self.splitter_h = QSplitter(Qt.Horizontal)
 
-        # 左侧：捕获列表
-        self.capture_list = CaptureListWidget()
+        # 左侧：捕获列表（传入初始主题避免闪烁）
+        self.capture_list = CaptureListWidget(is_dark=self._is_dark)
         self.splitter_h.addWidget(self.capture_list)
 
         # 右侧：垂直分割器（详情 + 图表 + 数据表格）
         self.splitter_v = QSplitter(Qt.Vertical)
 
-        self.chart_tracker = ChartTrackerWidget()
+        self.chart_tracker = ChartTrackerWidget(is_dark=self._is_dark)
         self.detail_viewer = DetailViewerWidget(chart_tracker=self.chart_tracker)
         self.detail_viewer._export_all_callback = self._export_all_jsonl
 
@@ -3173,6 +3211,7 @@ class JsonViewerDialog(QDialog):
 
     def set_theme(self, is_dark: bool):
         """响应外部主题切换，更新所有子组件配色"""
+        self._is_dark = is_dark
         self.capture_list.set_theme(is_dark)
         self.chart_tracker.set_theme(is_dark)
         self.detail_viewer.set_theme(is_dark)
@@ -3379,15 +3418,16 @@ class JsonViewerDialog(QDialog):
 
     def _update_protocol_label(self):
         """更新协议状态标签"""
+        t = _VIEWER_TOKENS['dark' if self._is_dark else 'light']
         if self._protocol_template and self._protocol_template.fields:
             count = len(self._protocol_template.fields)
             self.lbl_protocol.setText(
                 f"协议: {self._protocol_template.name} ({count}字段)"
             )
-            self.lbl_protocol.setStyleSheet("color: #98C379;")
+            self.lbl_protocol.setStyleSheet(f"color: {t['success']};")
         else:
             self.lbl_protocol.setText("协议: 未选择 — 请点击「编辑协议」")
-            self.lbl_protocol.setStyleSheet("color: #E06C75;")
+            self.lbl_protocol.setStyleSheet(f"color: {t['danger']};")
 
     def _open_protocol_editor(self):
         """打开二进制协议编辑器"""
@@ -3452,6 +3492,14 @@ class JsonViewerDialog(QDialog):
         self.lbl_status.setText("状态: 就绪 | 捕获 0 条 | 速率 0/s")
 
     def _clear_all(self):
+        reply = QMessageBox.question(
+            self, "确认清空",
+            "确定要清空所有捕获数据和图表吗？\n此操作不可撤销。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
         self._capture_count = 0
         self._seq_counter = 0
         self._rate_window.clear()

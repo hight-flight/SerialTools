@@ -4086,7 +4086,8 @@ class SerialTool(QMainWindow):
             'dark': getattr(self, '_arrow_dark_path', ''),
             'light': getattr(self, '_arrow_light_path', ''),
         }
-        dlg = JsonViewerDialog(None, theme_callback=self._apply_dialog_theme, arrow_paths=arrow_paths)
+        dlg = JsonViewerDialog(None, theme_callback=self._apply_dialog_theme, arrow_paths=arrow_paths,
+                              is_dark=(self.current_theme == 'dark'))
         self._json_viewer_dlg = dlg
 
         # 连接串口数据信号
