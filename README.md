@@ -1,5 +1,3 @@
-Based on the code map provided, I can see this is a more feature-rich serial port debugging tool than what was documented in the original README. Let me create an improved README that accurately reflects all the features discovered from the codebase.
-
 # SerialTools
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue)](https://www.python.org/)
@@ -88,14 +86,18 @@ pyserial
 ```
 SerialTools/
 ├── serial_GUI.py              # 主程序入口
-├── serial_communicator.py      # 串口通信模块
-├── serial_config.json         # 配置文件
-├── requirements.txt          # 依赖列表
-├── build_app.py               # 打包脚本
-├── convert_json_to_csv.py     # 格式转换工具
-├── themes/                   # 主题配置文件
-│   └── design-tokens.md      # 设计系统文档
-└── VERSION_INFO_README.md    # 版本信息配置说明
+├── transport.py              # 多协议通信模块（串口/UDP/TCP）
+├── dialogs.py               # 对话框组件
+├── ota_center.py            # OTA 远程升级中心
+├── json_viewer.py           # JSON 可视化查看器
+├── theme.py                 # 主题管理
+├── serial_config.json       # 配置文件
+├── requirements.txt         # 依赖列表
+├── build_app.py             # 打包脚本
+├── convert_json_to_csv.py   # 格式转换工具
+├── themes/                 # 主题配置文件
+│   └── design-tokens.md    # 设计系统文档
+└── VERSION_INFO_README.md  # 版本信息配置说明
 ```
 
 ---
