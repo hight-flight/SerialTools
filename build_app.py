@@ -243,53 +243,174 @@ def verify_main_script():
     print("  [OK] 主脚本验证通过")
     return True
 
+def generate_spec(icon_path=None):
+    """生成优化的 spec 文件，排除无用的 DLL、插件、翻译文件"""
+    print("[步骤3] 生成优化的 spec 文件...")
+
+    # 使用正斜杠避免 Python 字符串转义问题（\a = bell, \p = ...）
+    icon_line = f"    icon=[r'{icon_path.replace(chr(92), '/')}']," if icon_path else ""
+
+    spec_content = f'''# -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+
+# 只收集 pyqtgraph 核心子模块（排除 examples）
+_pg_submodules = collect_submodules('pyqtgraph')
+_pg_submodules = [m for m in _pg_submodules if not m.startswith('pyqtgraph.examples')]
+
+hiddenimports = [
+    'pyqtgraph', 'numpy',
+    'serial.tools.list_ports', 'serial.tools.list_ports_common',
+    'serial.tools.list_ports_linux', 'serial.tools.list_ports_windows',
+    'serial.tools.list_ports_osx',
+] + _pg_submodules
+
+a = Analysis(
+    ['{MAIN_SCRIPT}'],
+    pathex=[],
+    binaries=[],
+    datas=[('{CONFIG_FILE}', '.')],
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={{}},
+    runtime_hooks=[],
+    excludes=['torch', 'tensorflow', 'tkinter', 'matplotlib', 'PIL', 'cv2'],
+    noarchive=False,
+    optimize=0,
+)
+
+# ── 过滤无用的二进制文件 ──
+# 这些是串口工具不需要的 Qt 组件（OpenGL、QML、蓝牙等），
+# 以及多余的插件和翻译文件
+EXCLUDE_BINARIES = {{
+    # OpenGL 相关 —— 串口工具不需要 3D 渲染
+    'opengl32sw.dll', 'd3dcompiler_47.dll', 'libGLESv2.dll', 'libEGL.dll',
+    # QML 引擎 —— 纯 Widgets 应用不需要
+    'Qt5Quick.dll', 'Qt5Qml.dll', 'Qt5QmlModels.dll',
+    'Qt5QuickTemplates2.dll', 'Qt5QuickParticles.dll',
+    'Qt5Quick3D.dll', 'Qt5Quick3DRuntimeRender.dll',
+    'Qt5QuickTest.dll', 'Qt5QuickControls2.dll', 'Qt5QuickShapes.dll',
+    # 无关网络/硬件模块
+    'Qt5WebSockets.dll', 'Qt5Bluetooth.dll', 'Qt5Nfc.dll',
+    'Qt5Location.dll', 'Qt5Positioning.dll', 'Qt5PositioningQuick.dll',
+    'Qt5Sensors.dll', 'Qt5SerialPort.dll', 'Qt5SerialBus.dll',
+    # Linux 桌面组件
+    'Qt5DBus.dll', 'Qt5X11Extras.dll',
+    # 多余模块
+    'Qt5Designer.dll', 'Qt5DesignerComponents.dll', 'Qt5Help.dll',
+    'Qt5XmlPatterns.dll', 'Qt5Test.dll', 'Qt5Svg.dll',
+    'Qt5Multimedia.dll', 'Qt5MultimediaWidgets.dll',
+    'Qt5RemoteObjects.dll',
+    # Crypto/SSL —— Qt 自带的，优先用系统的
+    'libcrypto-1_1-x64.dll', 'libssl-1_1-x64.dll', 'libeay32.dll',
+    # Windows 系统 DLL —— 不需要打包
+    'msvcp140.dll', 'msvcp140_1.dll', 'VCRUNTIME140.dll', 'VCRUNTIME140_1.dll',
+    'concrt140.dll', 'vccorlib140.dll',
+}}
+
+# 需要保留的 Qt 插件白名单
+KEEP_PLATFORMS = {{'qwindows.dll'}}        # 只需要 Windows 平台插件
+KEEP_STYLES = {{'qwindowsvistastyle.dll'}}  # 只需要 Windows 风格
+KEEP_ICON_ENGINES = {{'qsvgicon.dll'}}      # SVG 图标引擎
+# 保留常用图片格式
+KEEP_IMAGE_FORMATS = {{'qjpeg.dll', 'qgif.dll', 'qico.dll', 'qsvg.dll'}}
+KEEP_GENERIC = set()                        # 不需要 generic 插件
+KEEP_PLATFORM_THEMES = set()                # 不需要 platformthemes
+
+# 只保留中文和英文翻译
+KEEP_TRANSLATIONS = {{'qt_zh_CN.qm', 'qt_zh_TW.qm', 'qt_en.qm',
+                       'qtbase_zh_CN.qm', 'qtbase_zh_TW.qm', 'qtbase_en.qm'}}
+
+filtered_binaries = []
+removed_count = 0
+removed_size = 0
+for (name, path, typ) in a.binaries:
+    basename = os.path.basename(name)
+    # 检查排除列表
+    if basename in EXCLUDE_BINARIES:
+        removed_count += 1
+        removed_size += os.path.getsize(path) if os.path.exists(path) else 0
+        continue
+    # 检查 Qt 插件 —— 只保留白名单
+    if '/plugins/platforms/' in name.replace('\\\\', '/'):
+        if basename not in KEEP_PLATFORMS:
+            removed_count += 1; continue
+    if '/plugins/styles/' in name.replace('\\\\', '/'):
+        if basename not in KEEP_STYLES:
+            removed_count += 1; continue
+    if '/plugins/iconengines/' in name.replace('\\\\', '/'):
+        if basename not in KEEP_ICON_ENGINES:
+            removed_count += 1; continue
+    if '/plugins/imageformats/' in name.replace('\\\\', '/'):
+        if basename not in KEEP_IMAGE_FORMATS:
+            removed_count += 1; continue
+    if '/plugins/generic/' in name.replace('\\\\', '/'):
+        if basename not in KEEP_GENERIC:
+            removed_count += 1; continue
+    if '/plugins/platformthemes/' in name.replace('\\\\', '/'):
+        if basename not in KEEP_PLATFORM_THEMES:
+            removed_count += 1; continue
+    # 检查翻译文件
+    if '/translations/' in name.replace('\\\\', '/'):
+        if basename not in KEEP_TRANSLATIONS:
+            removed_count += 1; continue
+    # 排除 numpy 测试模块
+    if '_multiarray_tests' in basename:
+        removed_count += 1; continue
+    # 排除 pyqtgraph 大图标
+    if 'pyqtgraph/icons/' in name.replace('\\\\', '/'):
+        removed_count += 1; continue
+    filtered_binaries.append((name, path, typ))
+
+print(f"  [优化] 移除了 {{removed_count}} 个无用文件 (约 {{removed_size/1024/1024:.1f}} MB)")
+print(f"  [优化] 保留 {{len(filtered_binaries)}} 个文件")
+a.binaries = filtered_binaries
+
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name='{APP_NAME}',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+{icon_line}
+)
+'''
+
+    spec_path = f'{APP_NAME}.spec'
+    with open(spec_path, 'w', encoding='utf-8') as f:
+        f.write(spec_content)
+    print(f"  [OK] spec 文件已生成: {spec_path}")
+    return spec_path
+
+
 def build_application(icon_path=None):
-    """构建应用程序"""
+    """构建应用程序（使用优化的 spec 文件）"""
     print("[步骤3] 开始打包...")
-    
-    # 获取跨平台路径分隔符
-    path_sep = get_path_separator()
-    
-    # 打包参数
-    args = [
-        '--onefile',          # 生成单个可执行文件
-        '--windowed',         # 无命令行窗口（GUI应用）
-        '--name', APP_NAME,   # 可执行文件名
-        '--add-data', f'{CONFIG_FILE}{path_sep}.',  # 添加配置文件（跨平台兼容）
-        # 懒加载依赖（示波器）
-        '--hidden-import', 'pyqtgraph',
-        '--hidden-import', 'numpy',
-        '--collect-submodules', 'pyqtgraph',  # 收集 pyqtgraph 全部子模块
-        # 串口枚举（lazy import 场景）
-        '--hidden-import', 'serial.tools.list_ports',
-        '--hidden-import', 'serial.tools.list_ports_common',
-        '--hidden-import', 'serial.tools.list_ports_linux',
-        '--hidden-import', 'serial.tools.list_ports_windows',
-        '--hidden-import', 'serial.tools.list_ports_osx',
-        # 排除无关大型库，减小体积 + 消除无关 warning
-        '--exclude-module', 'torch',
-        '--exclude-module', 'tensorflow',
-        '--exclude-module', 'tkinter',
-        '--exclude-module', 'matplotlib',
-        '--exclude-module', 'PIL',
-        '--exclude-module', 'cv2',
-        MAIN_SCRIPT           # 主脚本
-    ]
-    
-    # 添加图标参数 (插入到脚本名称之前)
-    if icon_path:
-        args.insert(-1, '--icon')
-        args.insert(-1, icon_path)
-    
-    print(f"  打包参数: {' '.join(args)}")
+
+    # 生成优化的 spec 文件
+    spec_path = generate_spec(icon_path)
+
     print("  正在构建...")
-    
     start_time = time.time()
-    
-    # 尝试使用API方式
+
+    # 使用 spec 文件构建
     if PYINSTALLER_AVAILABLE:
         try:
-            pyi_main.run(args)
+            pyi_main.run([spec_path])
             end_time = time.time()
             print(f"  构建完成，用时: {end_time - start_time:.2f}秒")
             return True
@@ -299,18 +420,13 @@ def build_application(icon_path=None):
         except Exception as e:
             print(f"  [警告] API方式构建失败: {e}")
             print("  尝试使用命令行方式...")
-    
-    # 尝试使用命令行方式
+
+    # 命令行方式
     try:
-        # 构建命令
-        cmd = [sys.executable, '-m', 'PyInstaller'] + args
+        cmd = [sys.executable, '-m', 'PyInstaller', spec_path]
         print(f"  执行命令: {' '.join(cmd)}")
-        
         result = subprocess.run(
-            cmd, 
-            capture_output=True, 
-            text=True,
-            timeout=BUILD_TIMEOUT  # 设置超时时间
+            cmd, capture_output=True, text=True, timeout=BUILD_TIMEOUT
         )
         if result.returncode == 0:
             end_time = time.time()
@@ -328,55 +444,6 @@ def build_application(icon_path=None):
         raise
     except Exception as e:
         print(f"  [ERROR] 命令行方式构建失败: {e}")
-        print("  尝试使用pyinstaller直接调用...")
-    
-    # 尝试直接调用pyinstaller可执行文件
-    try:
-        # 尝试找到pyinstaller可执行文件
-        possible_paths = [
-            os.path.join(os.path.dirname(sys.executable), 'Scripts', 'pyinstaller.exe'),
-            os.path.join(os.path.dirname(sys.executable), 'pyinstaller.exe'),
-            'pyinstaller.exe',
-            'pyinstaller'
-        ]
-        
-        pyinstaller_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                pyinstaller_path = path
-                break
-        
-        if pyinstaller_path:
-            cmd = [pyinstaller_path] + args
-            print(f"  执行命令: {' '.join(cmd)}")
-            
-            result = subprocess.run(
-                cmd, 
-                capture_output=True, 
-                text=True,
-                timeout=BUILD_TIMEOUT  # 设置超时时间
-            )
-            if result.returncode == 0:
-                end_time = time.time()
-                print(f"  构建完成，用时: {end_time - start_time:.2f}秒")
-                return True
-            else:
-                print(f"  [ERROR] 构建失败:")
-                print(f"  错误输出: {result.stderr}")
-                return False
-        else:
-            print("  [ERROR] 找不到pyinstaller可执行文件")
-            print("  请确保PyInstaller已正确安装:")
-            print("  pip install pyinstaller")
-            return False
-    except subprocess.TimeoutExpired:
-        print(f"  [ERROR] 构建超时（超过{BUILD_TIMEOUT}秒）")
-        return False
-    except KeyboardInterrupt:
-        print("\n  [中断] 用户取消打包")
-        raise
-    except Exception as e:
-        print(f"  [ERROR] 直接调用构建失败: {e}")
         return False
 
 def verify_build():
@@ -445,7 +512,11 @@ def main():
             print("\n❌ 打包失败")
         
         print("")
-        #input("按Enter键退出...")
+        # 非交互模式下跳过 input
+        try:
+            input("按Enter键退出...")
+        except EOFError:
+            pass
     except KeyboardInterrupt:
         print("\n\n[中断] 打包过程已被用户取消")
         sys.exit(1)
