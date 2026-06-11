@@ -2066,6 +2066,13 @@ class SerialTool(QMainWindow):
     
     def closeEvent(self, event):
         """窗口关闭事件"""
+        # 关闭数据分析面板（独立窗口，需显式关闭）
+        if hasattr(self, '_json_viewer_dlg') and self._json_viewer_dlg is not None:
+            try:
+                self._json_viewer_dlg.close()
+            except RuntimeError:
+                pass
+            self._json_viewer_dlg = None
         # 保存配置
         self.save_config()
         # 清理所有资源（cleanup_resources 已经包含了所有必要的清理）

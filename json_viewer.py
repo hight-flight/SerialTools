@@ -3044,39 +3044,35 @@ class JsonViewerDialog(QDialog):
         main_layout.setContentsMargins(6, 6, 6, 6)
         main_layout.setSpacing(4)
 
-        # ── 顶部控制栏（双行布局：操作区 + 状态栏）──
-        ctrl_container = QWidget()
-        ctrl_container_layout = QVBoxLayout(ctrl_container)
-        ctrl_container_layout.setContentsMargins(0, 0, 0, 0)
-        ctrl_container_layout.setSpacing(4)
-
-        # 第一行：过滤 + 搜索 + 操作按钮
-        ctrl_row1 = QHBoxLayout()
-        ctrl_row1.setSpacing(6)
+        # ── 顶部控制栏 ──
+        ctrl_widget = QWidget()
+        ctrl_layout = QHBoxLayout(ctrl_widget)
+        ctrl_layout.setContentsMargins(4, 2, 4, 2)
+        ctrl_layout.setSpacing(6)
 
         # ─ 过滤模式 ─
         flt_label = QLabel("过滤:")
         flt_label.setFont(QFont("Microsoft YaHei", 9))
-        ctrl_row1.addWidget(flt_label)
+        ctrl_layout.addWidget(flt_label)
         self.combo_filter_mode = QComboBox()
         self.combo_filter_mode.addItems(["所有行尝试解析", "提取 JSON 对象", "自定义正则", "二进制协议解析"])
         self.combo_filter_mode.setFont(QFont("Microsoft YaHei", 9))
         self.combo_filter_mode.setToolTip("选择数据解析策略")
         self.combo_filter_mode.currentIndexChanged.connect(self._on_filter_mode_changed)
-        ctrl_row1.addWidget(self.combo_filter_mode)
+        ctrl_layout.addWidget(self.combo_filter_mode)
 
         # 协议状态（仅二进制模式可见）
         self.lbl_protocol = QLabel("协议: 未选择")
         self.lbl_protocol.setFont(QFont("Microsoft YaHei", 9))
         self.lbl_protocol.setVisible(False)
-        ctrl_row1.addWidget(self.lbl_protocol)
+        ctrl_layout.addWidget(self.lbl_protocol)
 
         self.btn_edit_protocol = QPushButton("编辑协议")
         self.btn_edit_protocol.setFont(QFont("Microsoft YaHei", 9))
         self.btn_edit_protocol.setToolTip("编辑二进制协议模板（字段定义、帧同步方式）")
         self.btn_edit_protocol.setVisible(False)
         self.btn_edit_protocol.clicked.connect(self._open_protocol_editor)
-        ctrl_row1.addWidget(self.btn_edit_protocol)
+        ctrl_layout.addWidget(self.btn_edit_protocol)
 
         # 搜索
         self.edit_search = QLineEdit()
@@ -3084,31 +3080,29 @@ class JsonViewerDialog(QDialog):
         self.edit_search.setFont(QFont("Microsoft YaHei", 9))
         self.edit_search.setMaximumWidth(160)
         self.edit_search.setToolTip("输入关键字实时过滤列表 (Ctrl+F)")
-        ctrl_row1.addWidget(self.edit_search)
+        ctrl_layout.addWidget(self.edit_search)
 
-        ctrl_row1.addSpacing(8)
+        ctrl_layout.addStretch()
 
         # ─ 操作按钮 ─
         self.btn_start = QPushButton("开始监听")
         self.btn_start.setFont(QFont("Microsoft YaHei", 9))
         self.btn_start.setToolTip("开始从数据源捕获 (Ctrl+Enter)")
         self.btn_start.clicked.connect(self._start_capture)
-        ctrl_row1.addWidget(self.btn_start)
+        ctrl_layout.addWidget(self.btn_start)
 
         self.btn_stop = QPushButton("停止捕获")
         self.btn_stop.setFont(QFont("Microsoft YaHei", 9))
         self.btn_stop.setEnabled(False)
         self.btn_stop.setToolTip("停止捕获 (Ctrl+Enter)")
         self.btn_stop.clicked.connect(self._stop_capture)
-        ctrl_row1.addWidget(self.btn_stop)
+        ctrl_layout.addWidget(self.btn_stop)
 
         self.btn_clear = QPushButton("清空全部")
         self.btn_clear.setFont(QFont("Microsoft YaHei", 9))
         self.btn_clear.setToolTip("清空所有捕获数据和图表")
         self.btn_clear.clicked.connect(self._clear_all)
-        ctrl_row1.addWidget(self.btn_clear)
-
-        ctrl_row1.addStretch()
+        ctrl_layout.addWidget(self.btn_clear)
 
         # ─ 帮助 ─
         self.btn_help = QPushButton("?")
@@ -3116,11 +3110,19 @@ class JsonViewerDialog(QDialog):
         self.btn_help.setFixedWidth(28)
         self.btn_help.setToolTip("查看使用说明")
         self.btn_help.clicked.connect(self._show_help)
-        ctrl_row1.addWidget(self.btn_help)
+        ctrl_layout.addWidget(self.btn_help)
 
-        ctrl_container_layout.addLayout(ctrl_row1)
+        main_layout.addWidget(ctrl_widget)
 
-        # 第二行：状态指示（独立一行，有足够空间展示完整信息）
+        # ──── 主分割器（左右） ────
+        self.splitter_h = QSplitter(Qt.Horizontal)
+
+        # 左侧面板：状态指示 + 捕获列表（状态仅在左侧，不占用右侧空间）
+        left_panel = QWidget()
+        left_panel_layout = QVBoxLayout(left_panel)
+        left_panel_layout.setContentsMargins(0, 0, 0, 0)
+        left_panel_layout.setSpacing(2)
+
         self.lbl_status = QLabel("状态: 就绪 | 捕获 0 条 | 速率 0/s")
         self.lbl_status.setFont(QFont("Consolas", 10))
         self.lbl_status.setTextFormat(Qt.PlainText)
@@ -3131,16 +3133,12 @@ class JsonViewerDialog(QDialog):
             "  padding: 3px 10px;"
             "}"
         )
-        ctrl_container_layout.addWidget(self.lbl_status)
+        left_panel_layout.addWidget(self.lbl_status)
 
-        main_layout.addWidget(ctrl_container)
-
-        # ──── 主分割器（左右） ────
-        self.splitter_h = QSplitter(Qt.Horizontal)
-
-        # 左侧：捕获列表（传入初始主题避免闪烁）
         self.capture_list = CaptureListWidget(is_dark=self._is_dark)
-        self.splitter_h.addWidget(self.capture_list)
+        left_panel_layout.addWidget(self.capture_list, stretch=1)
+
+        self.splitter_h.addWidget(left_panel)
 
         # 右侧：垂直分割器（详情 + 图表 + 数据表格）
         self.splitter_v = QSplitter(Qt.Vertical)
