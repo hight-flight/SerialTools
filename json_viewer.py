@@ -898,7 +898,7 @@ class ChartTrackerWidget(QWidget):
         # Feature 3: 计算字段按钮
         self.btn_add_computed = QPushButton("fx 计算字段")
         self.btn_add_computed.setFont(QFont("Microsoft YaHei", 9))
-        self.btn_add_computed.setToolTip("添加计算字段 (如: $.temperature * 9/5 + 32)")
+        self.btn_add_computed.setToolTip("添加计算字段 (如: volt * 100)")
         self.btn_add_computed.clicked.connect(self._add_computed_field)
         btn_row.addWidget(self.btn_add_computed)
 
@@ -1065,7 +1065,7 @@ class ChartTrackerWidget(QWidget):
         for path, entry in self._tracked.items():
             try:
                 if entry.get('is_computed'):
-                    val = eval_computed(entry['expression'], field_values)
+                    val = eval_computed(entry['expression'], field_values, obj)
                     if val is not None:
                         # 将计算字段的值也加入 field_values，供后续计算字段引用
                         field_values[path] = val
@@ -1411,11 +1411,11 @@ class ChartTrackerWidget(QWidget):
         """弹出对话框添加计算字段"""
         text, ok = QInputDialog.getText(
             self, "添加计算字段",
-            "输入表达式 (如: $.temperature * 9/5 + 32):\n"
-            "引用格式: $.field_name\n"
+            "输入表达式 (如: volt * 100):\n"
+            "引用格式: field_name 或 data.volt（点号路径）\n"
             "支持: + - * / ** % ( )\n\n"
-            "别名 (可选，分号分隔):\n"
-            "例: $.temperature * 9/5 + 32 ; 华氏温度"
+            "别名 (可选，分号分隔，不填则用表达式自身):\n"
+            "例: temperature * 9/5 + 32 ; 华氏温度"
         )
         if not ok or not text:
             return
@@ -1428,7 +1428,13 @@ class ChartTrackerWidget(QWidget):
         if not expr:
             return
 
-        # 生成唯一路径
+        # 无别名时用表达式自身作为显示名（去除空格，超过24字符截断）
+        if not alias:
+            alias = expr.replace(' ', '')
+            if len(alias) > 24:
+                alias = alias[:21] + '...'
+
+        # 生成唯一路径（内部使用，不暴露给用户）
         import uuid
         computed_path = f"__computed__{uuid.uuid4().hex[:8]}"
 
@@ -1939,29 +1945,40 @@ class DetailViewerWidget(QWidget):
         if obj is not None:
             root = _build_json_tree(obj)
             while root.rowCount() > 0:
-                row_items = root.takeRow(0)  # 正确转移所有权
+                row_items = root.takeRow(0)
                 self.tree_model.appendRow(row_items)
             self.tree_view.expandToDepth(0)
         else:
-            # 非 JSON 数据：树形中显示提示
-            hint = QStandardItem("(非JSON数据，无可拖拽字段 —— 改为切换「原始文本」视图查看)")
+            # 非 JSON 数据：树形中显示提示 + 全文预览
+            hint = QStandardItem("(非JSON数据，无可拖拽字段 — 可切换「原始文本」/「表格」查看全文)")
             hint.setForeground(QColor(0x88, 0x88, 0x88))
             hint.setEditable(False)
-            self.tree_model.appendRow([hint, QStandardItem(raw_text[:200])])
+            preview = raw_text[:300] + ("…" if len(raw_text) > 300 else "")
+            self.tree_model.appendRow([hint, QStandardItem(preview)])
 
-        # 表格
+        # 表格：JSON → 结构化展示；非JSON → 尝试提取 key=value 对
         if obj is not None:
             self._build_table(obj)
         else:
-            self.table_view.clear()
-            self.table_view.setRowCount(1)
-            self.table_view.setColumnCount(1)
-            self.table_view.setHorizontalHeaderLabels(["原始文本"])
-            item = QTableWidgetItem(raw_text[:500])
-            item.setFont(QFont("Consolas", 10))
-            self.table_view.setItem(0, 0, item)
+            kv = _extract_kv_pairs(raw_text)
+            if kv:
+                self.table_view.clear()
+                self.table_view.setColumnCount(2)
+                self.table_view.setHorizontalHeaderLabels(["字段", "值"])
+                self.table_view.setRowCount(len(kv))
+                for r, (k, v) in enumerate(kv.items()):
+                    self.table_view.setItem(r, 0, QTableWidgetItem(str(k)))
+                    self.table_view.setItem(r, 1, QTableWidgetItem(str(v)))
+            else:
+                self.table_view.clear()
+                self.table_view.setRowCount(1)
+                self.table_view.setColumnCount(1)
+                self.table_view.setHorizontalHeaderLabels(["原始文本"])
+                item = QTableWidgetItem(raw_text)
+                item.setFont(QFont("Consolas", 10))
+                self.table_view.setItem(0, 0, item)
 
-        # 原始文本
+        # 原始文本：始终展示全文
         self.raw_view.setPlainText(raw_text)
 
     def _build_table(self, obj):
@@ -2095,6 +2112,16 @@ class DetailViewerWidget(QWidget):
         t = _VIEWER_TOKENS['dark' if is_dark else 'light']
         self.raw_view.setStyleSheet(
             f"QPlainTextEdit {{ background-color: {t['bg_card']}; color: {t['text_primary']}; }}"
+        )
+        # 表格视图：修复表头左上角白色方块 + 统一配色
+        self.table_view.setStyleSheet(
+            f"QTableCornerButton::section {{"
+            f"  background-color: {t['bg_header']}; border: 1px solid {t['border_default']};"
+            f"}}"
+            f"QHeaderView::section {{"
+            f"  background-color: {t['bg_header']}; color: {t['text_primary']};"
+            f"  padding: 4px 8px; border: 1px solid {t['border_default']};"
+            f"}}"
         )
         # 统计面板主题
         if hasattr(self, 'stats_panel') and self.stats_panel:
@@ -2497,18 +2524,26 @@ class JsonCaptureThread(QThread):
         return batch
 
     def _extract_regex(self) -> list:
-        """模式3：自定义正则提取"""
+        """模式3：自定义正则提取（每次匹配提取所在整行，便于查看完整数据包）"""
         if not self.custom_regex:
             return self._extract_json_objects()  # 回退
         batch = []
         text = self._byte_buffer.decode('utf-8', errors='replace')
         try:
             pattern = re.compile(self.custom_regex)
+            seen_lines = set()  # 去重：同一行可能被多次匹配
             last_end = 0
             for m in pattern.finditer(text):
-                raw = m.group()
-                batch.append(self._try_parse(raw))
-                last_end = max(last_end, m.end())
+                # 提取匹配所在的整行（避免只看到一个孤立的匹配词）
+                line_start = text.rfind('\n', 0, m.start()) + 1
+                line_end = text.find('\n', m.end())
+                if line_end == -1:
+                    line_end = len(text)
+                raw = text[line_start:line_end].strip('\r')
+                if raw not in seen_lines:
+                    seen_lines.add(raw)
+                    batch.append(self._try_parse(raw))
+                last_end = max(last_end, line_end)
             if last_end > 0:
                 self._byte_buffer = bytearray(text[last_end:].encode('utf-8'))
             elif len(self._byte_buffer) > 256 * 1024:
@@ -3022,6 +3057,7 @@ class JsonViewerDialog(QDialog):
         self._capture_count = 0
         self._capture_rate = 0
         self._rate_window = deque(maxlen=20)       # 速率滑动窗口（每秒）
+        self._last_data_ts = 0                     # 最后收到原始数据的时间戳
         self._seq_counter = 0
         self._protocol_template: ProtocolTemplate | None = None  # 二进制协议模板
 
@@ -3073,6 +3109,19 @@ class JsonViewerDialog(QDialog):
         self.btn_edit_protocol.setVisible(False)
         self.btn_edit_protocol.clicked.connect(self._open_protocol_editor)
         ctrl_layout.addWidget(self.btn_edit_protocol)
+
+        # 正则输入框（自定义正则模式可见）
+        self.edit_regex = QLineEdit()
+        self.edit_regex.setPlaceholderText("正则表达式，如: value=(\\d+\\.\\d+)")
+        self.edit_regex.setFont(QFont("Consolas", 9))
+        self.edit_regex.setMaximumWidth(260)
+        self.edit_regex.setToolTip(
+            "输入正则表达式从数据流中提取内容\n"
+            "匹配到的文本会尝试 JSON 解析后显示"
+        )
+        self.edit_regex.setVisible(False)
+        self.edit_regex.textChanged.connect(self._on_regex_changed)
+        ctrl_layout.addWidget(self.edit_regex)
 
         # 搜索
         self.edit_search = QLineEdit()
@@ -3239,6 +3288,7 @@ class JsonViewerDialog(QDialog):
             self._dbg_rx_bytes = 0
         self._dbg_rx_count += 1
         self._dbg_rx_bytes += len(data)
+        self._last_data_ts = time.time()  # 记录最后收到数据的时间戳
 
         if not self._capture_running:
             self._set_status_style(color="#E06C75", bold=True)
@@ -3307,8 +3357,8 @@ class JsonViewerDialog(QDialog):
             "• 鼠标悬停图表显示十字线和数值<br><br>"
             "<b>━━ 计算字段 ━━</b><br>"
             "• 点击 <b>「fx 计算字段」</b> 创建派生字段<br>"
-            "• 语法：$.字段名 * 9/5 + 32<br>"
-            "• 支持 + - * / ** % ( )<br><br>"
+            "• 语法：field_name 或 data.volt（点号路径）<br>"
+            "• 支持 + - * / ** % ( ) 四则运算<br><br>"
             "<b>━━ 散点图 ━━</b><br>"
             "• 点击 <b>「切换散点图」</b> 进入散点图模式<br>"
             "• X=采样序号 → 所有字段各色散点<br>"
@@ -3374,15 +3424,13 @@ class JsonViewerDialog(QDialog):
         if self.chart_tracker._alert_active_global:
             return
 
-        # 诊断：有数据流入但没有提取到 JSON 时显示提示
+        # 诊断提示：仅在「提取 JSON 对象」模式下，有数据但无 JSON 对象时提醒
         hint = ""
-        if self._capture_count == 0:
-            scanned = self._capture_thread.bytes_scanned
-            if scanned > 100:
-                hint = "  |  [!] 数据非JSON格式，请切换过滤模式为「所有行尝试解析」"
-                self._set_status_style(color="#E5C07B", bold=True)
-            else:
-                self._set_status_style()
+        data_active = (now - self._last_data_ts < 3)  # 3 秒内有数据流入
+        if (self._capture_count == 0 and data_active
+                and self._capture_thread.filter_mode == JsonCaptureThread.MODE_JSON_OBJECT):
+            hint = "  [!] 未检测到JSON对象"
+            self._set_status_style(color="#E06C75", bold=True)
         else:
             self._set_status_style()
 
@@ -3397,17 +3445,28 @@ class JsonViewerDialog(QDialog):
         if hasattr(self, 'data_table') and self.data_table.isVisible():
             self.data_table.refresh()
 
+    def _on_regex_changed(self, text: str):
+        """正则表达式文本变更 → 实时同步到运行中的捕获线程"""
+        if hasattr(self, '_capture_thread') and self._capture_thread.isRunning():
+            self._capture_thread.custom_regex = text.strip()
+            # 切换正则后清空缓冲区重新匹配
+            self._capture_thread._byte_buffer = bytearray()
+
     def _on_filter_mode_changed(self, idx: int):
         """捕获中切换过滤模式时实时更新后台线程"""
-        is_binary = (idx == 3)  # MODE_BINARY
+        is_binary = (idx == 3)      # MODE_BINARY
+        is_regex = (idx == 2)       # MODE_REGEX
+
         self.lbl_protocol.setVisible(is_binary)
         self.btn_edit_protocol.setVisible(is_binary)
+        self.edit_regex.setVisible(is_regex)
 
         if is_binary:
             self._update_protocol_label()
 
         if hasattr(self, '_capture_thread') and self._capture_thread.isRunning():
             self._capture_thread.filter_mode = idx
+            self._capture_thread.custom_regex = self.edit_regex.text().strip() if is_regex else ""
             self._capture_thread.protocol_template = (
                 self._protocol_template if is_binary else None
             )
@@ -3464,6 +3523,8 @@ class JsonViewerDialog(QDialog):
         self._capture_thread.filter_mode = self.combo_filter_mode.currentIndex()
         if self._capture_thread.filter_mode == JsonCaptureThread.MODE_BINARY:
             self._capture_thread.protocol_template = self._protocol_template
+        elif self._capture_thread.filter_mode == JsonCaptureThread.MODE_REGEX:
+            self._capture_thread.custom_regex = self.edit_regex.text().strip()
         self._capture_thread.set_running(True)
         self._capture_thread.start()
 
@@ -3786,13 +3847,20 @@ def _compute_stats(buffer: deque) -> dict:
 import ast
 import operator as _op
 
-_EXPR_VAR_RE = re.compile(r'\$\.([\w.]+)')
+# 匹配裸标识符（field_name）—— 用于替换为安全变量名
+_FIELD_RE = re.compile(r'[a-zA-Z_]\w*')
+# 匹配点号路径（data.volt、sensor.temp 等，至少一个点）
+_DOT_PATH_RE = re.compile(r'(?<![\w.])([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)+)(?![\w.])')
+
 _SAFE_OPS = {
     ast.Add: _op.add, ast.Sub: _op.sub,
     ast.Mult: _op.mul, ast.Div: _op.truediv,
     ast.USub: _op.neg, ast.UAdd: _op.pos,
     ast.Pow: _op.pow, ast.Mod: _op.mod,
 }
+
+# Python 关键字和内置常量，不作为字段引用处理
+_KEYWORDS = frozenset({'True', 'False', 'None', 'and', 'or', 'not', 'if', 'else'})
 
 
 def _eval_ast(node, ctx: dict):
@@ -3820,50 +3888,72 @@ def _eval_ast(node, ctx: dict):
         raise ValueError(f"不支持的语法节点: {type(node).__name__}")
 
 
-def eval_computed(expr: str, field_values: dict) -> float | None:
+def _resolve_field_value(name: str, field_values: dict, json_obj: dict | None) -> float | None:
+    """解析字段名为数值。查找顺序：
+    1) field_values 精确匹配
+    2) field_values 后缀匹配（'volt' 匹配 key='data.volt'）
+    3) 从原始 JSON 对象直接提取（_extract_json_path）
+    """
+    # 1) 精确匹配
+    if name in field_values and isinstance(field_values[name], (int, float)):
+        return float(field_values[name])
+    # 2) 后缀匹配
+    suffix = f".{name}"
+    for k, v in field_values.items():
+        if isinstance(k, str) and k.endswith(suffix) and isinstance(v, (int, float)):
+            return float(v)
+    # 3) 从 JSON 对象提取
+    if json_obj is not None:
+        val = _extract_json_path(json_obj, name)
+        if val is not None and isinstance(val, (int, float)) and not isinstance(val, bool):
+            return float(val)
+    return None
+
+
+def eval_computed(expr: str, field_values: dict, json_obj: dict | None = None) -> float | None:
     """安全求值计算字段表达式。
 
-    支持: + - * / ** % ( ) 和 $.field_name 引用
-    例: "$.temperature * 9 / 5 + 32"
-    field_values 的 key 是字段路径（可能是 $.prefix 或纯路径），
-    匹配时按完整引用文本查找，再回退到逐段解析。
+    支持: + - * / ** % ( )  引用: field_name 或 data.volt
+    例: "temperature * 9 / 5 + 32"  或  "volt * 100"
+
+    查找顺序：field_values（已跟踪）→ 原始 JSON（无需跟踪源字段）
     """
     if not expr or not expr.strip():
         return None
     try:
-        # 将 $.field_name 替换为安全的变量名
-        replaced = _EXPR_VAR_RE.sub(
-            lambda m: f"__field__{m.group(1).replace('.', '_')}__",
-            expr
-        )
-        # 构建上下文：查找 field_values 中匹配的值
+        # ── 步骤1：替换点号路径（如 data.volt），优先于裸标识符 ──
         ctx = {}
-        for m in _EXPR_VAR_RE.finditer(expr):
-            var_name = f"__field__{m.group(1).replace('.', '_')}__"
-            ref = m.group(1)  # 如 "temperature" 或 "sensor.temp"
-            val = None
+        worked = expr
 
-            # 1) 直接匹配 field_values 的 key（含 $ 前缀的路径）
-            for k in (f"$.{ref}", ref):
-                if k in field_values:
-                    val = field_values[k]
-                    break
+        def _replace_dot(m: re.Match) -> str:
+            name = m.group(1)
+            if name in _KEYWORDS:
+                return name
+            val = _resolve_field_value(name, field_values, json_obj)
+            if val is not None:
+                key = f"__f{len(ctx)}__"
+                ctx[key] = float(val)
+                return key
+            return name  # 未找到，保留原文（后续 AST 解析会报错被捕获）
 
-            # 2) 逐段路径查找（处理嵌套引用 $.sensor.temp）
-            if val is None:
-                parts = ref.split('.')
-                cur = field_values
-                for p in parts:
-                    if isinstance(cur, dict) and p in cur:
-                        cur = cur[p]
-                    else:
-                        cur = None
-                        break
-                val = cur
+        worked = _DOT_PATH_RE.sub(_replace_dot, worked)
 
-            ctx[var_name] = float(val) if val is not None else 0.0
+        # ── 步骤2：替换裸标识符（跳过已替换的 __fN__ 和关键字）──
+        def _replace_bare(m: re.Match) -> str:
+            name = m.group(0)
+            if name in _KEYWORDS or name.startswith('__f'):
+                return name
+            val = _resolve_field_value(name, field_values, json_obj)
+            if val is not None:
+                key = f"__f{len(ctx)}__"
+                ctx[key] = float(val)
+                return key
+            return name
 
-        tree = ast.parse(replaced, mode='eval')
+        worked = _FIELD_RE.sub(_replace_bare, worked)
+
+        # ── 步骤3：AST 安全求值 ──
+        tree = ast.parse(worked, mode='eval')
         result = _eval_ast(tree.body, ctx)
         return float(result) if result is not None else None
     except Exception:
