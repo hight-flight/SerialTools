@@ -691,6 +691,9 @@ class SerialTool(QMainWindow):
         self.text_send.setFont(QFont("Consolas", 11, QFont.Normal))
         self.text_send.setPlaceholderText("在此输入要发送的内容...")
         self.text_send.textChanged.connect(self._validate_hex_input)
+        # 首/尾字段 HEX 校验同步
+        self.text_ota.textChanged.connect(self._validate_hex_input)
+        self.text_tail.textChanged.connect(self._validate_hex_input)
         send_layout.addWidget(self.text_send)
 
         # 发送按钮行
@@ -1720,23 +1723,34 @@ class SerialTool(QMainWindow):
         self.append_text(f"{progress_msg}\n")
 
     def _validate_hex_input(self):
-        """实时校验 HEX 发送输入框格式，无效时显示红色边框提示"""
+        """实时校验 HEX 发送输入框格式（主发送框 + 首/尾字段），无效时显示红色边框提示"""
         if not self.check_hex_send.isChecked():
             self.text_send.setStyleSheet("")
+            self.text_ota.setStyleSheet("")
+            self.text_tail.setStyleSheet("")
             return
-        hex_str = self.text_send.toPlainText().replace(' ', '').replace('\n', '').replace('\r', '')
-        if not hex_str:
-            self.text_send.setStyleSheet("")
+        # 校验主发送框
+        self._validate_hex_field(self.text_send, self.text_send.toPlainText())
+        # 校验首字段
+        self._validate_hex_field(self.text_ota, self.text_ota.text())
+        # 校验尾字段
+        self._validate_hex_field(self.text_tail, self.text_tail.text())
+
+    def _validate_hex_field(self, widget, text):
+        """校验单个字段的 HEX 格式，无效时设置红色边框"""
+        if not text:
+            widget.setStyleSheet("")
             return
+        hex_str = text.replace(' ', '').replace('\n', '').replace('\r', '')
         if len(hex_str) % 2 != 0:
-            self.text_send.setStyleSheet(
+            widget.setStyleSheet(
                 "border: 1px solid red; border-radius: 4px;")
             return
         try:
             bytes.fromhex(hex_str)
-            self.text_send.setStyleSheet("")
+            widget.setStyleSheet("")
         except ValueError:
-            self.text_send.setStyleSheet(
+            widget.setStyleSheet(
                 "border: 1px solid red; border-radius: 4px;")
 
     def send_data(self):
@@ -1803,6 +1817,8 @@ class SerialTool(QMainWindow):
                     except ValueError as e:
                         QMessageBox.warning(self, "格式错误", f"尾字段无效的十六进制数据: {e}")
                         return
+                # 更新显示内容，包含首/尾字段的完整 hex
+                content = ' '.join([f'{b:02X}' for b in data])
             else:
                 # 文本发送模式
                 # 如果勾选了首字段，添加到内容前面
@@ -1836,7 +1852,8 @@ class SerialTool(QMainWindow):
                         checksum_hex = ' '.join([f'{byte:02X}' for byte in checksum])
                         self.append_text(f"[发送]: {content}\n")
                         self.append_text(f"[校验]: {checksum_type} = {checksum_hex}\n")
-                        self.append_text(f"[系统]: 已发送 {bytes_sent} 字节（含校验值）\n")
+                        mode_tag = "[HEX] " if self.check_hex_send.isChecked() else ""
+                        self.append_text(f"[系统]: {mode_tag}已发送 {bytes_sent} 字节（含校验值）\n")
                     except serial.SerialException as e:
                         error_msg = f"发送数据失败: {e}"
                         QMessageBox.warning(self, "发送失败", error_msg)
@@ -1851,7 +1868,8 @@ class SerialTool(QMainWindow):
                     self.label_tx_bytes.setText(f"发送字节: {self.tx_bytes}")
                     # 在接收区显示发送的内容，让用户能看到发送状态
                     self.append_text(f"[发送]: {content}\n")
-                    self.append_text(f"[系统]: 已发送 {bytes_sent} 字节\n")
+                    mode_tag = "[HEX] " if self.check_hex_send.isChecked() else ""
+                    self.append_text(f"[系统]: {mode_tag}已发送 {bytes_sent} 字节\n")
                 except serial.SerialException as e:
                     error_msg = f"发送数据失败: {e}"
                     QMessageBox.warning(self, "发送失败", error_msg)
