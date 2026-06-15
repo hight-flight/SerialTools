@@ -1567,6 +1567,12 @@ class SerialTool(QMainWindow):
                 self.batch_thread.stop()
                 self.check_cycle_send.setChecked(False)
                 self.append_text("[系统]: 批量发送已停止\n")
+            # 停止重复发送定时器
+            if hasattr(self, 'repeat_timer') and self.repeat_timer.isActive():
+                self.repeat_timer.stop()
+                self.btn_stop.setEnabled(False)
+                self.check_repeat.setChecked(False)
+                self.spin_interval.setEnabled(False)
             if hasattr(self, 'read_thread') and self.read_thread and self.read_thread.isRunning():
                 try:
                     self.read_thread.stop()
@@ -1737,6 +1743,10 @@ class SerialTool(QMainWindow):
         """发送数据"""
         # 检查串口状态
         if not hasattr(self, 'transport') or not self.transport or not self.transport.is_open:
+            # 如果是重复发送过程中连接断开，静默停止，不再弹窗
+            if self.repeat_timer.isActive():
+                self.stop_repeat()
+                return
             QMessageBox.warning(self, "警告", "请先打开连接！")
             return
 
@@ -1982,7 +1992,11 @@ class SerialTool(QMainWindow):
             # 停止批量发送线程
             if hasattr(self, 'batch_thread') and self.batch_thread.isRunning():
                 self.batch_thread.stop()
-        
+
+            # 停止重复发送定时器
+            if hasattr(self, 'repeat_timer') and self.repeat_timer.isActive():
+                self.repeat_timer.stop()
+
             # 停止接收线程
             if hasattr(self, 'read_thread') and self.read_thread and self.read_thread.isRunning():
                 try:
@@ -2003,7 +2017,13 @@ class SerialTool(QMainWindow):
             if hasattr(self, 'check_cycle_send') and self.check_cycle_send.isChecked():
                 self.check_cycle_send.setChecked(False)
                 self.append_text("[系统]: 批量发送已停止\n")
-            
+
+            # 更新重复发送状态
+            if hasattr(self, 'check_repeat') and self.check_repeat.isChecked():
+                self.check_repeat.setChecked(False)
+                self.btn_stop.setEnabled(False)
+                self.spin_interval.setEnabled(False)
+
             # 更新UI状态
             self._sync_button_text("打开连接")
             self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
