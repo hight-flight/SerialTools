@@ -350,7 +350,8 @@ class SerialTool(QMainWindow):
         self.edit_udp_local_ip = QComboBox()
         self.edit_udp_local_ip.setEditable(True)
         self.edit_udp_local_ip.setFont(QFont("Consolas", 9))
-        self.edit_udp_local_ip.setMinimumWidth(140)
+        self.edit_udp_local_ip.setMinimumWidth(150)
+        self.edit_udp_local_ip.setFixedHeight(26)
         self.edit_udp_local_ip.addItem('0.0.0.0')
         udp_page_layout.addWidget(self.edit_udp_local_ip)
         udp_page_layout.addWidget(QLabel("本地端口:", font=QFont("Microsoft YaHei", 9)))
@@ -359,11 +360,13 @@ class SerialTool(QMainWindow):
         self.edit_udp_local_port.setRange(1, 65535)
         self.edit_udp_local_port.setValue(8080)
         self.edit_udp_local_port.setMaximumWidth(70)
+        self.edit_udp_local_port.setFixedHeight(26)
         udp_page_layout.addWidget(self.edit_udp_local_port)
         udp_page_layout.addWidget(QLabel("远程IP:", font=QFont("Microsoft YaHei", 9)))
         self.edit_udp_remote_ip = QLineEdit()
         self.edit_udp_remote_ip.setFont(QFont("Consolas", 9))
-        self.edit_udp_remote_ip.setMaximumWidth(120)
+        self.edit_udp_remote_ip.setFixedWidth(120)
+        self.edit_udp_remote_ip.setFixedHeight(26)
         self.edit_udp_remote_ip.setText('192.168.1.100')
         udp_page_layout.addWidget(self.edit_udp_remote_ip)
         udp_page_layout.addWidget(QLabel("远程端口:", font=QFont("Microsoft YaHei", 9)))
@@ -372,6 +375,7 @@ class SerialTool(QMainWindow):
         self.edit_udp_remote_port.setRange(1, 65535)
         self.edit_udp_remote_port.setValue(8888)
         self.edit_udp_remote_port.setMaximumWidth(70)
+        self.edit_udp_remote_port.setFixedHeight(26)
         udp_page_layout.addWidget(self.edit_udp_remote_port)
         udp_page_layout.addStretch()
         self.stack_params.addWidget(udp_page)  # index 1
@@ -384,7 +388,8 @@ class SerialTool(QMainWindow):
         tcp_client_page_layout.addWidget(QLabel("远程IP:", font=QFont("Microsoft YaHei", 9)))
         self.edit_tcp_remote_ip = QLineEdit()
         self.edit_tcp_remote_ip.setFont(QFont("Consolas", 9))
-        self.edit_tcp_remote_ip.setMaximumWidth(120)
+        self.edit_tcp_remote_ip.setFixedWidth(120)
+        self.edit_tcp_remote_ip.setFixedHeight(26)
         self.edit_tcp_remote_ip.setText('192.168.1.100')
         tcp_client_page_layout.addWidget(self.edit_tcp_remote_ip)
         tcp_client_page_layout.addWidget(QLabel("远程端口:", font=QFont("Microsoft YaHei", 9)))
@@ -393,6 +398,7 @@ class SerialTool(QMainWindow):
         self.edit_tcp_remote_port.setRange(1, 65535)
         self.edit_tcp_remote_port.setValue(8888)
         self.edit_tcp_remote_port.setMaximumWidth(70)
+        self.edit_tcp_remote_port.setFixedHeight(26)
         tcp_client_page_layout.addWidget(self.edit_tcp_remote_port)
         tcp_client_page_layout.addStretch()
         self.stack_params.addWidget(tcp_client_page)  # index 2
@@ -406,7 +412,8 @@ class SerialTool(QMainWindow):
         self.edit_tcp_server_local_ip = QComboBox()
         self.edit_tcp_server_local_ip.setEditable(True)
         self.edit_tcp_server_local_ip.setFont(QFont("Consolas", 9))
-        self.edit_tcp_server_local_ip.setMinimumWidth(140)
+        self.edit_tcp_server_local_ip.setMinimumWidth(150)
+        self.edit_tcp_server_local_ip.setFixedHeight(26)
         self.edit_tcp_server_local_ip.addItem('0.0.0.0')
         tcp_server_page_layout.addWidget(self.edit_tcp_server_local_ip)
         tcp_server_page_layout.addWidget(QLabel("本地端口:", font=QFont("Microsoft YaHei", 9)))
@@ -415,6 +422,7 @@ class SerialTool(QMainWindow):
         self.edit_tcp_server_local_port.setRange(1, 65535)
         self.edit_tcp_server_local_port.setValue(8888)
         self.edit_tcp_server_local_port.setMaximumWidth(70)
+        self.edit_tcp_server_local_port.setFixedHeight(26)
         tcp_server_page_layout.addWidget(self.edit_tcp_server_local_port)
         tcp_server_page_layout.addStretch()
         self.stack_params.addWidget(tcp_server_page)  # index 3
@@ -436,6 +444,7 @@ class SerialTool(QMainWindow):
         self.line_edit_save_path.setText(self.save_directory)
         self.line_edit_save_path.setFont(QFont("Consolas", 9))
         self.line_edit_save_path.setMaximumWidth(240)
+        self.line_edit_save_path.setFixedHeight(26)
         self.params_row.addWidget(self.line_edit_save_path)
         self.btn_browse_path = QPushButton("浏览")
         self.btn_browse_path.setMinimumWidth(56)
@@ -467,6 +476,7 @@ class SerialTool(QMainWindow):
         self.edit_filter.setFont(QFont("Consolas", 9))
         self.edit_filter.setPlaceholderText("输入关键字，逗号分隔...")
         self.edit_filter.setMaximumWidth(180)
+        self.edit_filter.setFixedHeight(26)
         self.edit_filter.setEnabled(False)
         self.edit_filter.textChanged.connect(self.update_filter_text)
         display_save_layout.addWidget(self.edit_filter)
@@ -631,6 +641,7 @@ class SerialTool(QMainWindow):
         self.text_ota = QLineEdit()
         self.text_ota.setFont(QFont("Consolas", 9))
         self.text_ota.setPlaceholderText("输入首字段...")
+        self.text_ota.setFixedHeight(26)
         head_field_layout.addWidget(self.text_ota)
         fields_layout.addLayout(head_field_layout)
 
@@ -645,6 +656,7 @@ class SerialTool(QMainWindow):
         self.text_tail = QLineEdit()
         self.text_tail.setFont(QFont("Consolas", 9))
         self.text_tail.setPlaceholderText("输入尾字段...")
+        self.text_tail.setFixedHeight(26)
         tail_field_layout.addWidget(self.text_tail)
         fields_layout.addLayout(tail_field_layout)
 
@@ -654,6 +666,7 @@ class SerialTool(QMainWindow):
         self.file_path_edit.setPlaceholderText("选择要发送的文件...")
         self.file_path_edit.setReadOnly(True)
         self.file_path_edit.setMaximumWidth(180)
+        self.file_path_edit.setFixedHeight(26)
         fields_layout.addWidget(self.file_path_edit)
 
         self.btn_select_file = QPushButton("选择文件")
@@ -1337,6 +1350,12 @@ class SerialTool(QMainWindow):
 
 
     def _sync_button_text(self, text):
+        """同步两套按钮文本，TCP Server 模式下自动翻译为侦听术语"""
+        if self.connection_mode == 'tcp_server':
+            if text == "打开连接":
+                text = "侦听"
+            elif text == "关闭连接":
+                text = "停止侦听"
         self.btn_switch.setText(text)
         self.btn_switch_serial.setText(text)
 
@@ -1365,13 +1384,16 @@ class SerialTool(QMainWindow):
         self.btn_refresh_serial.setVisible(is_serial)
         self.btn_switch.setVisible(not is_serial)
         self.btn_more_settings.setVisible(not is_serial)
-        self.btn_refresh.setVisible(not is_serial)
-        self.btn_refresh.setText("刷新" if is_serial else "获取本机IP")
+        # 刷新/IP按钮：仅 UDP/TCP Server 显示（串口用 btn_refresh_serial；TCP Client 无本地IP字段）
+        has_local_ip = new_mode in ('udp', 'tcp_server')
+        self.btn_refresh.setVisible(has_local_ip)
+        self.btn_refresh.setText("获取本机IP")
         self.btn_more_settings.setEnabled(is_serial)
         self.btn_more_settings_serial.setEnabled(is_serial)
         self.check_rts.setVisible(is_serial)
         self.check_dtr.setVisible(is_serial)
         self.refresh_ports()
+        self._sync_button_text("打开连接")  # 模式切换后刷新按钮文本（TCP Server → "侦听"）
         self.append_text(f"[系统]: 通信模式切换为 {new_mode}\n")
 
     def refresh_ports(self):
@@ -1780,9 +1802,9 @@ class SerialTool(QMainWindow):
                 # 处理回车换行
                 if self.check_newline.isChecked():
                     content = content.rstrip('\r\n')  # 去除末尾的换行符，避免重复添加
-                    data = (content + '\r\n').encode(encoding)
+                    data = (content + '\r\n').encode(encoding, errors='replace')
                 else:
-                    data = content.encode(encoding)
+                    data = content.encode(encoding, errors='replace')
 
             # 计算并添加校验值
             checksum_type = self.combo_checksum.currentText()

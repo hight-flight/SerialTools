@@ -37,7 +37,12 @@ class TransportWrapper:
             if self._client_conn is not None:
                 import select
                 r, _, _ = select.select([self._client_conn], [], [], 0)
-                return 1 if r else 0
+                return 4096 if r else 0  # recv 会自行截断到实际可用字节数
+            # 检查服务端 socket 是否有待处理的新连接（否则 accept() 永远不会被调用）
+            if self._socket is not None:
+                import select
+                r, _, _ = select.select([self._socket], [], [], 0)
+                return 4096 if r else 0  # 触发 read() 调用，内部会先 accept() 再 recv()
             return 0
         else:
             if self._socket is not None:
