@@ -1447,6 +1447,9 @@ class SerialTool(QMainWindow):
             with QMutexLocker(self.serial_mutex):
                 if hasattr(self, 'transport') and self.transport:
                     self.transport.close()
+            # 确保 transport 始终有效（错误处理后可能已被置为 None）
+            if not hasattr(self, 'transport') or self.transport is None:
+                self.transport = TransportWrapper()
             try:
                 connection_desc = ""
                 if mode == 'serial':
@@ -1966,8 +1969,6 @@ class SerialTool(QMainWindow):
                             self.transport.close()
                     except Exception as e:
                         pass
-                    finally:
-                        self.transport = None
         except Exception as e:
             # 锁获取失败，尝试直接关闭连接
             if hasattr(self, 'transport') and self.transport:
@@ -1976,8 +1977,6 @@ class SerialTool(QMainWindow):
                         self.transport.close()
                 except Exception:
                     pass
-                finally:
-                    self.transport = None
         
         # 在锁外停止线程（避免死锁）
         try:
