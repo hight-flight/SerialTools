@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p 'C:\\\\Users\\\\GAOXIANG/.claude/skills/ultraqa')",
+      "Bash(curl -sL https://raw.githubusercontent.com/Yeachan-Heo/oh-my-claudecode/main/skills/ultraqa/SKILL.md -o 'C:\\\\Users\\\\GAOXIANG/.claude/skills/ultraqa/SKILL.md')",
+      "Bash(wc -c)",
+      "Bash(echo 'ultraqa installed: __CMDSUB_OUTPUT__ bytes')"
+    ]
+  }
+}

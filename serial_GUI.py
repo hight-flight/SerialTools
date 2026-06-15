@@ -1,7 +1,6 @@
 import sys
 import os
 import datetime
-import time
 import struct
 import socket
 import shutil
@@ -865,12 +864,12 @@ class SerialTool(QMainWindow):
             hex_layout.setContentsMargins(0, 0, 0, 0)
             self.table_multi_send.setCellWidget(i, 0, hex_widget)
             
-            # 字符串（支持三击编辑按钮内容）
+            # 字符串（可双击编辑）
             string_item = QTableWidgetItem(item[1])
             string_item.setFlags(Qt.ItemIsEditable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.table_multi_send.setItem(i, 1, string_item)
             
-            # 发送按钮（支持三击编辑）
+            # 发送按钮（右键重命名）
             send_btn = QPushButton(item[2])
             send_btn.setFont(QFont("Microsoft YaHei", 9))
             send_btn.setMinimumWidth(70)  # 增加按钮宽度
@@ -2876,7 +2875,7 @@ class SerialTool(QMainWindow):
         
         5. 修改内容：
            - 双击"字符串"列可编辑发送内容
-           - 快速三击"发送"按钮可修改按钮文字（0.6 秒内连击 3 次）
+           - 右键点击"发送"按钮可重命名按钮文字
         
         6. 延时设置：
            - 在"延时(ms)"列设置每次发送后的等待时间
@@ -3238,27 +3237,18 @@ class SerialTool(QMainWindow):
             self.append_text(f"[错误]: 保存多字符项目失败: {e}\n")
 
     def eventFilter(self, obj, event):
-        """事件过滤器：三击按钮编辑文本"""
-        if event.type() == event.MouseButtonPress:
+        """事件过滤器：右键重命名按钮文本"""
+        if event.type() == event.MouseButtonPress and event.button() == Qt.RightButton:
             if obj.objectName().startswith("btn_"):
-                key = f'_tc_{obj.objectName()}'
-                now = time.time()
-                last = getattr(self, key, (0, 0))
-                if now - last[0] < 0.6:
-                    count = last[1] + 1
-                else:
-                    count = 1
-                setattr(self, key, (now, count))
-                if count >= 3:
-                    setattr(self, key, (0, 0))
-                    for row in range(self.table_multi_send.rowCount()):
-                        w = self.table_multi_send.cellWidget(row, 2)
-                        if w and w.layout() and w.layout().itemAt(0).widget() == obj:
-                            new_text, ok = QInputDialog.getText(
-                                self, "编辑按钮", "按钮文字:", text=obj.text())
-                            if ok and new_text:
-                                obj.setText(new_text)
-                            break
+                for row in range(self.table_multi_send.rowCount()):
+                    w = self.table_multi_send.cellWidget(row, 2)
+                    if w and w.layout() and w.layout().itemAt(0).widget() == obj:
+                        new_text, ok = QInputDialog.getText(
+                            self, "重命名按钮", "按钮文字:", text=obj.text())
+                        if ok and new_text:
+                            obj.setText(new_text)
+                        break
+                return True  # 消费右键事件，不继续传播
         return super().eventFilter(obj, event)
     
 
@@ -3394,8 +3384,7 @@ class SerialTool(QMainWindow):
                 send_btn.setMinimumWidth(70)
                 send_btn.clicked.connect(self.on_send_multi_btn_clicked)
                 send_btn.setObjectName(f"btn_{i}")
-                # 安装事件过滤器来处理双击事件
-                ""
+                send_btn.installEventFilter(self)
                 send_widget = QWidget()
                 send_layout = QHBoxLayout(send_widget)
                 send_layout.addWidget(send_btn)

@@ -26,7 +26,7 @@
         {
             "hex": false,
             "string": "help",
-            "button_text": "无注释",
+            "button_text": "帮助",
             "delay": 2000,
             "order": "1"
         },
@@ -40,7 +40,7 @@
         {
             "hex": false,
             "string": "4",
-            "button_text": "无注释",
+            "button_text": "44",
             "delay": 1000,
             "order": "0"
         }
