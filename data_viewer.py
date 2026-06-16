@@ -3610,7 +3610,7 @@ class JsonViewerDialog(QDialog):
                 'is_computed': json.dumps({p: e.get('is_computed', False) for p, e in tracked.items()}),
                 'expressions': json.dumps({p: e.get('expression', '') for p, e in tracked.items()}),
             }
-            with open('json_viewer.ini', 'w', encoding='utf-8') as f:
+            with open('data_viewer.ini', 'w', encoding='utf-8') as f:
                 ini.write(f)
         except Exception:
             pass
@@ -3619,7 +3619,7 @@ class JsonViewerDialog(QDialog):
         try:
             import configparser
             ini = configparser.ConfigParser()
-            if not ini.read('json_viewer.ini'):
+            if not ini.read('data_viewer.ini'):
                 return
             if 'layout' in ini:
                 h = QByteArray.fromHex(ini['layout']['splitter_h'].encode('utf-8'))

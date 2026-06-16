@@ -16,13 +16,13 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint
 from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon
 
-from json_viewer import JsonViewerDialog
 from dialogs import (show_crc_calculator, show_hex_converter,
                          show_serial_monitor, show_usage_dialog,
                          show_about_dialog)
 from theme import THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, VERSION
 from transport import TransportWrapper, TransportReadThread
-from ota_center import OTAControlCenter
+# 注意：JsonViewerDialog 和 OTAControlCenter 改为延迟导入（懒加载），
+# 避免启动时加载 pyqtgraph/numpy/http.server 等重型依赖，显著加快 exe 首次启动速度。
 
 # --- 文件操作工作类 ---
 class WorkerSignals(QObject):
@@ -221,7 +221,7 @@ class SerialTool(QMainWindow):
         act_modbus.triggered.connect(self.modbus_tool)
         tool_menu.addAction(act_modbus)
         act_json = QAction("数据分析面板(&J)", self)
-        act_json.triggered.connect(self.json_viewer)
+        act_json.triggered.connect(self.data_viewer)
         tool_menu.addAction(act_json)
         tool_menu.addSeparator()
         act_ota = QAction("OTA 升级控制中心(&O)", self)
@@ -2642,18 +2642,6 @@ class SerialTool(QMainWindow):
             except Exception as e:
                 self.append_text(f"[错误]: 设置RTS/DTR失败: {str(e)}\n")
 
-    def _old_update_rts_dtr_replaced(self):
-        """更新RTS和DTR状态"""
-        if hasattr(self, 'transport') and self.transport and self.transport.is_open:
-            try:
-                # 设置RTS状态
-                self.transport.rts = self.check_rts.isChecked()
-                # 设置DTR状态
-                self.transport.dtr = self.check_dtr.isChecked()
-            except Exception as e:
-                error_msg = f"设置RTS/DTR失败: {str(e)}"
-                self.append_text(f"[错误]: {error_msg}\n")
-    
     def calculate_checksum(self, data, checksum_type):
         """计算校验值"""
         if checksum_type == "None":
@@ -4125,8 +4113,9 @@ class SerialTool(QMainWindow):
         dialog.setAttribute(Qt.WA_DeleteOnClose)
         dialog.show()
 
-    def json_viewer(self):
+    def data_viewer(self):
         """数据分析面板：监听串口/网络流，实时捕获和可视化 JSON 数据"""
+        from data_viewer import JsonViewerDialog  # 懒加载，避免启动时导入 pyqtgraph/numpy
         if hasattr(self, '_json_viewer_dlg') and self._json_viewer_dlg is not None:
             try:
                 self._json_viewer_dlg.set_theme(is_dark=(self.current_theme == 'dark'))
@@ -4175,6 +4164,7 @@ class SerialTool(QMainWindow):
 
     def open_ota_center(self):
         """打开 OTA 升级控制中心对话框。"""
+        from ota_center import OTAControlCenter  # 懒加载，避免启动时导入 http.server 等重型依赖
         # 如果已有实例则激活并显示，否则创建新实例
         if hasattr(self, '_ota_dialog') and self._ota_dialog is not None:
             try:

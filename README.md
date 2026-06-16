@@ -89,7 +89,7 @@ SerialTools/
 ├── transport.py              # 多协议通信模块（串口/UDP/TCP）
 ├── dialogs.py               # 对话框组件
 ├── ota_center.py            # OTA 远程升级中心
-├── json_viewer.py           # JSON 可视化查看器
+├── data_viewer.py            # 数据分析面板
 ├── theme.py                 # 主题管理
 ├── serial_config.json       # 配置文件
 ├── requirements.txt         # 依赖列表
