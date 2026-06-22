@@ -45,6 +45,12 @@
             "order": "0"
         }
     ],
+    "send_history": [
+        "qwq32232",
+        "11",
+        "qwq11",
+        "qwq"
+    ],
     "data_bits": "8",
     "stop_bits": "1",
     "parity": "None",

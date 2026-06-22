@@ -104,6 +104,10 @@ class SerialTool(QMainWindow):
         self.stop_file_send = False  # 文件发送取消标志
         self.selected_file_path = None  # 待发送文件路径
 
+        # 发送历史相关
+        self.send_history = deque(maxlen=30)  # 发送历史记录，最多30条
+        self.history_index = -1               # 当前浏览位置，-1表示未在历史中
+
         # 筛选相关
         self.filter_enabled = False   # 筛选开关
         self.filter_text = ""         # 筛选关键字
@@ -691,6 +695,9 @@ class SerialTool(QMainWindow):
         self.text_send.setFont(QFont("Consolas", 11, QFont.Normal))
         self.text_send.setPlaceholderText("在此输入要发送的内容...")
         self.text_send.textChanged.connect(self._validate_hex_input)
+        self.text_send.textChanged.connect(self._on_send_text_changed)
+        self.text_send.installEventFilter(self)  # 捕获上下键实现历史记录导航
+        self._setting_history_text = False       # 标志：是否正在由历史导航设置文本
         # 首/尾字段 HEX 校验同步
         self.text_ota.textChanged.connect(self._validate_hex_input)
         self.text_tail.textChanged.connect(self._validate_hex_input)
@@ -1874,7 +1881,13 @@ class SerialTool(QMainWindow):
                     error_msg = f"发送数据失败: {e}"
                     QMessageBox.warning(self, "发送失败", error_msg)
                     self.append_text(f"[错误]: {error_msg}\n")
-            
+
+            # 记录发送历史（去重连续相同条目）
+            raw_text = self.text_send.toPlainText()
+            if raw_text and (len(self.send_history) == 0 or self.send_history[0] != raw_text):
+                self.send_history.appendleft(raw_text)
+            self.history_index = -1  # 发送后重置历史浏览位置
+
             # 处理重复发送
             if self.check_repeat.isChecked():
                 # 只有在定时器未运行时才启动，避免重复启动
@@ -3263,7 +3276,8 @@ class SerialTool(QMainWindow):
             self.append_text(f"[错误]: 保存多字符项目失败: {e}\n")
 
     def eventFilter(self, obj, event):
-        """事件过滤器：右键重命名按钮文本"""
+        """事件过滤器：右键重命名按钮文本 / 发送栏上下键历史记录导航"""
+        # ---- 右键重命名多字符发送按钮 ----
         if event.type() == event.MouseButtonPress and event.button() == Qt.RightButton:
             if obj.objectName().startswith("btn_"):
                 for row in range(self.table_multi_send.rowCount()):
@@ -3275,11 +3289,74 @@ class SerialTool(QMainWindow):
                             obj.setText(new_text)
                         break
                 return True  # 消费右键事件，不继续传播
+
+        # ---- 发送栏上下键历史记录导航 ----
+        if obj is self.text_send:
+            if event.type() == event.KeyPress:
+                key = event.key()
+                if key == Qt.Key_Up:
+                    self._navigate_history(-1)  # 向上 = 更早的历史
+                    return True
+                elif key == Qt.Key_Down:
+                    self._navigate_history(1)   # 向下 = 更新的历史
+                    return True
+
         return super().eventFilter(obj, event)
-    
+
+    def _navigate_history(self, direction):
+        """在发送历史记录中导航。
+        direction: -1 = 上键（更早的记录），1 = 下键（更新的记录）
+        """
+        total = len(self.send_history)
+        if total == 0:
+            return
+
+        if direction == -1:  # 上键 → 更早的记录
+            if self.history_index == -1:
+                # 首次进入历史：保存当前文本作为草稿
+                self._draft_text = self.text_send.toPlainText()
+                self.history_index = 0
+            elif self.history_index < total - 1:
+                self.history_index += 1
+            else:
+                return  # 已到最早记录，不再变化
+        elif direction == 1:  # 下键 → 更新的记录
+            if self.history_index == -1:
+                return  # 未在历史模式，下键无操作
+            elif self.history_index > 0:
+                self.history_index -= 1
+            else:
+                # history_index == 0，退出历史模式，恢复草稿
+                self.history_index = -1
+                self._setting_history_text = True
+                self.text_send.setPlainText(self._draft_text)
+                self._setting_history_text = False
+                # 将光标移到末尾
+                cursor = self.text_send.textCursor()
+                cursor.movePosition(cursor.End)
+                self.text_send.setTextCursor(cursor)
+                return
+        else:
+            return
+
+        # 设置历史文本
+        history_item = self.send_history[self.history_index]
+        self._setting_history_text = True
+        self.text_send.setPlainText(history_item)
+        self._setting_history_text = False
+        # 将光标移到末尾
+        cursor = self.text_send.textCursor()
+        cursor.movePosition(cursor.End)
+        self.text_send.setTextCursor(cursor)
+
+    def _on_send_text_changed(self):
+        """发送栏文本变化回调：用户手动编辑时退出历史导航模式"""
+        if not self._setting_history_text and self.history_index != -1:
+            self.history_index = -1
 
 
-    
+
+
     def _try_decode_csv(self, file_path):
         """尝试用多种编码读取CSV文件，返回(文本内容, 使用的编码)或(None, None)"""
         import csv
@@ -4769,6 +4846,13 @@ class SerialTool(QMainWindow):
                         order_item.setTextAlignment(Qt.AlignCenter)  # 文本居中显示
                         self.table_multi_send.setItem(row, 4, order_item)
                 
+                # 加载发送历史记录
+                if 'send_history' in config and isinstance(config['send_history'], list):
+                    for item in config['send_history']:
+                        if isinstance(item, str) and item.strip():
+                            self.send_history.append(item)
+                    # 历史记录已限制为 maxlen=30 条
+
                 # 加载主题设置
                 need_apply_theme = False
                 if 'theme' in config and config['theme'] in ('light', 'dark'):
@@ -4873,6 +4957,7 @@ class SerialTool(QMainWindow):
             'head_field_enabled': self.check_head_field.isChecked(),
             'tail_field_enabled': self.check_tail_field.isChecked(),
             'multi_items': multi_items,
+            'send_history': list(self.send_history),  # 发送历史记录（最多30条）
             # 更多串口设置参数
             'data_bits': getattr(self, 'serial_data_bits', '8'),
             'stop_bits': getattr(self, 'serial_stop_bits', '1'),
