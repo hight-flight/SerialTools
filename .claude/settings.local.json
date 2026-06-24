@@ -13,7 +13,9 @@
       "Read(//c/Program Files/Inno Setup 6/**)",
       "Bash(where ISCC)",
       "Bash(.venv/Scripts/python.exe -c \"from theme import VERSION; print\\('VERSION=',VERSION\\)\")",
-      "Bash(.venv/Scripts/python.exe -c ' *)"
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('serial_GUI.py',encoding='utf-8'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(timeout 8 .venv/Scripts/python.exe -u serial_GUI.py)"
     ]
   }
 }

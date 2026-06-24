@@ -46,6 +46,9 @@
         }
     ],
     "send_history": [
+        "help",
+        "ota http://172.16.3.99:8099/dnode_v0.3.275.bin",
+        "version",
         "qwq32232",
         "11",
         "qwq11",
@@ -66,6 +69,6 @@
             "C:/Users/GAOXIANG/Desktop/SerialTool/ota_serve/dnode_v0.3.275.bin",
             "C:/Users/GAOXIANG/Desktop/SerialTool/ota_serve/dnode_v0.3.276.bin"
         ],
-        "last_ip": "192.168.5.58"
+        "last_ip": "172.16.3.99"
     }
 }

@@ -8,3 +8,4 @@ serial_config.json
 .vscode/
 _arrow_dark.png
 _arrow_light.png
+ota_serve/dnode_v0.3.275.bin

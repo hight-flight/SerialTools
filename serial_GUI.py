@@ -5,6 +5,8 @@ import struct
 import socket
 import shutil
 import json
+import re
+import time
 import serial
 import serial.tools.list_ports
 from collections import deque
@@ -13,7 +15,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTextEdit, QCheckBox, QMessageBox, QSplitter, QSpinBox, QLineEdit, QGroupBox, QDialog, QFormLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog, QSizePolicy,
                              QAction, QTabWidget, QRadioButton, QButtonGroup, QStackedWidget)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint, QEvent
 from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon
 
 from dialogs import (show_crc_calculator, show_hex_converter,
@@ -23,6 +25,11 @@ from theme import THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, VERSION
 from transport import TransportWrapper, TransportReadThread
 # 注意：JsonViewerDialog 和 OTAControlCenter 改为延迟导入（懒加载），
 # 避免启动时加载 pyqtgraph/numpy/http.server 等重型依赖，显著加快 exe 首次启动速度。
+
+# ANSI 颜色转义序列匹配正则（模块级预编译，避免每次接收数据都重新编译）
+_ANSI_PATTERN = re.compile(r'\x1B(?:\[([0-9;]*)m)?')
+# 控制字符集合（除 \r \n \t 外的 ASCII < 32 字符需转义显示）
+_CONTROL_CHARS_ESCAPE = {chr(i): f'\\x{i:02X}' for i in range(32) if chr(i) not in '\r\n\t'}
 
 # --- 文件操作工作类 ---
 class WorkerSignals(QObject):
@@ -535,6 +542,28 @@ class SerialTool(QMainWindow):
         self.text_recv.setFont(QFont("Consolas", 11, QFont.Normal))
         self.text_recv.setPlaceholderText("等待接收数据…")
         recv_layout.addWidget(self.text_recv)
+
+        # 接收区滚轮跟底控制：用户滚动查看时暂停自动跟底，停止滚动 6 秒后恢复
+        self._recv_user_reading = False  # 用户正在滚动查看（暂停跟底）
+        self._recv_follow_timer = QTimer(self)
+        self._recv_follow_timer.setSingleShot(True)
+        self._recv_follow_timer.setInterval(6000)  # 滚轮静止 6 秒后恢复跟底
+        self._recv_follow_timer.timeout.connect(self._on_recv_follow_resume)
+        self.text_recv.viewport().installEventFilter(self)
+
+        # 接收区显示刷新兜底定时器：数据停止后把节流缓冲区最后一笔也刷出来
+        self._last_display_update_time = 0.0
+        self._pending_display_data = []
+        self._recv_flush_timer = QTimer(self)
+        self._recv_flush_timer.setSingleShot(True)
+        self._recv_flush_timer.setInterval(50)  # 50ms 兜底刷新
+        self._recv_flush_timer.timeout.connect(self._flush_pending_display)
+
+        # 日志定时刷盘定时器：避免每条数据都 fsync 阻塞 UI 线程
+        self._log_fsync_timer = QTimer(self)
+        self._log_fsync_timer.setSingleShot(False)
+        self._log_fsync_timer.setInterval(2000)  # 每 2 秒强制落盘一次
+        self._log_fsync_timer.timeout.connect(self._fsync_log_file)
 
         # 数据统计行（扁平布局，无多余边框）
         stats_layout = QHBoxLayout()
@@ -1059,20 +1088,28 @@ class SerialTool(QMainWindow):
         - "忽略大小写": 大小写不敏感子串匹配
         - "正则": 正则表达式匹配
         - "高亮显示": 不做筛选，始终显示（高亮在 append_text 中处理）
+
+        HEX 显示模式下，行内容是 "48 65 6C" 形式的十六进制串，
+        会把行和关键字都去掉空格再匹配，让用户输入 "4865" 或 "48 65" 都能命中。
         """
         if self.filter_mode == "高亮显示":
             return True
-        import re
         keywords = [kw.strip() for kw in self.filter_text.split(',') if kw.strip()]
         if not keywords:
             return True
 
+        # HEX 模式下规范化（去空格），便于用连续 hex 关键字匹配
+        is_hex = self.check_hex_recv.isChecked()
+        match_line = line.replace(' ', '') if is_hex else line
+
         for kw in keywords:
             if self.filter_mode == "包含":
-                if kw in line:
+                target_kw = kw.replace(' ', '') if is_hex else kw
+                if target_kw in match_line:
                     return True
             elif self.filter_mode == "忽略大小写":
-                if kw.lower() in line.lower():
+                target_kw = kw.replace(' ', '') if is_hex else kw
+                if target_kw.lower() in match_line.lower():
                     return True
             elif self.filter_mode == "正则":
                 try:
@@ -1928,34 +1965,25 @@ class SerialTool(QMainWindow):
 
     def process_ansi_colors(self, text):
         """处理ANSI颜色转义序列，返回文本和格式信息"""
-        import re
         # 使用主题感知的 ANSI 颜色映射
         ansi_colors = self.theme_colors['ansi_fg']
         ansi_bg_colors = self.theme_colors['ansi_bg']
-        
+        default_fg = self.theme_colors['ansi_default_fg']
+
         # 处理ANSI转义序列
         result = []
         current_format = QTextCharFormat()
-        current_format.setForeground(self.theme_colors['ansi_default_fg'])  # 根据主题设置默认前景色
-        
-        # 使用正则表达式匹配ANSI转义序列和单独的\x1B字符
-        ansi_pattern = re.compile(r'\x1B(?:\[([0-9;]*)m)?')
-        
+        current_format.setForeground(default_fg)  # 根据主题设置默认前景色
+
         last_end = 0
-        for match in ansi_pattern.finditer(text):
+        for match in _ANSI_PATTERN.finditer(text):
             # 添加匹配前的文本
             plain_text = text[last_end:match.start()]
             if plain_text:
-                # 处理控制字符
-                processed_plain = ''
-                for char in plain_text:
-                    if ord(char) < 32 and char not in '\r\n\t':
-                        # 对于其他控制字符，显示为 \xXX 形式
-                        processed_plain += f'\\x{ord(char):02X}'
-                    else:
-                        processed_plain += char
+                # 处理控制字符（用列表+join 替代字符串拼接，避免 O(n²)）
+                processed_plain = self._escape_control_chars(plain_text)
                 result.append((processed_plain, QTextCharFormat(current_format)))
-            
+
             # 处理ANSI代码
             codes = match.group(1)
             if codes:
@@ -1965,7 +1993,7 @@ class SerialTool(QMainWindow):
                     if code == '0':
                         # 重置所有样式
                         current_format = QTextCharFormat()
-                        current_format.setForeground(self.theme_colors['ansi_default_fg'])  # 重置为当前主题默认前景色
+                        current_format.setForeground(default_fg)  # 重置为当前主题默认前景色
                     elif code in ansi_colors:
                         current_format.setForeground(ansi_colors[code])
                     elif code in ansi_bg_colors:
@@ -1977,21 +2005,36 @@ class SerialTool(QMainWindow):
             else:
                 # 单独的\x1B字符
                 result.append((f'\\x1B', QTextCharFormat(current_format)))
-            
+
             last_end = match.end()
-        
+
         # 添加剩余的文本
         remaining_text = text[last_end:]
         if remaining_text:
-            processed_remaining = ''
-            for char in remaining_text:
-                if ord(char) < 32 and char not in '\r\n\t':
-                    processed_remaining += f'\\x{ord(char):02X}'
-                else:
-                    processed_remaining += char
+            processed_remaining = self._escape_control_chars(remaining_text)
             result.append((processed_remaining, QTextCharFormat(current_format)))
-        
+
         return result
+
+    @staticmethod
+    def _escape_control_chars(text):
+        """把 ASCII 控制字符（除 \\r \\n \\t）转义为 \\xXX 形式。
+
+        使用字典查表 + 列表拼接，比逐字符 += 字符串拼接快得多（避免 O(n²)）。
+        """
+        if not text:
+            return text
+        # 快速路径：不含控制字符时直接返回原串
+        if all(ord(c) >= 32 or c in '\r\n\t' for c in text):
+            return text
+        parts = []
+        for char in text:
+            esc = _CONTROL_CHARS_ESCAPE.get(char)
+            if esc is not None:
+                parts.append(esc)
+            else:
+                parts.append(char)
+        return ''.join(parts)
 
     def handle_read_error(self, error_msg):
         """处理传输读取错误"""
@@ -2077,6 +2120,15 @@ class SerialTool(QMainWindow):
         # 停止定时器
         if hasattr(self, 'repeat_timer') and self.repeat_timer and self.repeat_timer.isActive():
             self.repeat_timer.stop()
+        # 停止日志定时刷盘定时器，并做最后一次落盘
+        if hasattr(self, '_log_fsync_timer') and self._log_fsync_timer:
+            self._log_fsync_timer.stop()
+        self._fsync_log_file()
+        # 停止接收区刷新/跟底相关定时器
+        if hasattr(self, '_recv_flush_timer') and self._recv_flush_timer:
+            self._recv_flush_timer.stop()
+        if hasattr(self, '_recv_follow_timer') and self._recv_follow_timer:
+            self._recv_follow_timer.stop()
         
         # 停止批量发送线程（在锁外停止，避免死锁）
         if hasattr(self, 'batch_thread') and self.batch_thread and self.batch_thread.isRunning():
@@ -2152,35 +2204,49 @@ class SerialTool(QMainWindow):
         # 接受关闭事件
         event.accept()
 
+    def _build_log_entry(self, timestamp, payload):
+        """截断 payload 并拼接时间戳，返回 (截断后的payload, log_entry)。
+
+        截断时扣除时间戳长度，使最终 log_entry 真正满足 MAX_LOG_ENTRY_LENGTH 上限
+        （原实现只截断 payload，拼接时间戳后仍会超限）。返回的截断 payload 供显示使用，
+        保证显示与日志内容一致。
+        """
+        suffix = "...(截断)"
+        max_payload = self.MAX_LOG_ENTRY_LENGTH - len(timestamp)
+        if len(payload) > max_payload:
+            cut = max(max_payload - len(suffix), 0)
+            payload = payload[:cut] + suffix
+        return payload, timestamp + payload
+
     def handle_receive_data(self, data):
         """处理接收到的数据"""
         try:
+            # 数据包计数（整个数据包计一次；字节数在下方/分段处理中累加）
+            self.packets += 1
+            self.label_packets.setText(f"数据包: {self.packets}")
+
+            # 统一取一次时间戳，分段处理时复用，避免同一数据包出现多个不同时间戳
+            timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S.%f] ")
+
             # 限制单次处理的数据大小，防止缓冲区溢出
             max_single_process = 1024 * 1024  # 1MB
             if len(data) > max_single_process:
-                # 大数据包分段处理
+                # 大数据包分段处理（每段都会显示到界面并累加字节数）
                 chunks = [data[i:i+max_single_process] for i in range(0, len(data), max_single_process)]
                 for chunk in chunks:
-                    self._handle_receive_data_chunk(chunk)
+                    self._handle_receive_data_chunk(chunk, timestamp)
                 return
-            
-            # 更新接收数据统计
+
+            # 更新接收字节统计
             self.rx_bytes += len(data)
-            self.packets += 1
             self.label_rx_bytes.setText(f"接收字节: {self.rx_bytes}")
-            self.label_packets.setText(f"数据包: {self.packets}")
-            
-            # 获取当前时间戳
-            timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S.%f] ")
             
             if self.check_hex_recv.isChecked():
                 # HEX 显示
                 hex_str = ' '.join([f'{byte:02X}' for byte in data])
-                # 限制HEX字符串长度
-                if len(hex_str) > self.MAX_LOG_ENTRY_LENGTH:
-                    hex_str = hex_str[:self.MAX_LOG_ENTRY_LENGTH] + "...(截断)"
+                # 拼接并限制整体日志长度（含时间戳），返回截断后的 hex_str 供显示
+                hex_str, log_entry = self._build_log_entry(timestamp, hex_str)
                 # 添加到日志缓冲区（deque自动管理大小）
-                log_entry = timestamp + hex_str
                 self.log_buffer.append(log_entry)
                 
                 # 显示到界面（限制频率）
@@ -2200,11 +2266,9 @@ class SerialTool(QMainWindow):
                     encoding = 'UTF-8'
                     text = data.decode('utf-8', errors='replace')
                 
-                # 限制文本长度
-                if len(text) > self.MAX_LOG_ENTRY_LENGTH:
-                    text = text[:self.MAX_LOG_ENTRY_LENGTH] + "...(截断)"
+                # 拼接并限制整体日志长度（含时间戳），返回截断后的 text 供显示
+                text, log_entry = self._build_log_entry(timestamp, text)
                 # 添加到日志缓冲区（deque自动管理大小）
-                log_entry = timestamp + text
                 self.log_buffer.append(log_entry)
                 
                 # 显示到界面（限制频率）
@@ -2225,21 +2289,22 @@ class SerialTool(QMainWindow):
             if self.auto_save_enabled and self.current_log_file:
                 self.auto_save_data(log_entry + '\n')
     
-    def _handle_receive_data_chunk(self, data):
-        """处理数据块（用于大数据包分段处理）"""
+    def _handle_receive_data_chunk(self, data, timestamp):
+        """处理数据块（用于大数据包分段处理）。
+
+        timestamp 由调用方传入并复用，保证同一数据包各分段时间戳一致。
+        """
         try:
             # 更新接收数据统计
             self.rx_bytes += len(data)
             self.label_rx_bytes.setText(f"接收字节: {self.rx_bytes}")
 
-            timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S.%f] ")
-
             if self.check_hex_recv.isChecked():
                 hex_str = ' '.join([f'{byte:02X}' for byte in data])
-                if len(hex_str) > self.MAX_LOG_ENTRY_LENGTH:
-                    hex_str = hex_str[:self.MAX_LOG_ENTRY_LENGTH] + "...(截断)"
-                log_entry = timestamp + hex_str
+                hex_str, log_entry = self._build_log_entry(timestamp, hex_str)
                 self.log_buffer.append(log_entry)
+                # 显示到界面（与主路径一致，限制频率）
+                self._update_receive_display(hex_str, timestamp)
                 if self.auto_save_enabled and self.current_log_file:
                     self.auto_save_data(log_entry + '\n')
             else:
@@ -2248,95 +2313,222 @@ class SerialTool(QMainWindow):
                     text = data.decode(encoding, errors='replace')
                 except LookupError:
                     text = data.decode('utf-8', errors='replace')
-                if len(text) > self.MAX_LOG_ENTRY_LENGTH:
-                    text = text[:self.MAX_LOG_ENTRY_LENGTH] + "...(截断)"
-                log_entry = timestamp + text
+                text, log_entry = self._build_log_entry(timestamp, text)
                 self.log_buffer.append(log_entry)
+                # 显示到界面（与主路径一致，限制频率）
+                self._update_receive_display(text, timestamp)
                 if self.auto_save_enabled and self.current_log_file:
                     self.auto_save_data(log_entry + '\n')
-        except Exception:
-            pass
+        except Exception as e:
+            # 分段处理异常不再静默吞掉，记录到日志缓冲区并提示用户，
+            # 与主路径行为保持一致，便于排查数据丢失问题
+            error_msg = f"[分段解码错误]: {e}"
+            log_entry = timestamp + error_msg
+            self.log_buffer.append(log_entry)
+            self.append_text(error_msg)
+            if self.auto_save_enabled and self.current_log_file:
+                self.auto_save_data(log_entry + '\n')
     
     def _update_receive_display(self, text, timestamp):
         """更新接收区显示（限制更新频率，缓冲数据避免丢失）"""
-        import time
-        current_time = time.time()
-
-        if not hasattr(self, '_last_display_update_time'):
-            self._last_display_update_time = 0
-        if not hasattr(self, '_pending_display_data'):
-            self._pending_display_data = []
-
         # 将数据添加到待显示缓冲区
         self._pending_display_data.append((text, timestamp))
+        # 启动兜底定时器：即使数据停止，最后一笔也能在 50ms 内刷出
+        self._recv_flush_timer.start()
 
         # 至少间隔20ms更新一次UI（与读取线程20ms休眠匹配）
-        if current_time - self._last_display_update_time < 0.02:
+        if time.time() - self._last_display_update_time < 0.02:
             return
+        self._flush_pending_display()
 
-        self._last_display_update_time = current_time
+    @staticmethod
+    def _utf16_len(s):
+        """返回字符串在 Qt 文档中占用的 QChar 数（UTF-16 code unit 数）。
 
-        # 清空待显示缓冲区并合并显示
+        Qt 光标位置按 UTF-16 code unit 计数，BMP 外字符（>= 0x10000，
+        如 emoji、部分 CJK 扩展字）占 2 个 code unit，其余占 1 个。
+        直接用 Python len() 会导致高亮位置偏移。
+        """
+        return sum(2 if ord(c) >= 0x10000 else 1 for c in s)
+
+    def _apply_keyword_highlight(self, cursor, start_pos, text, hl_fmt):
+        """对 text 中出现的筛选关键字叠加背景色高亮（不区分大小写）。
+
+        位置计算使用 UTF-16 code unit 长度，与 Qt 光标位置一致，
+        避免 BMP 外字符导致高亮偏移。
+        """
+        if not text:
+            return
+        keywords = [kw.strip() for kw in self.filter_text.split(',') if kw.strip()]
+        if not keywords:
+            return
+        text_lower = text.lower()
+        for kw in keywords:
+            kw_lower = kw.lower()
+            kw_qt_len = self._utf16_len(kw)
+            offset = 0
+            while True:
+                idx = text_lower.find(kw_lower, offset)
+                if idx == -1:
+                    break
+                prefix_qt_len = self._utf16_len(text[:idx])
+                cursor.setPosition(start_pos + prefix_qt_len)
+                cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, kw_qt_len)
+                cursor.mergeCharFormat(hl_fmt)
+                offset = idx + len(kw)
+
+    def _flush_pending_display(self):
+        """把节流缓冲区里的待显示数据合并渲染到接收区。
+
+        使用单一编辑块（beginEditBlock/endEditBlock）批量插入所有待显示行，
+        循环内不再单独裁剪/滚动，循环结束后统一裁剪一次 + 滚动一次，
+        避免节流失效和界面卡顿。
+        """
+        if not self._pending_display_data:
+            return
+        self._last_display_update_time = time.time()
         pending = self._pending_display_data
         self._pending_display_data = []
 
-        for text_item, ts_item in pending:
-            # 按换行符分割数据，确保每行一个时间戳
-            # 先去除\r（串口设备常用\r\n结尾），再分割
-            lines = text_item.replace('\r', '').split('\n')
+        show_timestamp = self.act_timestamp.isChecked()
+        highlight_mode = self.filter_enabled and self.filter_mode == "高亮显示"
+        tc = self.theme_colors
+        hl_fmt = QTextCharFormat()
+        hl_fmt.setBackground(tc['highlight_bg'])
 
-            for i, line in enumerate(lines):
-                # 跳过空行（连续换行或开头换行的情况）
-                if not line:
-                    continue
+        cursor = self.text_recv.textCursor()
+        cursor.beginEditBlock()
+        try:
+            for text_item, ts_item in pending:
+                # 按换行符分割数据，确保每行一个时间戳
+                # 先去除\r（串口设备常用\r\n结尾），再分割
+                lines = text_item.replace('\r', '').split('\n')
+                line_count = len(lines)
 
-                # 筛选过滤：仅显示匹配关键字的行（不影响日志记录和自动保存）
-                if self.filter_enabled and self.filter_text:
-                    if not self._match_filter(line):
+                for i, line in enumerate(lines):
+                    # 跳过空行（连续换行或开头换行的情况）
+                    if not line:
                         continue
 
-                # 处理ANSI颜色转义序列和控制字符
-                formatted_segments = self.process_ansi_colors(line)
+                    # 筛选过滤：仅显示匹配关键字的行（不影响日志记录和自动保存）
+                    # 高亮显示模式下 _match_filter 恒为 True，跳过调用以省时
+                    if self.filter_enabled and self.filter_text and not highlight_mode:
+                        if not self._match_filter(line):
+                            continue
 
-                # 显示到界面
-                if self.act_timestamp.isChecked():
-                    # 获取光标位置
-                    cursor = self.text_recv.textCursor()
-                    cursor.movePosition(QTextCursor.End)
-                    
-                    # 检查是否已经在行首（避免重复换行）
-                    if cursor.atBlockStart():
-                        # 如果已经在新行开头，直接添加时间戳
-                        cursor.insertText(ts_item)
-                    else:
-                        # 如果不在行首，先换行再添加时间戳
-                        cursor.insertText('\n' + ts_item)
+                    # 处理ANSI颜色转义序列和控制字符
+                    formatted_segments = self.process_ansi_colors(line)
 
-                # 再添加格式化文本
-                self.append_formatted_text(formatted_segments)
-                
-                # 如果不是最后一行，添加换行符
-                if i < len(lines) - 1 and line:
-                    cursor = self.text_recv.textCursor()
                     cursor.movePosition(QTextCursor.End)
-                    cursor.insertText('\n')
+
+                    # 时间戳
+                    if show_timestamp:
+                        if cursor.atBlockStart():
+                            cursor.insertText(ts_item)
+                        else:
+                            cursor.insertText('\n' + ts_item)
+                        cursor.movePosition(QTextCursor.End)
+
+                    # 记录本行格式化文本起始位置（用于高亮）
+                    hl_start = cursor.position() if highlight_mode else 0
+
+                    # 插入格式化文本段
+                    for seg_text, seg_fmt in formatted_segments:
+                        cursor.movePosition(QTextCursor.End)
+                        cursor.setCharFormat(seg_fmt)
+                        cursor.insertText(seg_text)
+
+                    # 高亮显示模式：对刚插入的文本叠加背景色
+                    if highlight_mode:
+                        full_text = ''.join(seg_text for seg_text, _ in formatted_segments)
+                        self._apply_keyword_highlight(cursor, hl_start, full_text, hl_fmt)
+
+                    # 如果不是最后一行，添加换行符
+                    if i < line_count - 1 and line:
+                        cursor.movePosition(QTextCursor.End)
+                        cursor.insertText('\n')
+        finally:
+            cursor.endEditBlock()
+
+        # 循环结束后统一裁剪一次 + 滚动一次（避免逐行裁剪/滚动导致节流失效）
+        self._trim_recv_buffer()
+        if not self._recv_user_reading:
+            self.text_recv.ensureCursorVisible()
+            self._recv_auto_scroll_to_bottom()
+
+    def _on_recv_wheel(self, event):
+        """接收区滚轮：向上翻离底部超过阈值时暂停跟底；翻回底部立即恢复。
+
+        阈值取约 3 行（用滚动条 singleStep 估算），避免在最新区随手搓滚轮误触发；
+        查阅中继续滚动会重新计时，滚回底部附近则立即恢复（不必等满 6 秒）。
+        """
+        delta = event.angleDelta().y()            # >0 向上翻（看更早内容）
+        sb = self.text_recv.verticalScrollBar()
+        dist_from_bottom = sb.maximum() - sb.value()
+        line = sb.singleStep() if sb.singleStep() > 0 else 20
+        threshold = max(line * 5, 40)             # 距底部约 5 行以内视为"在底部"
+
+        # 已在底部附近且继续向下滚 → 用户回到最新处，立即恢复跟底
+        if dist_from_bottom <= threshold and delta < 0:
+            self._recv_user_reading = False
+            self._recv_follow_timer.stop()
+            return
+
+        # 向上翻离开底部 → 进入查阅（暂停跟底）；查阅中继续滚动 → 重新计时
+        if delta > 0 or self._recv_user_reading:
+            self._recv_user_reading = True
+            self._recv_follow_timer.start()
+
+    def _on_recv_follow_resume(self):
+        """滚轮静止 6 秒后：恢复自动跟底，并立即刷新到最新内容。"""
+        self._recv_user_reading = False
+        # 查阅期间可能跳过了裁剪，恢复后把行数压回上限再跟底
+        self._trim_recv_buffer(force=True)
+        self._recv_auto_scroll_to_bottom()
+
+    def _recv_auto_scroll_to_bottom(self):
+        """接收区自动跟底：仅在用户未在滚动查看时才滚动到底部。"""
+        if self._recv_user_reading:
+            return
+        sb = self.text_recv.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _trim_recv_buffer(self, force=False):
+        """裁剪接收区旧行，保持行数在上限内。
+
+        用户滚动查阅时跳过裁剪，避免抽走正在看的行；但超过 3 倍硬上限时强制裁剪防 OOM。
+        force=True 时无视查阅状态，把行数压回 MAX_DISPLAY_LINES（用于恢复跟底后清理）。
+        """
+        block_count = self.text_recv.document().blockCount()
+        if block_count < self.MAX_DISPLAY_LINES:
+            return
+        if self._recv_user_reading and not force and block_count < self.MAX_DISPLAY_LINES * 3:
+            return  # 查阅中，保留用户正在看的内容
+        cursor = self.text_recv.textCursor()
+        cursor.beginEditBlock()
+        # 删除前面的10%内容（约500行），保留大部分内容
+        lines_to_remove = max(100, int(self.MAX_DISPLAY_LINES * 0.1))
+        if force:
+            # 强制裁剪：多删一些，把行数压回上限
+            lines_to_remove = max(lines_to_remove, block_count - self.MAX_DISPLAY_LINES)
+        cursor.movePosition(QTextCursor.Start)
+        for _ in range(lines_to_remove):
+            cursor.movePosition(QTextCursor.NextBlock, QTextCursor.KeepAnchor)
+            if not cursor.atEnd():
+                cursor.removeSelectedText()
+        cursor.endEditBlock()
+        # 裁剪后文档字符位置整体前移，把显示光标重置到末尾，
+        # 避免后续操作命中已被删除的区域
+        self.text_recv.moveCursor(QTextCursor.End)
 
     def append_formatted_text(self, formatted_segments):
         """向接收区追加带格式的文本，并自动滚动到底部"""
+        # 行数超限时裁剪旧行（查阅中由 _trim_recv_buffer 决定是否跳过）
+        self._trim_recv_buffer()
+
         # 开始一个编辑块，提高性能
         cursor = self.text_recv.textCursor()
         cursor.beginEditBlock()
-
-        # 检查行数限制，超过时删除前面的内容
-        block_count = self.text_recv.document().blockCount()
-        if block_count >= self.MAX_DISPLAY_LINES:
-            # 删除前面的10%内容（约500行），保留大部分内容
-            lines_to_remove = max(100, int(self.MAX_DISPLAY_LINES * 0.1))
-            cursor.movePosition(QTextCursor.Start)
-            for _ in range(lines_to_remove):
-                cursor.movePosition(QTextCursor.NextBlock, QTextCursor.KeepAnchor)
-                if not cursor.atEnd():
-                    cursor.removeSelectedText()
 
         # 移动到文本末尾
         cursor.movePosition(QTextCursor.End)
@@ -2357,28 +2549,16 @@ class SerialTool(QMainWindow):
         if self.filter_enabled and self.filter_mode == "高亮显示":
             full_text = ''.join(text for text, fmt in formatted_segments)
             if full_text:
-                keywords = [kw.strip() for kw in self.filter_text.split(',') if kw.strip()]
-                if keywords:
-                    tc = self.theme_colors
-                    hl_fmt = QTextCharFormat()
-                    hl_fmt.setBackground(tc['highlight_bg'])
-                    for kw in keywords:
-                        kw_lower = kw.lower()
-                        offset = 0
-                        while True:
-                            idx = full_text.lower().find(kw_lower, offset)
-                            if idx == -1:
-                                break
-                            cursor.setPosition(hl_start + idx)
-                            cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, len(kw))
-                            cursor.mergeCharFormat(hl_fmt)
-                            offset = idx + len(kw)
+                tc = self.theme_colors
+                hl_fmt = QTextCharFormat()
+                hl_fmt.setBackground(tc['highlight_bg'])
+                self._apply_keyword_highlight(cursor, hl_start, full_text, hl_fmt)
 
-        # 确保文本可见
-        self.text_recv.ensureCursorVisible()
-
-        # 滚动到底部
-        self.text_recv.verticalScrollBar().setValue(self.text_recv.verticalScrollBar().maximum())
+        # 确保文本可见（仅当用户未在滚动查看时，避免打断查阅）
+        if not self._recv_user_reading:
+            self.text_recv.ensureCursorVisible()
+            # 滚动到底部
+            self._recv_auto_scroll_to_bottom()
 
     def append_text(self, text):
         """向接收区追加文本，并自动滚动到底部"""
@@ -2397,18 +2577,10 @@ class SerialTool(QMainWindow):
         
         # 获取光标
         cursor = self.text_recv.textCursor()
-        
-        # 检查行数限制，超过时删除前面的内容
-        block_count = self.text_recv.document().blockCount()
-        if block_count >= self.MAX_DISPLAY_LINES:
-            # 删除前面的10%内容（约500行），保留大部分内容
-            lines_to_remove = max(100, int(self.MAX_DISPLAY_LINES * 0.1))
-            cursor.movePosition(QTextCursor.Start)
-            for _ in range(lines_to_remove):
-                cursor.movePosition(QTextCursor.NextBlock, QTextCursor.KeepAnchor)
-                if not cursor.atEnd():
-                    cursor.removeSelectedText()
-        
+
+        # 行数超限时裁剪旧行（查阅中由 _trim_recv_buffer 决定是否跳过）
+        self._trim_recv_buffer()
+
         # 移动到末尾
         cursor.movePosition(QTextCursor.End)
         
@@ -2436,30 +2608,19 @@ class SerialTool(QMainWindow):
 
         # 高亮显示模式：对刚插入的文本叠加背景色（不区分大小写）
         if self.filter_enabled and self.filter_mode == "高亮显示":
-            keywords = [kw.strip() for kw in self.filter_text.split(',') if kw.strip()]
-            if keywords:
-                end_pos = cursor.position()
-                insert_start = end_pos - len(display_text) - 1  # -1 for \n
-                hl_fmt = QTextCharFormat()
-                hl_fmt.setBackground(tc['highlight_bg'])
-                for kw in keywords:
-                    search_text = display_text
-                    kw_lower = kw.lower()
-                    offset = 0
-                    while True:
-                        idx = search_text.lower().find(kw_lower, offset)
-                        if idx == -1:
-                            break
-                        cursor.setPosition(insert_start + idx)
-                        cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, len(kw))
-                        cursor.mergeCharFormat(hl_fmt)
-                        offset = idx + len(kw)
+            # 用插入前后的光标位置差值定位，避免 Python len() 与 Qt position 在
+            # BMP 外字符上不一致导致高亮偏移
+            end_pos = cursor.position()
+            insert_start = end_pos - self._utf16_len(display_text) - 1  # -1 for \n
+            hl_fmt = QTextCharFormat()
+            hl_fmt.setBackground(tc['highlight_bg'])
+            self._apply_keyword_highlight(cursor, insert_start, display_text, hl_fmt)
 
-        # 确保文本可见
-        self.text_recv.ensureCursorVisible()
-
-        # 滚动到底部
-        self.text_recv.verticalScrollBar().setValue(self.text_recv.verticalScrollBar().maximum())
+        # 确保文本可见（仅当用户未在滚动查看时，避免打断查阅）
+        if not self._recv_user_reading:
+            self.text_recv.ensureCursorVisible()
+            # 滚动到底部
+            self._recv_auto_scroll_to_bottom()
 
     def clear_recv_area(self):
         """清空接收区"""
@@ -2474,6 +2635,11 @@ class SerialTool(QMainWindow):
         self.text_recv.clear()
         # 清空日志缓冲区
         self.log_buffer.clear()
+        # 重置滚动跟底状态（清空后恢复自动跟底，并丢弃待显示缓冲）
+        self._recv_user_reading = False
+        self._recv_follow_timer.stop()
+        self._recv_flush_timer.stop()
+        self._pending_display_data = []
         # 添加系统消息
         self.append_text("[系统]: 接收区已清空")
     
@@ -2611,8 +2777,7 @@ class SerialTool(QMainWindow):
                     for log_entry in self.log_buffer:
                         self.current_log_file.write(log_entry + '\n')
                     self.current_log_file.flush()
-                    # 强制写入磁盘
-                    import os
+                    # 强制写入磁盘（开启时一次性落盘，后续由定时器接管）
                     os.fsync(self.current_log_file.fileno())
                     # 更新文件大小
                     total_size = 0
@@ -2624,9 +2789,16 @@ class SerialTool(QMainWindow):
                 except Exception as e:
                     self.append_text(f"[错误]: 保存历史数据失败: {str(e)}\n")
             
+            # 启动定时刷盘定时器
+            if hasattr(self, '_log_fsync_timer'):
+                self._log_fsync_timer.start()
             self.append_text("[系统]: 自动保存功能已开启\n")
         else:  # 取消勾选
             self.auto_save_enabled = False
+            # 停止定时刷盘定时器，并做最后一次落盘
+            if hasattr(self, '_log_fsync_timer'):
+                self._log_fsync_timer.stop()
+            self._fsync_log_file()
             # 关闭当前日志文件
             if self.current_log_file:
                 try:
@@ -3276,12 +3448,21 @@ class SerialTool(QMainWindow):
             self.append_text(f"[错误]: 保存多字符项目失败: {e}\n")
 
     def eventFilter(self, obj, event):
-        """事件过滤器：右键重命名按钮文本 / 发送栏上下键历史记录导航"""
+        """事件过滤器：右键重命名按钮文本 / 发送栏上下键历史记录导航 / 接收区滚轮暂停跟底"""
+        # 构造期间可能被提前调用，对尚未创建的控件做防御性判断
+        text_recv = getattr(self, 'text_recv', None)
+        text_send = getattr(self, 'text_send', None)
+
+        # ---- 接收区滚轮：用户滚动查看时暂停自动跟底，6 秒静止后恢复 ----
+        if text_recv is not None and obj is text_recv.viewport() and event.type() == QEvent.Wheel:
+            self._on_recv_wheel(event)
+
         # ---- 右键重命名多字符发送按钮 ----
         if event.type() == event.MouseButtonPress and event.button() == Qt.RightButton:
-            if obj.objectName().startswith("btn_"):
-                for row in range(self.table_multi_send.rowCount()):
-                    w = self.table_multi_send.cellWidget(row, 2)
+            table = getattr(self, 'table_multi_send', None)
+            if table is not None and obj.objectName().startswith("btn_"):
+                for row in range(table.rowCount()):
+                    w = table.cellWidget(row, 2)
                     if w and w.layout() and w.layout().itemAt(0).widget() == obj:
                         new_text, ok = QInputDialog.getText(
                             self, "重命名按钮", "按钮文字:", text=obj.text())
@@ -3291,7 +3472,7 @@ class SerialTool(QMainWindow):
                 return True  # 消费右键事件，不继续传播
 
         # ---- 发送栏上下键历史记录导航 ----
-        if obj is self.text_send:
+        if text_send is not None and obj is text_send:
             if event.type() == event.KeyPress:
                 key = event.key()
                 if key == Qt.Key_Up:
@@ -4508,6 +4689,22 @@ class SerialTool(QMainWindow):
             print(f"检查磁盘空间失败: {e}")
             return False
     
+    def _fsync_log_file(self):
+        """定时强制把日志文件缓冲区落盘（由 _log_fsync_timer 周期触发）。
+
+        单独存放是为了让 fsync 这种慢操作脱离数据接收主路径，避免阻塞 UI。
+        """
+        if not self.current_log_file:
+            return
+        try:
+            self.current_log_file.flush()
+            os.fsync(self.current_log_file.fileno())
+        except (OSError, IOError, ValueError):
+            # 文件可能已被关闭或句柄无效，忽略即可
+            pass
+        except Exception as e:
+            print(f"定时刷盘失败: {e}")
+
     def auto_save_data(self, data):
         """自动保存数据到文件"""
         try:
@@ -4541,12 +4738,12 @@ class SerialTool(QMainWindow):
                 return
 
             # 写入数据（使用 try-except-else-finally 确保文件句柄安全）
+            # 注意：此处只调用 flush（刷新 Python 缓冲到 OS，不阻塞），
+            # fsync 由 _log_fsync_timer 定时执行，避免每条数据都阻塞 UI 线程
             write_success = False
             try:
                 self.current_log_file.write(data)
-                self.current_log_file.flush()  # 立即刷新到磁盘
-                # 强制写入磁盘
-                os.fsync(self.current_log_file.fileno())
+                self.current_log_file.flush()  # 刷新到操作系统缓冲区（非阻塞）
                 write_success = True
             except IOError as e:
                 # 处理I/O错误（包括磁盘空间不足）
