@@ -208,6 +208,16 @@ class TransportWrapper:
         if self._serial is not None:
             self._serial.flush()
 
+    def reset_input_buffer(self):
+        """清空串口输入缓冲区（网络模式下为空操作）"""
+        if self.mode == 'serial' and self._serial is not None:
+            self._serial.reset_input_buffer()
+
+    def reset_output_buffer(self):
+        """清空串口输出缓冲区（网络模式下为空操作）"""
+        if self.mode == 'serial' and self._serial is not None:
+            self._serial.reset_output_buffer()
+
 
 class TransportReadThread(QThread):
     receive_data_signal = pyqtSignal(bytes)

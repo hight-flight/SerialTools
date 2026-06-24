@@ -9,6 +9,7 @@ import shutil
 import sys
 import time
 import subprocess
+import argparse
 import warnings
 
 # 抑制 PyInstaller 钩子中第三方库的 DeprecationWarning（不影响打包）
@@ -31,6 +32,138 @@ except ImportError:
 def get_path_separator():
     """根据操作系统获取路径分隔符"""
     return ';' if sys.platform == 'win32' else ':'
+
+
+def get_app_version():
+    """从 theme.py 读取版本号（加密源码运行时可正常 import）；失败回退 1.0.0"""
+    try:
+        from theme import VERSION  # type: ignore
+        return str(VERSION)
+    except Exception:
+        return '1.0.0'
+
+
+def find_iscc():
+    """定位 Inno Setup 编译器 ISCC.exe；未找到返回 None"""
+    if sys.platform != 'win32':
+        return None
+    # 1) PATH 中查找
+    for candidate in ('ISCC.exe', 'iscc.exe'):
+        from shutil import which
+        found = which(candidate)
+        if found:
+            return found
+    # 2) 常见安装路径
+    common_dirs = [
+        r'C:\Program Files (x86)\Inno Setup 6',
+        r'C:\Program Files\Inno Setup 6',
+        r'C:\Program Files (x86)\Inno Setup 5',
+        r'C:\Program Files\Inno Setup 5',
+    ]
+    for d in common_dirs:
+        p = os.path.join(d, 'ISCC.exe')
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def generate_iss(version, icon_path=None):
+    """生成 Inno Setup 脚本 SerialTool.iss，返回脚本路径"""
+    iss_path = os.path.abspath(f'{APP_NAME}.iss')
+    icon_line = f'SetupIconFile={os.path.abspath(icon_path)}' if icon_path else ''
+
+    # Inno Setup 模板：把 onedir 产物 dist/SerialTool/ 打成单文件安装包
+    iss_content = f"""\
+; 由 build_app.py 自动生成，请勿手动编辑
+#define MyAppName "{APP_NAME}"
+#define MyAppVersion "{version}"
+#define MyAppExeName "{APP_NAME}.exe"
+#define MyAppSourceDir "dist\\{APP_NAME}"
+
+[Setup]
+AppName={{#MyAppName}}
+AppVersion={{#MyAppVersion}}
+AppPublisher={APP_NAME}
+DefaultDirName={{autopf}}\\{{#MyAppName}}
+DefaultGroupName={{#MyAppName}}
+DisableProgramGroupPage=yes
+OutputDir=dist
+OutputBaseFilename={APP_NAME}_Setup
+Compression=lzma2/ultra64
+SolidCompression=yes
+WizardStyle=modern
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+UninstallDisplayIcon={{app}}\\{{#MyAppExeName}}
+{icon_line}
+
+[Languages]
+Name: "chinesesimp"; MessagesFile: "compiler:Languages\\ChineseSimplified.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Tasks]
+Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked
+
+[Files]
+Source: "{{#MyAppSourceDir}}\\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Icons]
+Name: "{{group}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"; WorkingDir: "{{app}}"
+Name: "{{group}}\\{{cm:UninstallProgram,{{#MyAppName}}}}"; Filename: "{{uninstallexe}}"
+Name: "{{autodesktop}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"; WorkingDir: "{{app}}"; Tasks: desktopicon
+
+[Run]
+Filename: "{{app}}\\{{#MyAppExeName}}"; Description: "{{cm:LaunchProgram,{{#MyAppName}}}}"; Flags: nowait postinstall skipifsilent
+"""
+    with open(iss_path, 'w', encoding='utf-8') as f:
+        f.write(iss_content)
+    return iss_path
+
+
+def build_setup(icon_path=None):
+    """用 Inno Setup 把 onedir 产物打包成单文件安装包 SerialTool_Setup.exe"""
+    print("[步骤5] 生成安装包（Inno Setup）...")
+
+    iscc = find_iscc()
+    if not iscc:
+        print("  [警告] 未找到 Inno Setup 编译器（ISCC.exe），跳过安装包生成。")
+        print("         请安装 Inno Setup 6：https://jrsoftware.org/isdl.php")
+        print("         安装后重新运行：python build_app.py --setup")
+        return False
+
+    version = get_app_version()
+    print(f"  - 版本号: {version}")
+    print(f"  - ISCC: {iscc}")
+
+    iss_path = generate_iss(version, icon_path)
+    print(f"  - 脚本: {iss_path}")
+
+    cmd = [iscc, '/Q', iss_path]  # /Q 静默，仅输出错误
+    print("  - 正在编译安装包...")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=BUILD_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        print(f"  [ERROR] 编译超时（超过{BUILD_TIMEOUT}秒）")
+        return False
+
+    if result.returncode != 0:
+        print("  [ERROR] Inno Setup 编译失败：")
+        print(result.stdout)
+        print(result.stderr)
+        return False
+
+    setup_exe = os.path.join('dist', f'{APP_NAME}_Setup.exe')
+    if os.path.exists(setup_exe):
+        file_size = os.path.getsize(setup_exe) / (1024 * 1024)  # MB
+        print(f"  - 安装包: {setup_exe}")
+        print(f"  - 文件大小: {file_size:.2f} MB")
+        print("  [OK] 安装包生成成功！")
+        return True
+    else:
+        print("  [ERROR] 安装包未生成")
+        print(result.stdout)
+        return False
+
 
 def clear_old_build():
     """清理旧的构建文件"""
@@ -243,16 +376,26 @@ def verify_main_script():
     print("  [OK] 主脚本验证通过")
     return True
 
-def build_application(icon_path=None):
-    """构建应用程序"""
+def build_application(icon_path=None, onedir=False):
+    """构建应用程序
+
+    onedir=False（默认）：--onefile 单文件模式，产物为 dist/SerialTool.exe
+    onedir=True：--onedir 目录模式 + --noupx，启动更快（首启无需解压临时目录、
+                 避免 UPX 解压与杀软扫描开销），产物为 dist/SerialTool/ 文件夹
+    """
     print("[步骤3] 开始打包...")
-    
+
+    if onedir:
+        print("  [模式] --onedir 目录模式（已启用 --noupx，启动更快）")
+    else:
+        print("  [模式] --onefile 单文件模式（默认）")
+
     # 获取跨平台路径分隔符
     path_sep = get_path_separator()
-    
+
     # 打包参数
     args = [
-        '--onefile',          # 生成单个可执行文件
+        '--onedir' if onedir else '--onefile',  # 目录模式 / 单文件模式
         '--windowed',         # 无命令行窗口（GUI应用）
         '--name', APP_NAME,   # 可执行文件名
         '--add-data', f'{CONFIG_FILE}{path_sep}.',  # 添加配置文件（跨平台兼容）
@@ -273,8 +416,13 @@ def build_application(icon_path=None):
         '--exclude-module', 'matplotlib',
         '--exclude-module', 'PIL',
         '--exclude-module', 'cv2',
-        MAIN_SCRIPT           # 主脚本
     ]
+
+    # onedir 模式：禁用 UPX，避免启动时解压与杀软扫描开销（方案②）
+    if onedir:
+        args.append('--noupx')
+
+    args.append(MAIN_SCRIPT)  # 主脚本
     
     # 添加图标参数 (插入到脚本名称之前)
     if icon_path:
@@ -379,19 +527,27 @@ def build_application(icon_path=None):
         print(f"  [ERROR] 直接调用构建失败: {e}")
         return False
 
-def verify_build():
+def verify_build(onedir=False):
     """验证构建结果"""
     print("[步骤4] 验证构建结果...")
-    
+
     if sys.platform == 'win32':
         exe_name = f'{APP_NAME}.exe'
     else:
         exe_name = APP_NAME
-    exe_path = os.path.join('dist', exe_name)
+
+    if onedir:
+        # 目录模式产物：dist/SerialTool/SerialTool.exe
+        exe_path = os.path.join('dist', APP_NAME, exe_name)
+    else:
+        exe_path = os.path.join('dist', exe_name)
+
     if os.path.exists(exe_path):
         file_size = os.path.getsize(exe_path) / (1024 * 1024)  # MB
         print(f"  - 可执行文件: {exe_path}")
         print(f"  - 文件大小: {file_size:.2f} MB")
+        if onedir:
+            print(f"  - 产物目录: dist\\{APP_NAME}\\（分发时需整目录拷贝）")
         print("  [OK] 构建成功！")
         return True
     else:
@@ -400,11 +556,24 @@ def verify_build():
 
 def main():
     """主函数"""
+    # 命令行参数：--onedir 切换为目录模式（默认仍为 onefile 单文件模式）
+    parser = argparse.ArgumentParser(description='串口调试助手 - 打包脚本')
+    parser.add_argument('--onedir', action='store_true',
+                        help='使用 --onedir 目录模式打包（启动更快，产物为文件夹）；'
+                             '默认为 --onefile 单文件模式')
+    parser.add_argument('--setup', action='store_true',
+                        help='生成 Inno Setup 安装包（自动启用 --onedir，'
+                             '产物为 dist/SerialTool_Setup.exe，需先安装 Inno Setup 6）')
+    args_cli = parser.parse_args()
+
+    # --setup 隐含 onedir（安装包基于 onedir 产物）
+    onedir_mode = args_cli.onedir or args_cli.setup
+
     print("========================================")
     print("  串口调试助手 - 打包脚本")
     print("========================================")
     print("")
-    
+
     try:
         # 步骤1: 清理旧文件
         clear_old_build()
@@ -428,22 +597,37 @@ def main():
         print("")
         
         # 步骤3: 构建应用
-        if not build_application(icon_path):
+        if not build_application(icon_path, onedir=onedir_mode):
             print("\n[ERROR] 打包终止")
             input("按Enter键退出...")
             return
         print("")
-        
+
         # 步骤4: 验证构建
-        if verify_build():
-            print("\n========================================")
-            print("  [SUCCESS] 打包成功！")
-            print(f"  输出文件: dist\\{APP_NAME}.exe")
-            print("  可以直接运行此文件，无需Python环境")
-            print("========================================")
-        else:
+        if not verify_build(onedir=onedir_mode):
             print("\n❌ 打包失败")
-        
+            return
+        print("")
+
+        # 步骤5: 生成安装包（仅 --setup）
+        if args_cli.setup:
+            if not build_setup(icon_path):
+                print("\n[警告] 安装包生成未完成（onedir 产物已可用）")
+            print("")
+
+        print("========================================")
+        print("  [SUCCESS] 打包成功！")
+        if args_cli.setup and os.path.exists(os.path.join('dist', f'{APP_NAME}_Setup.exe')):
+            print(f"  安装包: dist\\{APP_NAME}_Setup.exe（单文件，可直接分发安装）")
+        elif onedir_mode:
+            print(f"  输出目录: dist\\{APP_NAME}\\")
+            print(f"  入口文件: dist\\{APP_NAME}\\{APP_NAME}.exe")
+            print("  分发时需拷贝整个目录")
+        else:
+            print(f"  输出文件: dist\\{APP_NAME}.exe")
+        print("  可以直接运行此文件，无需Python环境")
+        print("========================================")
+
         print("")
         #input("按Enter键退出...")
     except KeyboardInterrupt:

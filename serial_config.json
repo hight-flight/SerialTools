@@ -59,12 +59,12 @@
     "theme": "light",
     "ota": {
         "port": 8080,
-        "auto_stop": false,
+        "auto_stop": true,
         "timeout": 120,
         "cmd_format": "ota {url}\\r\\n",
         "firmware_history": [
-            "C:/Users/GAOXIANG/Desktop/dnode_v0.3.275.bin",
-            "C:/Users/GAOXIANG/Desktop/dnode_v0.3.276.bin"
+            "C:/Users/GAOXIANG/Desktop/SerialTool/ota_serve/dnode_v0.3.275.bin",
+            "C:/Users/GAOXIANG/Desktop/SerialTool/ota_serve/dnode_v0.3.276.bin"
         ],
         "last_ip": "192.168.5.58"
     }

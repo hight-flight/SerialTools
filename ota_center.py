@@ -461,7 +461,7 @@ class OTAControlCenter(QDialog):
                 self._ip_combo.setCurrentIndex(idx)
         # 恢复上次选择的固件路径
         if not self.firmware_path and self._history_combo.count() > 0:
-            last_path = self._history_combo.itemText(0)
+            last_path = self._history_full_path(0)
             if last_path and os.path.exists(last_path):
                 self.firmware_path = last_path
                 self._fw_path_edit.setText(last_path)
@@ -516,7 +516,7 @@ class OTAControlCenter(QDialog):
         if isinstance(history, list):
             for path in history:
                 if isinstance(path, str) and path.strip():
-                    self._history_combo.addItem(path.strip())
+                    self._insert_history(path.strip(), at_front=False)
 
     def _save_settings(self):
         """将 OTA 相关设置写回主窗口配置文件。"""
@@ -534,7 +534,7 @@ class OTAControlCenter(QDialog):
         # 收集固件历史
         history = []
         for i in range(self._history_combo.count()):
-            path = self._history_combo.itemText(i)
+            path = self._history_full_path(i)
             if path.strip():
                 history.append(path.strip())
 
@@ -653,38 +653,67 @@ class OTAControlCenter(QDialog):
         if path:
             self._set_firmware_path(path)
 
+    def _format_history_label(self, path):
+        """历史下拉框显示文本：用文件名显示，便于在众多记录中辨识版本。"""
+        name = os.path.basename(path)
+        return name if name else path
+
+    def _history_full_path(self, index):
+        """取历史项的完整路径（userData）；兼容旧数据回退到 itemText。"""
+        if index < 0:
+            return ''
+        data = self._history_combo.itemData(index)
+        if isinstance(data, str) and data:
+            return data
+        return self._history_combo.itemText(index)
+
+    def _insert_history(self, path, at_front=False):
+        """插入一条历史（按完整路径去重）：显示文件名、userData 存完整路径、tooltip 显示完整路径。"""
+        self._history_combo.blockSignals(True)
+        try:
+            for i in range(self._history_combo.count()):
+                if self._history_full_path(i) == path:
+                    self._history_combo.removeItem(i)
+                    break
+            label = self._format_history_label(path)
+            if at_front:
+                self._history_combo.insertItem(0, label, path)
+                idx = 0
+            else:
+                self._history_combo.addItem(label, path)
+                idx = self._history_combo.count() - 1
+            self._history_combo.setItemData(idx, path, Qt.ToolTipRole)
+            while self._history_combo.count() > self.MAX_FIRMWARE_HISTORY:
+                self._history_combo.removeItem(self._history_combo.count() - 1)
+        finally:
+            self._history_combo.blockSignals(False)
+
     def _set_firmware_path(self, path):
         """设置固件路径并更新历史记录。"""
         self.firmware_path = path
         self._fw_path_edit.setText(path)
         self._log(f"已选择固件: {path}")
 
-        # 更新历史（阻断信号避免触发 int 类型回调）
-        self._history_combo.blockSignals(True)
-        idx = self._history_combo.findText(path)
-        if idx >= 0:
-            self._history_combo.removeItem(idx)
-        self._history_combo.insertItem(0, path)
+        # 更新历史（置顶去重，阻断信号避免触发 activated 回调）
+        self._insert_history(path, at_front=True)
         self._history_combo.setCurrentIndex(0)
-        # 裁剪历史长度
-        while self._history_combo.count() > self.MAX_FIRMWARE_HISTORY:
-            self._history_combo.removeItem(self._history_combo.count() - 1)
-        self._history_combo.blockSignals(False)
 
         self._save_settings()
 
     def _on_history_selected(self, index):
-        """历史下拉框用户选择回调（activated 信号传索引）。"""
-        text = self._history_combo.itemText(index) if index >= 0 else ''
-        if not text:
+        """历史下拉框用户选择回调（activated 信号传索引）：同步选中对应固件。"""
+        path = self._history_full_path(index)
+        if not path:
             return
-        if os.path.exists(text):
-            self.firmware_path = text
-            self._fw_path_edit.setText(text)
+        if os.path.exists(path):
+            self.firmware_path = path
+            self._fw_path_edit.setText(path)
+            self._log(f"已从历史选择固件: {path}")
+            self._save_settings()
         else:
             # 文件已不存在，提示并从历史中移除
             QMessageBox.information(self, "提示",
-                                    f"固件文件已不存在，已从历史中移除:\n{text}")
+                                    f"固件文件已不存在，已从历史中移除:\n{path}")
             self._history_combo.blockSignals(True)
             self._history_combo.removeItem(index)
             self._history_combo.blockSignals(False)
