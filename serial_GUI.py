@@ -164,6 +164,7 @@ class SerialTool(QMainWindow):
     def init_ui(self):
         self.setWindowTitle("hight-flight串口工具")
         self.resize(1000, 900)
+        self.setMinimumSize(720, 560)  # 保证顶部设置栏和发送区控件不重叠
 
         # 主窗口部件
         main_widget = QWidget()
@@ -375,7 +376,7 @@ class SerialTool(QMainWindow):
         udp_page_layout.addWidget(QLabel("远程IP:", font=QFont("Microsoft YaHei", 9)))
         self.edit_udp_remote_ip = QLineEdit()
         self.edit_udp_remote_ip.setFont(QFont("Consolas", 9))
-        self.edit_udp_remote_ip.setFixedWidth(120)
+        self.edit_udp_remote_ip.setMinimumWidth(120)
         self.edit_udp_remote_ip.setFixedHeight(26)
         self.edit_udp_remote_ip.setText('192.168.1.100')
         udp_page_layout.addWidget(self.edit_udp_remote_ip)
@@ -398,7 +399,7 @@ class SerialTool(QMainWindow):
         tcp_client_page_layout.addWidget(QLabel("远程IP:", font=QFont("Microsoft YaHei", 9)))
         self.edit_tcp_remote_ip = QLineEdit()
         self.edit_tcp_remote_ip.setFont(QFont("Consolas", 9))
-        self.edit_tcp_remote_ip.setFixedWidth(120)
+        self.edit_tcp_remote_ip.setMinimumWidth(120)
         self.edit_tcp_remote_ip.setFixedHeight(26)
         self.edit_tcp_remote_ip.setText('192.168.1.100')
         tcp_client_page_layout.addWidget(self.edit_tcp_remote_ip)
@@ -543,11 +544,11 @@ class SerialTool(QMainWindow):
         self.text_recv.setPlaceholderText("等待接收数据…")
         recv_layout.addWidget(self.text_recv)
 
-        # 接收区滚轮跟底控制：用户滚动查看时暂停自动跟底，停止滚动 6 秒后恢复
+        # 接收区滚轮跟底控制：用户滚动查看时暂停自动跟底，停止滚动 20 秒后恢复
         self._recv_user_reading = False  # 用户正在滚动查看（暂停跟底）
         self._recv_follow_timer = QTimer(self)
         self._recv_follow_timer.setSingleShot(True)
-        self._recv_follow_timer.setInterval(6000)  # 滚轮静止 6 秒后恢复跟底
+        self._recv_follow_timer.setInterval(20000)  # 滚轮静止 20 秒后恢复跟底
         self._recv_follow_timer.timeout.connect(self._on_recv_follow_resume)
         self.text_recv.viewport().installEventFilter(self)
 
@@ -720,7 +721,8 @@ class SerialTool(QMainWindow):
         
         # 发送输入框
         self.text_send = QTextEdit()
-        self.text_send.setMaximumHeight(45)
+        self.text_send.setMinimumHeight(40)
+        self.text_send.setMaximumHeight(100)  # 放宽上限，允许显示约 4 行
         self.text_send.setFont(QFont("Consolas", 11, QFont.Normal))
         self.text_send.setPlaceholderText("在此输入要发送的内容...")
         self.text_send.textChanged.connect(self._validate_hex_input)
@@ -880,7 +882,9 @@ class SerialTool(QMainWindow):
         self.table_multi_send.setColumnWidth(2, 80)  # 点击发送列
         self.table_multi_send.setColumnWidth(3, 70)   # 延时列
         self.table_multi_send.setColumnWidth(4, 50)   # 顺序列
-        
+        # 字符串列自动填充剩余空间，避免窗口拉宽后右侧空白
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+
         # 确保表格充满可用空间
         self.table_multi_send.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
@@ -3805,7 +3809,8 @@ class SerialTool(QMainWindow):
 
         # ── 左侧控制面板 ──
         panel = QWidget()
-        panel.setFixedWidth(160)
+        panel.setMinimumWidth(160)
+        panel.setMaximumWidth(200)  # 限制最大宽度，避免面板过宽挤压图表
         panel_layout = QVBoxLayout(panel)
         panel_layout.setSpacing(6)
 
@@ -4164,7 +4169,7 @@ class SerialTool(QMainWindow):
         result_frame.setReadOnly(True)
         result_frame.setFont(QFont("Consolas", 10))
         result_frame.setMinimumHeight(64)
-        result_frame.setMaximumHeight(100)
+        result_frame.setMaximumHeight(160)
         result_group.addWidget(result_frame)
         bl.addLayout(result_group)
 

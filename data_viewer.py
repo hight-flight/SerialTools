@@ -828,6 +828,13 @@ class ChartTrackerWidget(QWidget):
             self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self._on_mouse_moved
         )
 
+        # 优化 pyqtgraph 左下角"A"自动范围按钮：放大尺寸、提高不透明度、加 tooltip
+        _auto_btn = self.plot_widget.getPlotItem().autoBtn
+        if _auto_btn is not None:
+            _auto_btn.setScale(1.6)       # 14px → ~22px，更容易点击
+            _auto_btn.setOpacity(1.0)     # 0.7 → 1.0，更醒目
+            _auto_btn.setToolTip("点击恢复自动跟踪（缩放后出现）")
+
         layout.addWidget(self.plot_widget, stretch=1)
 
         # 用事件过滤器让 PlotWidget 的拖放事件传递到 ChartTrackerWidget

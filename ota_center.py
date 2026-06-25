@@ -196,7 +196,7 @@ class OTAControlCenter(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("OTA 升级控制中心")
-        self.setMinimumSize(620, 720)
+        self.setMinimumSize(620, 660)  # 660px 在 1366×768 笔记本上不被任务栏遮挡
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setAcceptDrops(True)
 
