@@ -637,11 +637,11 @@ class SerialTool(QMainWindow):
         self.text_recv.setPlaceholderText("等待接收数据…")
         recv_layout.addWidget(self.text_recv)
 
-        # 接收区滚轮跟底控制：用户滚动查看时暂停自动跟底，停止滚动 20 秒后恢复
+        # 接收区滚轮跟底控制：用户滚动查看时暂停自动跟底，停止滚动 10 秒后恢复
         self._recv_user_reading = False  # 用户正在滚动查看（暂停跟底）
         self._recv_follow_timer = QTimer(self)
         self._recv_follow_timer.setSingleShot(True)
-        self._recv_follow_timer.setInterval(20000)  # 滚轮静止 20 秒后恢复跟底
+        self._recv_follow_timer.setInterval(10000)  # 滚轮静止 10 秒后恢复跟底
         self._recv_follow_timer.timeout.connect(self._on_recv_follow_resume)
         self.text_recv.viewport().installEventFilter(self)
 
@@ -2572,7 +2572,7 @@ class SerialTool(QMainWindow):
         """接收区滚轮：向上翻离底部超过阈值时暂停跟底；翻回底部立即恢复。
 
         阈值取约 3 行（用滚动条 singleStep 估算），避免在最新区随手搓滚轮误触发；
-        查阅中继续滚动会重新计时，滚回底部附近则立即恢复（不必等满 6 秒）。
+        查阅中继续滚动会重新计时，滚回底部附近则立即恢复（不必等满 10秒）。
         """
         delta = event.angleDelta().y()            # >0 向上翻（看更早内容）
         sb = self.text_recv.verticalScrollBar()
