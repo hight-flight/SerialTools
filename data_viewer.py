@@ -837,6 +837,9 @@ class ChartTrackerWidget(QWidget):
             _auto_btn.setOpacity(1.0)     # 0.7 → 1.0，更醒目
             _auto_btn.setToolTip("点击恢复自动跟踪（缩放后出现）")
 
+        # 禁用 pyqtgraph 图表右键菜单（对普通用户无意义）
+        self._disable_plot_context_menu()
+
         layout.addWidget(self.plot_widget, stretch=1)
 
         # 用事件过滤器让 PlotWidget 的拖放事件传递到 ChartTrackerWidget
@@ -1453,6 +1456,23 @@ class ChartTrackerWidget(QWidget):
     def _toggle_pause(self):
         self._paused = self.btn_pause.isChecked()
         self.btn_pause.setText("继续" if self._paused else "暂停")
+
+    def _disable_plot_context_menu(self):
+        """禁用 pyqtgraph 图表右键菜单（对普通用户无意义，避免英文菜单干扰）。"""
+        plot_item = self.plot_widget.getPlotItem()
+        if plot_item is None:
+            return
+        vb = plot_item.vb
+        if vb is None:
+            return
+        # 将 ViewBox 的菜单对象置空，getMenu 将返回 None，右键不再弹出菜单
+        vb.menu = None
+        # 部分版本中 PlotItem 也持有菜单引用，一并禁用
+        if hasattr(plot_item, 'ctrl') and getattr(plot_item.ctrl, 'menu', None) is not None:
+            try:
+                plot_item.ctrl.menu = None
+            except Exception:
+                pass
 
     def _on_chip_removed(self, chip):
         self.remove_field(chip.path)
