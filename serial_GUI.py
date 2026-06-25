@@ -1140,11 +1140,14 @@ class SerialTool(QMainWindow):
         self.status_log.setFont(QFont("Microsoft YaHei", 9))
         
         self.statusBar().addPermanentWidget(self.status_connection)
-        self.statusBar().addPermanentWidget(QLabel("  ·  "))
+        _sep1 = QLabel("·"); _sep1.setObjectName("status_sep"); _sep1.setFont(QFont("Microsoft YaHei", 9))
+        self.statusBar().addPermanentWidget(_sep1)
         self.statusBar().addPermanentWidget(self.status_baud)
-        self.statusBar().addPermanentWidget(QLabel("  ·  "))
+        _sep2 = QLabel("·"); _sep2.setObjectName("status_sep"); _sep2.setFont(QFont("Microsoft YaHei", 9))
+        self.statusBar().addPermanentWidget(_sep2)
         self.statusBar().addPermanentWidget(self.status_log)
-        self.statusBar().addPermanentWidget(QLabel("  ·  "))
+        _sep3 = QLabel("·"); _sep3.setObjectName("status_sep"); _sep3.setFont(QFont("Microsoft YaHei", 9))
+        self.statusBar().addPermanentWidget(_sep3)
         
         # 版本号显示
         self.status_version = QLabel(f"版本: {VERSION}")
@@ -1526,13 +1529,12 @@ class SerialTool(QMainWindow):
         self.btn_more_settings_serial.setVisible(is_serial)
         self.btn_refresh_serial.setVisible(is_serial)
         self.btn_switch.setVisible(not is_serial)
-        self.btn_more_settings.setVisible(not is_serial)
+        # 更多设置仅串口模式有（对话框只配置串口参数），非串口模式隐藏
+        self.btn_more_settings.setVisible(False)
         # 刷新/IP按钮：仅 UDP/TCP Server 显示（串口用 btn_refresh_serial；TCP Client 无本地IP字段）
         has_local_ip = new_mode in ('udp', 'tcp_server')
         self.btn_refresh.setVisible(has_local_ip)
         self.btn_refresh.setText("获取本机IP")
-        self.btn_more_settings.setEnabled(is_serial)
-        self.btn_more_settings_serial.setEnabled(is_serial)
         self.check_rts.setVisible(is_serial)
         self.check_dtr.setVisible(is_serial)
         self.refresh_ports()
@@ -1726,7 +1728,9 @@ class SerialTool(QMainWindow):
                 self.transport.close()
                 self.append_text("--- 连接已关闭 ---")
             self._update_status_connection_text(False)
-            self.status_baud.setText("波特率：115200")
+            # 显示实际选中的波特率（避免写死 115200 与实际不符）
+            _cur_baud = self.combo_baud.currentText() or '115200'
+            self.status_baud.setText(f"波特率: {_cur_baud}")
             self._set_status("就绪", "ready")
             self.error_state = False
             self._sync_button_text("打开连接")
@@ -2204,7 +2208,9 @@ class SerialTool(QMainWindow):
             
             # 更新状态栏
             self._update_status_connection_text(False)
-            self.status_baud.setText("波特率: 115200")
+            # 显示实际选中的波特率（避免写死 115200 与实际不符）
+            _cur_baud = self.combo_baud.currentText() or '115200'
+            self.status_baud.setText(f"波特率: {_cur_baud}")
             self._set_status(f"连接读取错误: {error_msg}", "error")
         except Exception as e:
             # UI更新失败不影响主要流程
@@ -4560,7 +4566,7 @@ class SerialTool(QMainWindow):
         try:
             # 创建设置对话框
             dialog = QDialog(self)
-            dialog.setWindowTitle("Setup")
+            dialog.setWindowTitle("串口设置")
             dialog.setMinimumSize(300, 250)
             # 移除右上角的问号帮助按钮
             dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
