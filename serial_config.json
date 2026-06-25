@@ -46,6 +46,12 @@
         }
     ],
     "send_history": [
+        "version \n",
+        "ping 192.168.5.58\n",
+        "ping 192.168.5.58",
+        "PING 192.168.5.58",
+        "PING",
+        "PING 192.168.5.82",
         "help",
         "ota http://172.16.3.99:8099/dnode_v0.3.275.bin",
         "version",
@@ -66,9 +72,10 @@
         "timeout": 120,
         "cmd_format": "ota {url}\\r\\n",
         "firmware_history": [
-            "C:/Users/GAOXIANG/Desktop/SerialTool/ota_serve/dnode_v0.3.275.bin",
-            "C:/Users/GAOXIANG/Desktop/SerialTool/ota_serve/dnode_v0.3.276.bin"
+            "C:/Users/GAOXIANG/Desktop/SerialTool/ota_serve/dnode_v0.3.276.bin",
+            "C:/Users/GAOXIANG/Desktop/SerialTool/ota_serve/huanghe_3.1.22.bin",
+            "C:/Users/GAOXIANG/Desktop/SerialTool/ota_serve/dnode_v0.3.275.bin"
         ],
-        "last_ip": "172.16.3.99"
+        "last_ip": "192.168.5.58"
     }
 }

@@ -2196,6 +2196,15 @@ class SerialTool(QMainWindow):
             except RuntimeError:
                 pass
             self._json_viewer_dlg = None
+        # 关闭 OTA 升级控制中心：必须在 save_config 之前关闭，
+        # 触发其 closeEvent → _save_settings 把最新设置（含 OTA 指令）写入文件，
+        # 否则主窗口 save_config 保留的会是旧值，导致 OTA 指令修改丢失
+        if hasattr(self, '_ota_dialog') and self._ota_dialog is not None:
+            try:
+                self._ota_dialog.close()
+            except RuntimeError:
+                pass
+            self._ota_dialog = None
         # 保存配置
         self.save_config()
         # 清理所有资源（cleanup_resources 已经包含了所有必要的清理）

@@ -57,15 +57,28 @@ class OTARequestHandler(SimpleHTTPRequestHandler):
         pass
 
     def copyfile(self, source, outputfile):
-        """覆写以统计已发送字节数，用于进度上报。"""
+        """覆写以统计已发送字节数，用于进度上报。
+
+        只统计本次 OTA 目标文件（_active_file）的发送量，避免其他文件访问、
+        残留连接或多客户端并发请求污染进度计数。
+        """
         buf_size = 64 * 1024  # 64KB 块
+        # 判断当前请求的文件是否是本次 OTA 的目标文件
+        try:
+            current_file = os.path.basename(self.translate_path(self.path))
+        except Exception:
+            current_file = ''
+        with OTARequestHandler._lock:
+            track = bool(OTARequestHandler._active_file
+                         and current_file == OTARequestHandler._active_file)
         while True:
             buf = source.read(buf_size)
             if not buf:
                 break
             outputfile.write(buf)
-            with OTARequestHandler._lock:
-                OTARequestHandler._bytes_sent += len(buf)
+            if track:
+                with OTARequestHandler._lock:
+                    OTARequestHandler._bytes_sent += len(buf)
 
 
 class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
@@ -152,6 +165,11 @@ class OTAControlCenter(QDialog):
         self._last_ip = ''  # 上次使用的 IP，用于恢复
         self._ota_stop_flag = False
         self._ota_in_progress = False
+        # 进度模式（兼容"上报进度"与"不上报进度"两类设备）：
+        #   'waiting' —— 初始，等待设备上报 Progress 或 HTTP 开始发送
+        #   'device'  —— 设备上报模式，进度条以设备 ota: Progress:XX% 为准
+        #   'http'    —— HTTP 发送量回退模式（设备不上报进度），用服务器发送量近似
+        self._progress_mode = 'waiting'
 
         # 进度跟踪
         self._progress_poll_timer = QTimer(self)
@@ -160,6 +178,12 @@ class OTAControlCenter(QDialog):
         self._timeout_timer = QTimer(self)
         self._timeout_timer.setSingleShot(True)
         self._timeout_timer.timeout.connect(self._on_ota_timeout)
+        # 回退定时器：HTTP 开始发送后等待设备上报 Progress 的宽限期，
+        # 超时仍无上报则判定设备不上报进度，切换到 http 回退模式
+        self._fallback_timer = QTimer(self)
+        self._fallback_timer.setSingleShot(True)
+        self._fallback_timer.setInterval(5000)  # 5 秒宽限
+        self._fallback_timer.timeout.connect(self._on_fallback_timeout)
         self._serial_data_connected = False
 
         self.init_ui()
@@ -336,6 +360,8 @@ class OTAControlCenter(QDialog):
         self._cmd_format_edit.setText("ota {url}\\r\\n")
         self._cmd_format_edit.setToolTip(
             "{url} 将被替换为下载地址。默认 \\r\\n 结尾，可自由编辑")
+        # 编辑完成（失焦/回车）即持久化，避免只在关闭对话框时保存导致修改丢失
+        self._cmd_format_edit.editingFinished.connect(self._on_cmd_format_edited)
         cmd_row.addWidget(self._cmd_format_edit)
         ota_layout.addLayout(cmd_row)
 
@@ -517,6 +543,20 @@ class OTAControlCenter(QDialog):
             for path in history:
                 if isinstance(path, str) and path.strip():
                     self._insert_history(path.strip(), at_front=False)
+
+    def _on_cmd_format_edited(self):
+        """OTA 指令编辑完成回调：实时持久化，保证修改不因异常退出/未关闭对话框而丢失。
+
+        若指令非空且不含任何结束符，自动补 \\r\\n（与 showEvent 的兼容逻辑一致），
+        然后立即写回配置文件。
+        """
+        fmt = self._cmd_format_edit.text()
+        if fmt and not any(seq in fmt for seq in ('\\r', '\\n', '\r', '\n')):
+            # 用 blockSignals 避免 setText 再次触发 editingFinished
+            self._cmd_format_edit.blockSignals(True)
+            self._cmd_format_edit.setText(fmt.rstrip() + '\\r\\n')
+            self._cmd_format_edit.blockSignals(False)
+        self._save_settings()
 
     def _save_settings(self):
         """将 OTA 相关设置写回主窗口配置文件。"""
@@ -781,6 +821,96 @@ class OTAControlCenter(QDialog):
         else:
             self._state_label.setStyleSheet("")
 
+    def _copy_firmware_safely(self, src_path, dest_dir):
+        """安全地把固件复制到 HTTP 服务目录，规避 Windows 文件占用问题。
+
+        方案 A：若源文件已在服务目录内，直接返回该路径，跳过复制（避免自复制冲突）。
+        方案 B：复制到临时文件 + 失败重试 + 原子替换，应对 HTTP 服务器/杀毒软件
+                短暂占用目标文件导致的 WinError 32（ERROR_SHARING_VIOLATION）。
+
+        返回 (dest_path, dst_size)；失败抛 IOError。
+        """
+        src_path = os.path.abspath(src_path)
+        dest_dir = os.path.abspath(dest_dir)
+        fw_filename = os.path.basename(src_path)
+        dest_path = os.path.join(dest_dir, fw_filename)
+
+        # ── 方案 A：源文件已在服务目录内，无需复制 ──
+        if os.path.normcase(src_path) == os.path.normcase(dest_path):
+            self._log(f"固件已在服务目录内，跳过复制: {fw_filename}")
+            return dest_path, os.path.getsize(dest_path)
+
+        # 确保服务目录存在
+        os.makedirs(dest_dir, exist_ok=True)
+
+        # ── 方案 B：复制到临时文件 + 重试 + 原子替换 ──
+        # 临时文件名加进程/时间后缀，避免多实例并发时碰撞
+        tmp_suffix = f".ota_tmp_{os.getpid()}_{int(time.time() * 1000)}"
+        tmp_path = dest_path + tmp_suffix
+
+        max_retries = 5
+        last_err = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                # 复制到临时文件（不触碰目标文件，避免与正在读取的句柄冲突）
+                shutil.copy2(src_path, tmp_path)
+                # 校验临时文件大小
+                src_size = os.path.getsize(src_path)
+                tmp_size = os.path.getsize(tmp_path)
+                if src_size != tmp_size:
+                    raise IOError(f"临时文件复制校验失败: {src_size} vs {tmp_size}")
+
+                # 原子替换目标文件
+                # Windows 上 os.replace 可原子覆盖已存在的目标文件，
+                # 且即使目标正被读取也能成功（替换的是目录项，不影响已打开的旧 inode）
+                try:
+                    os.replace(tmp_path, dest_path)
+                except OSError as e:
+                    # 若替换仍失败（极少见，目标被独占写锁定），退化为先删后改名
+                    last_err = e
+                    try:
+                        if os.path.exists(dest_path):
+                            os.remove(dest_path)
+                        os.rename(tmp_path, dest_path)
+                    except OSError as e2:
+                        last_err = e2
+                        raise
+                # 成功
+                return dest_path, os.path.getsize(dest_path)
+
+            except (OSError, IOError) as e:
+                last_err = e
+                # 清理本次失败的临时文件
+                try:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                except OSError:
+                    pass
+                # 仅对共享冲突/占用类错误重试；其他错误（如磁盘满）直接抛出
+                is_sharing_violation = (
+                    getattr(e, 'winerror', None) == 32  # ERROR_SHARING_VIOLATION
+                    or getattr(e, 'errno', None) in (13,)  # PermissionError
+                )
+                if not is_sharing_violation or attempt == max_retries:
+                    raise IOError(
+                        f"固件复制失败（第 {attempt}/{max_retries} 次）: {e}"
+                    ) from e
+                # 退避后重试（200ms / 400ms / 600ms / 800ms）
+                backoff = 0.2 * attempt
+                self._log(f"目标文件被占用，{backoff:.1f}s 后重试 "
+                          f"({attempt}/{max_retries})...")
+                # 用 processEvents 保持 UI 响应，同时支持停止中断
+                waited = 0.0
+                while waited < backoff:
+                    QApplication.processEvents()
+                    if self._ota_stop_flag:
+                        raise IOError("用户取消，固件复制已中断")
+                    time.sleep(0.05)
+                    waited += 0.05
+
+        # 理论上不会到达
+        raise IOError(f"固件复制失败: {last_err}")
+
     def _start_ota(self):
         """一键启动 OTA 流程。"""
         if self._ota_in_progress:
@@ -830,21 +960,18 @@ class OTAControlCenter(QDialog):
 
         # ── 开始 OTA 流程 ──
         self._ota_stop_flag = False
+        self._progress_mode = 'waiting'  # 重置进度模式，等待设备上报或回退
+        self._fallback_timer.stop()
         self._progress_bar.setValue(0)
 
         try:
-            # Step 1: 复制固件
+            # Step 1: 复制固件（安全复制：跳过自复制 + 临时文件 + 重试 + 原子替换）
             self._set_state(self.STATE_COPYING, "正在复制固件...")
             self._log("正在复制固件到服务目录...")
             fw_filename = os.path.basename(self.firmware_path)
-            dest_path = os.path.join(self._serve_dir, fw_filename)
-            shutil.copy2(self.firmware_path, dest_path)
+            dest_path, dst_size = self._copy_firmware_safely(
+                self.firmware_path, self._serve_dir)
 
-            # 校验
-            src_size = os.path.getsize(self.firmware_path)
-            dst_size = os.path.getsize(dest_path)
-            if src_size != dst_size:
-                raise IOError(f"文件复制校验失败: {src_size} vs {dst_size}")
             self._log(f"固件已复制: {fw_filename} ({dst_size} 字节)")
 
             # Step 2: 生成 URL
@@ -921,7 +1048,15 @@ class OTAControlCenter(QDialog):
                 self._on_serial_progress)
 
     def _poll_progress(self):
-        """HTTP 模式：轮询下载进度。"""
+        """HTTP 模式：轮询服务器发送量，按进度模式驱动进度条。
+
+        - waiting：等待设备上报 Progress；HTTP 一旦开始发送(sent>0)启动回退定时器，
+                   宽限期内进度条保持 0%，避免 begin 阶段造成虚假进度。
+        - device：进度条由 _on_serial_progress 驱动，此处不覆盖；服务器发送完毕
+                  时停止轮询并提示。
+        - http：设备不上报进度，用服务器发送量近似（封顶 99%，留 1% 给写入完成）；
+                发送完毕后停止轮询，等待设备串口确认或总超时。
+        """
         progress = OTARequestHandler.get_progress()
         if not progress:
             return
@@ -930,15 +1065,56 @@ class OTAControlCenter(QDialog):
         if total <= 0:
             return
 
-        pct = min(int(sent / total * 100), 100)
-        self._progress_bar.setValue(pct)
-        self._state_label.setText(
-            f"正在传输固件… {pct}% ({sent // 1024}KB / {total // 1024}KB)")
+        # ── device 模式：进度条以设备上报为准，此处仅处理发送完毕 ──
+        if self._progress_mode == 'device':
+            if sent >= total:
+                self._progress_poll_timer.stop()
+                self._log(f"固件已全部发送至网络 ({total // 1024}KB)，"
+                          f"等待设备写入完成...")
+            return
 
-        # 发送完毕
-        if sent >= total:
-            self._progress_poll_timer.stop()
-            self._log(f"固件发送完毕 ({total // 1024}KB)，等待设备确认...")
+        # ── http 模式：用服务器发送量近似进度 ──
+        if self._progress_mode == 'http':
+            if sent >= total:
+                # 发送完毕：封顶 99%，留 1% 给设备写入完成；停止轮询（发送量不再变化）
+                self._progress_bar.setValue(99)
+                self._state_label.setText(
+                    f"固件传输完毕，等待设备写入... ({total // 1024}KB)")
+                self._progress_poll_timer.stop()
+                self._log(f"固件已全部发送 ({total // 1024}KB)，"
+                          f"等待设备写入完成（设备不上报进度）...")
+                return
+            pct = min(int(sent / total * 99), 99)
+            self._progress_bar.setValue(pct)
+            self._state_label.setText(
+                f"传输中 {pct}% ({sent // 1024}KB / {total // 1024}KB)")
+            return
+
+        # ── waiting 模式：等待设备上报或回退 ──
+        if sent == 0:
+            self._state_label.setText("等待设备开始下载...")
+            return
+
+        # 首次检测到 HTTP 开始发送：启动回退定时器（仅启动一次）
+        if not self._fallback_timer.isActive():
+            self._fallback_timer.start()
+            self._log("检测到设备开始下载，等待设备上报进度"
+                      "（若不上报将切换为传输进度模式）...")
+        self._state_label.setText(
+            f"等待设备上报进度… ({sent // 1024}KB / {total // 1024}KB)")
+
+    def _on_fallback_timeout(self):
+        """回退定时器触发：宽限期内未收到设备 Progress，判定设备不上报进度。
+
+        切换到 http 回退模式，用 HTTP 服务器发送量近似驱动进度条，
+        避免"设备不上报进度"时进度条卡在 0% 导致无法升级的体验问题。
+        """
+        if self._progress_mode != 'waiting':
+            return
+        self._progress_mode = 'http'
+        self._log("设备未上报进度，切换为传输进度模式（按服务器发送量近似）")
+        # 立即触发一次轮询，让进度条马上反映当前发送量
+        self._poll_progress()
 
     def _on_serial_progress(self, data):
         """解析串口上报的进度/完成消息（匹配 ESP-IDF 日志格式）。"""
@@ -956,6 +1132,11 @@ class OTAControlCenter(QDialog):
         if m:
             pct = int(m.group(1))
             pct = max(0, min(pct, 100))
+            # 收到设备真实下载进度：取消回退定时器，进入设备上报模式
+            if self._progress_mode != 'device':
+                self._fallback_timer.stop()
+                self._progress_mode = 'device'
+                self._log("设备已上报进度，切换为设备上报模式")
             self._progress_bar.setValue(pct)
             self._state_label.setText(f"设备下载进度 {pct}%")
             self._log(f"设备上报进度: {pct}%")
@@ -1003,10 +1184,13 @@ class OTAControlCenter(QDialog):
                                     "固件下载超时，设备无响应。")
                 return
             else:
-                # 已传完但设备没确认，也视为完成
+                # 已传完但设备没确认
                 self._log("固件已全部发送，但设备未确认（超时）")
                 self._progress_poll_timer.stop()
-                self._progress_bar.setValue(100)
+                # device 模式：保留设备最后上报的进度，不强制 100%
+                # waiting/http 模式：设备不上报完成，传输已完成，视为成功并置 100%
+                if self._progress_mode != 'device':
+                    self._progress_bar.setValue(100)
                 self._set_state(self.STATE_SUCCESS, "✅ 升级完成（未收到确认）")
                 self._on_ota_finished()
                 return
@@ -1025,6 +1209,7 @@ class OTAControlCenter(QDialog):
         self._ota_stop_flag = False
         self._progress_poll_timer.stop()
         self._timeout_timer.stop()
+        self._fallback_timer.stop()
         self._disconnect_serial_signal()
         self._suppress_serial_errors(False)  # 恢复串口错误信号
 
@@ -1037,6 +1222,7 @@ class OTAControlCenter(QDialog):
         """紧急中断 OTA 流程。"""
         self._log("用户取消 OTA 流程")
         self._ota_stop_flag = True
+        self._fallback_timer.stop()
 
         # 尝试发送取消指令
         if self.main_window and hasattr(self.main_window, 'transport') \
@@ -1120,6 +1306,7 @@ class OTAControlCenter(QDialog):
         self._save_settings()
         self._progress_poll_timer.stop()
         self._timeout_timer.stop()
+        self._fallback_timer.stop()
         self._disconnect_serial_signal()
         # HTTP 服务继续运行，不受对话框关闭影响
         event.accept()
