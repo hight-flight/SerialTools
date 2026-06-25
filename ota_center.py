@@ -4,6 +4,7 @@ OTA 升级控制中心：HTTP 服务管理、固件选择、OTA 流程控制及�
 """
 
 import os
+import re
 import socket
 import time
 import json
@@ -360,7 +361,8 @@ class OTAControlCenter(QDialog):
         self._cmd_format_edit.setText("ota {url}\\r\\n")
         self._cmd_format_edit.setToolTip(
             "{url} 将被替换为下载地址。默认 \\r\\n 结尾，可自由编辑")
-        # 编辑完成（失焦/回车）即持久化，避免只在关闭对话框时保存导致修改丢失
+        # 编辑完成（失焦/回车）自动补 \r\n 并持久化其他设置（端口/超时等）；
+        # 指令本身不持久化，每次打开恢复默认值
         self._cmd_format_edit.editingFinished.connect(self._on_cmd_format_edited)
         cmd_row.addWidget(self._cmd_format_edit)
         ota_layout.addLayout(cmd_row)
@@ -476,10 +478,8 @@ class OTAControlCenter(QDialog):
         if self.main_window and hasattr(self.main_window, '_apply_dialog_theme'):
             self.main_window._apply_dialog_theme(self)
         self._refresh_ips()
-        # 兼容旧配置：确保 OTA 指令含结束符
-        fmt = self._cmd_format_edit.text()
-        if fmt and not any(seq in fmt for seq in ('\\r', '\\n', '\r', '\n')):
-            self._cmd_format_edit.setText(fmt.rstrip() + '\\r\\n')
+        # OTA 指令每次打开恢复默认值（用户可临时修改用于本次升级，不持久化）
+        self._cmd_format_edit.setText("ota {url}\\r\\n")
         # 恢复上次选择的 IP
         if self._last_ip:
             idx = self._ip_combo.findText(self._last_ip)
@@ -527,12 +527,8 @@ class OTAControlCenter(QDialog):
         if isinstance(timeout, int):
             self._timeout_spin.setValue(max(10, min(timeout, 3600)))
 
-        cmd_format = ota.get('cmd_format', 'ota {url}\\r\\n')
-        if isinstance(cmd_format, str) and cmd_format.strip():
-            # 兼容旧配置：不含任何结束符时自动追加 \r\n
-            if not any(seq in cmd_format for seq in ('\\r', '\\n', '\r', '\n')):
-                cmd_format = cmd_format.rstrip() + '\\r\\n'
-            self._cmd_format_edit.setText(cmd_format)
+        # 注意：cmd_format 不从配置加载——showEvent 每次打开都恢复默认值，
+        # 用户可临时修改用于本次升级，不持久化。
 
         last_ip = ota.get('last_ip', '')
         if isinstance(last_ip, str):
@@ -545,17 +541,11 @@ class OTAControlCenter(QDialog):
                     self._insert_history(path.strip(), at_front=False)
 
     def _on_cmd_format_edited(self):
-        """OTA 指令编辑完成回调：实时持久化，保证修改不因异常退出/未关闭对话框而丢失。
+        """OTA 指令编辑完成回调：持久化其他设置（端口/超时等）。
 
-        若指令非空且不含任何结束符，自动补 \\r\\n（与 showEvent 的兼容逻辑一致），
-        然后立即写回配置文件。
+        指令本身不持久化——每次打开 OTA 控制中心都恢复默认值，
+        用户可临时修改用于本次升级。不自动追加 \\r\\n，完全尊重用户输入。
         """
-        fmt = self._cmd_format_edit.text()
-        if fmt and not any(seq in fmt for seq in ('\\r', '\\n', '\r', '\n')):
-            # 用 blockSignals 避免 setText 再次触发 editingFinished
-            self._cmd_format_edit.blockSignals(True)
-            self._cmd_format_edit.setText(fmt.rstrip() + '\\r\\n')
-            self._cmd_format_edit.blockSignals(False)
         self._save_settings()
 
     def _save_settings(self):
@@ -582,7 +572,8 @@ class OTAControlCenter(QDialog):
             'port': self._port_spin.value(),
             'auto_stop': self._check_auto_stop.isChecked(),
             'timeout': self._timeout_spin.value(),
-            'cmd_format': self._cmd_format_edit.text(),
+            # OTA 指令不持久化用户修改，始终保存默认值
+            'cmd_format': 'ota {url}\\r\\n',
             'firmware_history': history[:self.MAX_FIRMWARE_HISTORY],
             'last_ip': self._ip_combo.currentText(),
         }
@@ -917,12 +908,11 @@ class OTAControlCenter(QDialog):
             self._log("OTA 正在执行中，请等待完成或点击停止")
             return
         self._ota_in_progress = True
+        self._ota_stop_flag = False  # 清除上一次的取消标志（必须在 HTTP 等待循环前）
 
         # ── 前置检查 ──
         if not self.firmware_path or not os.path.exists(self.firmware_path):
             self._ota_in_progress = False
-            QMessageBox.warning(self, "提示", "请先选择固件文件。")
-            return
             QMessageBox.warning(self, "提示", "请先选择固件文件。")
             return
 
@@ -959,7 +949,6 @@ class OTAControlCenter(QDialog):
                 return
 
         # ── 开始 OTA 流程 ──
-        self._ota_stop_flag = False
         self._progress_mode = 'waiting'  # 重置进度模式，等待设备上报或回退
         self._fallback_timer.stop()
         self._progress_bar.setValue(0)
@@ -1125,8 +1114,6 @@ class OTAControlCenter(QDialog):
         except Exception:
             text = data.decode('latin-1', errors='replace')
 
-        import re
-
         # 进度: ota: Progress:94% 或 ota: Progress: 94%
         m = re.search(r'ota\s*:\s*Progress\s*:\s*(\d+)\s*%', text, re.IGNORECASE)
         if m:
@@ -1206,7 +1193,11 @@ class OTAControlCenter(QDialog):
     def _on_ota_finished(self):
         """OTA 流程结束（成功/失败/取消）后的统一清理。"""
         self._ota_in_progress = False
-        self._ota_stop_flag = False
+        # 注意：不在此重置 _ota_stop_flag。
+        # _start_ota 的 HTTP 启动等待循环通过 processEvents() 响应 UI，
+        # 若此处重置为 False，用户点"停止"后 _stop_ota 设置的 True 会被覆盖，
+        # 导致等待循环检测不到取消、OTA 继续执行。
+        # _ota_stop_flag 由 _start_ota 开头重置为 False。
         self._progress_poll_timer.stop()
         self._timeout_timer.stop()
         self._fallback_timer.stop()
