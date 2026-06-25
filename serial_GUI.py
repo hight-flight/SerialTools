@@ -102,8 +102,16 @@ class SerialTool(QMainWindow):
         self.thread_pool = QThreadPool()
         self.thread_pool.setMaxThreadCount(4)
         
-        # 配置文件路径
-        self.config_file = os.path.join(os.getcwd(), "serial_config.json")
+        # 配置文件路径（PID 后缀，避免多实例互相覆盖）
+        self._base_config_file = os.path.join(os.getcwd(), "serial_config.json")
+        self.config_file = os.path.join(os.getcwd(), f"serial_config_{os.getpid()}.json")
+        # 首次启动：从基础配置继承，保证新实例继承上次设置
+        if not os.path.exists(self.config_file) and os.path.exists(self._base_config_file):
+            try:
+                import shutil as _shutil
+                _shutil.copy2(self._base_config_file, self.config_file)
+            except Exception:
+                pass
         
         # 线程安全相关
         self.serial_mutex = QMutex()  # 串口操作互斥锁
@@ -2211,6 +2219,12 @@ class SerialTool(QMainWindow):
             self._ota_dialog = None
         # 保存配置
         self.save_config()
+        # 清理 PID 配置文件（已同步到基础配置，PID 文件可删除）
+        try:
+            if os.path.exists(self.config_file):
+                os.remove(self.config_file)
+        except Exception:
+            pass
         # 清理所有资源（cleanup_resources 已经包含了所有必要的清理）
         self.cleanup_resources()
 
@@ -5194,6 +5208,12 @@ class SerialTool(QMainWindow):
         try:
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4, ensure_ascii=False)
+            # 同步到基础配置文件，供下次新实例继承
+            try:
+                import shutil as _shutil
+                _shutil.copy2(self.config_file, self._base_config_file)
+            except Exception:
+                pass
             self.append_text("[系统]: 配置已保存\n")
         except Exception as e:
             self.append_text(f"[错误]: 保存配置失败: {str(e)}\n")

@@ -8,10 +8,12 @@
 """
 
 import sys
+import os
 import json
 import re
 import time
 import datetime
+import shutil
 from collections import deque
 from typing import Optional
 
@@ -3068,6 +3070,16 @@ class JsonViewerDialog(QDialog):
         self._seq_counter = 0
         self._protocol_template: ProtocolTemplate | None = None  # 二进制协议模板
 
+        # 布局配置文件（PID 后缀，避免多实例互相覆盖）
+        self._base_ini_file = os.path.join(os.getcwd(), 'data_viewer.ini')
+        self._ini_file = os.path.join(os.getcwd(), f'data_viewer_{os.getpid()}.ini')
+        # 首次启动：从基础配置继承，保证新实例继承上次布局
+        if not os.path.exists(self._ini_file) and os.path.exists(self._base_ini_file):
+            try:
+                shutil.copy2(self._base_ini_file, self._ini_file)
+            except Exception:
+                pass
+
         self.setWindowTitle("数据分析面板")
         self.resize(1200, 800)
         self.setMinimumSize(900, 600)
@@ -3617,8 +3629,13 @@ class JsonViewerDialog(QDialog):
                 'is_computed': json.dumps({p: e.get('is_computed', False) for p, e in tracked.items()}),
                 'expressions': json.dumps({p: e.get('expression', '') for p, e in tracked.items()}),
             }
-            with open('data_viewer.ini', 'w', encoding='utf-8') as f:
+            with open(self._ini_file, 'w', encoding='utf-8') as f:
                 ini.write(f)
+            # 同步到基础配置文件，供下次新实例继承
+            try:
+                shutil.copy2(self._ini_file, self._base_ini_file)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -3626,7 +3643,7 @@ class JsonViewerDialog(QDialog):
         try:
             import configparser
             ini = configparser.ConfigParser()
-            if not ini.read('data_viewer.ini'):
+            if not ini.read(self._ini_file):
                 return
             if 'layout' in ini:
                 h = QByteArray.fromHex(ini['layout']['splitter_h'].encode('utf-8'))
@@ -3678,11 +3695,23 @@ class JsonViewerDialog(QDialog):
     def closeEvent(self, event):
         self._save_layout()
         self._stop_capture()
+        # 清理 PID 专属 ini 文件（已同步到基础配置，PID 文件可删除）
+        try:
+            if os.path.exists(self._ini_file):
+                os.remove(self._ini_file)
+        except Exception:
+            pass
         event.accept()
 
     def reject(self):
         self._save_layout()
         self._stop_capture()
+        # 清理 PID 专属 ini 文件
+        try:
+            if os.path.exists(self._ini_file):
+                os.remove(self._ini_file)
+        except Exception:
+            pass
         super().reject()
 
 

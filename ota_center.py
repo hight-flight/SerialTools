@@ -506,7 +506,10 @@ class OTAControlCenter(QDialog):
     def _load_settings(self):
         """从主窗口配置中加载 OTA 相关设置。"""
         config = {}
-        config_file = os.path.join(os.getcwd(), 'serial_config.json')
+        # 使用主窗口的 PID 配置文件路径，避免多实例冲突
+        config_file = self.main_window.config_file if (
+            self.main_window and hasattr(self.main_window, 'config_file')
+        ) else os.path.join(os.getcwd(), 'serial_config.json')
         if os.path.exists(config_file):
             try:
                 with open(config_file, 'r', encoding='utf-8') as f:
@@ -550,7 +553,10 @@ class OTAControlCenter(QDialog):
 
     def _save_settings(self):
         """将 OTA 相关设置写回主窗口配置文件。"""
-        config_file = os.path.join(os.getcwd(), 'serial_config.json')
+        # 使用主窗口的 PID 配置文件路径，避免多实例冲突
+        config_file = self.main_window.config_file if (
+            self.main_window and hasattr(self.main_window, 'config_file')
+        ) else os.path.join(os.getcwd(), 'serial_config.json')
         config = {}
         if os.path.exists(config_file):
             try:
