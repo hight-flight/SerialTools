@@ -59,6 +59,89 @@ class FileOperationWorker(QRunnable):
         except Exception as e:
             self.signals.error.emit(f"文件操作错误: 未知错误: {e}")
 
+
+def _is_pid_alive(pid):
+    """检查指定 PID 的进程是否仍在运行。
+
+    返回 True 表示进程存活（或无法确认是否已退出，保守不删）；
+    返回 False 表示进程已不存在，可安全清理其配置文件。
+    """
+    if pid == os.getpid():
+        return True
+    try:
+        if sys.platform == 'win32':
+            import ctypes
+            from ctypes import wintypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            kernel32 = ctypes.windll.kernel32
+            # 显式声明 argtypes/restype，保证 64 位 Python 调用正确
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+            kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+            kernel32.GetLastError.argtypes = []
+            kernel32.GetLastError.restype = wintypes.DWORD
+
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                err = kernel32.GetLastError()
+                # ERROR_ACCESS_DENIED(5): 进程存在但无权限 → 视为存活
+                # ERROR_INVALID_PARAMETER(87): 进程不存在
+                return err == 5
+            try:
+                exit_code = wintypes.DWORD()
+                if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    # STILL_ACTIVE 表示进程仍在运行
+                    return exit_code.value == STILL_ACTIVE
+                return False
+            finally:
+                kernel32.CloseHandle(handle)
+        else:
+            os.kill(pid, 0)
+            return True
+    except (OSError, ProcessLookupError):
+        return False
+    except Exception:
+        return False
+
+
+def _cleanup_stale_pid_files():
+    """清理残留的 PID 配置文件（进程异常退出时未清理的文件）。
+
+    扫描工作目录中的 serial_config_*.json 和 data_viewer_*.ini 文件，
+    删除条件（满足任一即删除）：
+      1. PID 对应进程已不存在
+      2. 文件年龄超过 7 天（兜底，防止 PID 复用导致永久残留）
+    """
+    import glob
+    cwd = os.getcwd()
+    MAX_AGE_SECONDS = 7 * 24 * 3600  # 7 天兜底阈值
+    now = time.time()
+    for pattern in ('serial_config_*.json', 'data_viewer_*.ini'):
+        for filepath in glob.glob(os.path.join(cwd, pattern)):
+            try:
+                basename = os.path.basename(filepath)
+                name_part = basename.rsplit('.', 1)[0]      # 去扩展名
+                pid_str = name_part.rsplit('_', 1)[-1]      # 取末段 PID
+                pid = int(pid_str)
+                # 条件1：进程已退出
+                if not _is_pid_alive(pid):
+                    os.remove(filepath)
+                    continue
+                # 条件2：文件年龄超过阈值（兜底 PID 复用场景）
+                try:
+                    mtime = os.path.getmtime(filepath)
+                    if (now - mtime) > MAX_AGE_SECONDS:
+                        os.remove(filepath)
+                except OSError:
+                    pass
+            except (ValueError, IndexError, OSError):
+                pass
+
+
 # --- 主窗口类 ---
 class SerialTool(QMainWindow):
     def __init__(self):
@@ -105,6 +188,8 @@ class SerialTool(QMainWindow):
         # 配置文件路径（PID 后缀，避免多实例互相覆盖）
         self._base_config_file = os.path.join(os.getcwd(), "serial_config.json")
         self.config_file = os.path.join(os.getcwd(), f"serial_config_{os.getpid()}.json")
+        # 启动时清理残留的 PID 配置文件（进程异常退出时未清理的文件）
+        _cleanup_stale_pid_files()
         # 首次启动：从基础配置继承，保证新实例继承上次设置
         if not os.path.exists(self.config_file) and os.path.exists(self._base_config_file):
             try:
