@@ -1162,6 +1162,8 @@ class SerialTool(QMainWindow):
         # 安装应用级事件过滤器：自动给所有 QMessageBox/QDialog 应用暗黑标题栏
         # 零侵入解决 58+ 处原生弹窗在暗黑模式下标题栏未变暗的问题
         QApplication.instance().installEventFilter(self)
+        # monkey-patch QMessageBox 静态方法：在 exec_ 前预先应用暗黑主题，避免白色闪烁
+        self._patch_qmessagebox_theme()
 
     def toggle_repeat(self):
         """切换重复发送状态"""
@@ -1260,6 +1262,69 @@ class SerialTool(QMainWindow):
         if hasattr(self, '_current_status_text'):
             self._set_status(self._current_status_text, self._current_status_level)
 
+
+    def _patch_qmessagebox_theme(self):
+        """monkey-patch QMessageBox 静态方法，在 exec_ 前预先应用暗黑主题。
+
+        解决事件过滤器方案（WinIdChange/Show）的白色闪烁问题：
+        QMessageBox 静态方法内部直接 exec_()，窗口创建即显示，
+        事件过滤器在显示后才触发 DWM 设置，产生白色闪烁。
+        通过包装静态方法，在调用前创建窗口、应用主题、再 exec_，彻底消除闪烁。
+        """
+        if getattr(QMessageBox, '_theme_patched', False):
+            return  # 避免重复 patch
+        QMessageBox._theme_patched = True
+
+        # 保存原始静态方法
+        _orig_information = QMessageBox.information
+        _orig_warning = QMessageBox.warning
+        _orig_critical = QMessageBox.critical
+        _orig_question = QMessageBox.question
+
+        def _apply_theme_before_exec(msgbox):
+            """在 exec_ 前应用主题（仅暗黑模式）。
+            关键：用 winId() 强制创建原生窗口句柄但不触发显示，
+            然后设置 DWM 暗色属性，这样窗口首次绘制时标题栏已经是暗色。
+            """
+            if self.current_theme == 'dark' and not getattr(msgbox, '_themed', False):
+                try:
+                    # winId() 会触发 QWidget 的窗口创建（创建 hwnd），但不显示窗口
+                    # 这是 Qt 提供的"创建窗口但不显示"的标准方法
+                    _ = msgbox.winId()
+                    # 此时 hwnd 已创建但窗口未显示，设置 DWM 暗色属性
+                    apply_dialog_theme(msgbox, True)
+                    msgbox._themed = True
+                except Exception:
+                    pass
+
+        @staticmethod
+        def _patched_information(parent, title, text, *args, **kwargs):
+            msgbox = QMessageBox(QMessageBox.Information, title, text, *args, parent=parent, **kwargs) if args else QMessageBox(QMessageBox.Information, title, text, parent=parent)
+            _apply_theme_before_exec(msgbox)
+            return msgbox.exec_()
+
+        @staticmethod
+        def _patched_warning(parent, title, text, *args, **kwargs):
+            msgbox = QMessageBox(QMessageBox.Warning, title, text, *args, parent=parent, **kwargs) if args else QMessageBox(QMessageBox.Warning, title, text, parent=parent)
+            _apply_theme_before_exec(msgbox)
+            return msgbox.exec_()
+
+        @staticmethod
+        def _patched_critical(parent, title, text, *args, **kwargs):
+            msgbox = QMessageBox(QMessageBox.Critical, title, text, *args, parent=parent, **kwargs) if args else QMessageBox(QMessageBox.Critical, title, text, parent=parent)
+            _apply_theme_before_exec(msgbox)
+            return msgbox.exec_()
+
+        @staticmethod
+        def _patched_question(parent, title, text, *args, **kwargs):
+            msgbox = QMessageBox(QMessageBox.Question, title, text, *args, parent=parent, **kwargs) if args else QMessageBox(QMessageBox.Question, title, text, parent=parent)
+            _apply_theme_before_exec(msgbox)
+            return msgbox.exec_()
+
+        QMessageBox.information = _patched_information
+        QMessageBox.warning = _patched_warning
+        QMessageBox.critical = _patched_critical
+        QMessageBox.question = _patched_question
 
     def _set_titlebar_dark(self, dark=True, color_hex='#282C34'):
         """设置窗口标题栏/背景颜色以匹配主题（Windows / Linux / macOS）"""
@@ -3574,19 +3639,16 @@ class SerialTool(QMainWindow):
     def eventFilter(self, obj, event):
         """事件过滤器：右键重命名按钮文本 / 发送栏上下键历史记录导航 / 接收区滚轮暂停跟底 / 自动给弹窗应用暗黑标题栏"""
         # 自动给所有 QMessageBox/独立 QDialog 应用当前主题（标题栏暗色处理）
-        # 仅在暗黑模式下生效，拦截 Show 事件一次性处理
-        # 注意：只处理 QMessageBox 和无父窗口的顶级 QDialog（避免干扰主窗口的子 QDialog）
-        if event.type() == QEvent.Show and self.current_theme == 'dark':
+        # 用 WinIdChange 事件（窗口获得 hwnd 时触发，早于 Show），避免显示后再改 DWM 产生白色闪烁
+        # 仅在暗黑模式下生效，一次性处理
+        if self.current_theme == 'dark' and event.type() == QEvent.WinIdChange:
             if not getattr(obj, '_themed', False):
-                # QMessageBox：原生弹窗，需要 DWM 标题栏处理
+                _need_theme = False
                 if isinstance(obj, QMessageBox):
-                    try:
-                        apply_dialog_theme(obj, True)
-                        obj._themed = True
-                    except Exception:
-                        pass
-                # 独立顶级 QDialog（无父窗口）：可能是未处理主题的遗留对话框
+                    _need_theme = True
                 elif isinstance(obj, QDialog) and obj.parent() is None:
+                    _need_theme = True
+                if _need_theme and obj.winId():
                     try:
                         apply_dialog_theme(obj, True)
                         obj._themed = True
