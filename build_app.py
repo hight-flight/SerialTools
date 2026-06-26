@@ -141,7 +141,7 @@ def build_setup(icon_path=None):
     cmd = [iscc, '/Q', iss_path]  # /Q 静默，仅输出错误
     print("  - 正在编译安装包...")
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=BUILD_TIMEOUT)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=BUILD_TIMEOUT)
     except subprocess.TimeoutExpired:
         print(f"  [ERROR] 编译超时（超过{BUILD_TIMEOUT}秒）")
         return False

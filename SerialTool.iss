@@ -1,6 +1,6 @@
 ; 由 build_app.py 自动生成，请勿手动编辑
 #define MyAppName "SerialTool"
-#define MyAppVersion "1.2.9"
+#define MyAppVersion "1.3.2"
 #define MyAppExeName "SerialTool.exe"
 #define MyAppSourceDir "dist\SerialTool"
 
@@ -19,10 +19,10 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
-SetupIconFile=D:\script\code_project\serial_GUI\aigei_com.ico
+SetupIconFile=D:\script\code_project\serial_GUI\图标.ico
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesesimp"; MessagesFile: "compiler:Default.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
