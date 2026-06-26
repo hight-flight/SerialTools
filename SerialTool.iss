@@ -22,7 +22,7 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupIconFile=D:\script\code_project\serial_GUI\图标.ico
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Default.isl"
+Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
