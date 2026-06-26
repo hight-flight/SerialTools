@@ -2351,7 +2351,16 @@ class CaptureListWidget(QWidget):
         obj_a = a.get('obj')
         obj_b = b.get('obj')
         if obj_a is None or obj_b is None:
-            QMessageBox.information(self, "比较差异", "其中一个条目非有效 JSON，无法比较。")
+            _msg = QMessageBox(QMessageBox.Information, "比较差异", "其中一个条目非有效 JSON，无法比较。")
+            # 应用主题（标题栏暗色处理）—— 向上查找 JsonViewerDialog 的 theme_callback
+            _p = self
+            while _p is not None:
+                _cb = getattr(_p, '_theme_callback', None)
+                if _cb:
+                    _cb(_msg)
+                    break
+                _p = _p.parent()
+            _msg.exec_()
             return
 
         # 简单深度对比
@@ -2370,6 +2379,15 @@ class CaptureListWidget(QWidget):
         else:
             te.setPlainText("✓ 两个 JSON 对象完全相同。")
         dl.addWidget(te)
+
+        # 应用主题（标题栏暗色处理）—— 向上查找 JsonViewerDialog 的 theme_callback
+        _p = self
+        while _p is not None:
+            _cb = getattr(_p, '_theme_callback', None)
+            if _cb:
+                _cb(dlg)
+                break
+            _p = _p.parent()
 
         dlg.setAttribute(Qt.WA_DeleteOnClose)
         dlg.show()
@@ -3064,7 +3082,10 @@ class ProtocolEditorDialog(QDialog):
                 self._proto = ProtocolTemplate.from_dict(d)
                 self._sync_ui_from_proto()
             except Exception as e:
-                QMessageBox.warning(self, "加载失败", f"无法加载协议模板:\n{e}")
+                _msg = QMessageBox(QMessageBox.Warning, "加载失败", f"无法加载协议模板:\n{e}")
+                if self._theme_callback:
+                    self._theme_callback(_msg)
+                _msg.exec_()
 
     def get_template(self) -> ProtocolTemplate:
         """返回编辑后的协议模板"""
@@ -3379,7 +3400,7 @@ class JsonViewerDialog(QDialog):
 
     def _show_help(self):
         """显示使用说明"""
-        QMessageBox.information(self, "数据分析面板 — 使用说明",
+        msg = QMessageBox(QMessageBox.Information, "数据分析面板 — 使用说明",
             "<b>━━ 基本操作 ━━</b><br>"
             "1. 主窗口打开串口连接后，点击 <b>「▶ 开始监听」</b> 开始捕获<br>"
             "2. 根据数据格式选择过滤模式：<br>"
@@ -3411,6 +3432,15 @@ class JsonViewerDialog(QDialog):
             "Ctrl+F — 聚焦搜索框 &nbsp;|&nbsp; Delete — 删除选中项<br>"
             "Space — 暂停/继续图表"
         )
+        # 应用主题（标题栏暗色处理）—— 向上查找 JsonViewerDialog 的 theme_callback
+        _p = self
+        while _p is not None:
+            _cb = getattr(_p, '_theme_callback', None)
+            if _cb:
+                _cb(msg)
+                break
+            _p = _p.parent()
+        msg.exec_()
 
     def _toggle_data_table(self):
         """切换数据表格显示/隐藏"""
@@ -3590,12 +3620,12 @@ class JsonViewerDialog(QDialog):
         self.lbl_status.setText("状态: 就绪 | 捕获 0 条 | 速率 0/s")
 
     def _clear_all(self):
-        reply = QMessageBox.question(
-            self, "确认清空",
+        _msg = QMessageBox(QMessageBox.Question, "确认清空",
             "确定要清空所有捕获数据和图表吗？\n此操作不可撤销。",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if self._theme_callback:
+            self._theme_callback(_msg)
+        if _msg.exec_() != QMessageBox.Yes:
             return
 
         self._capture_count = 0

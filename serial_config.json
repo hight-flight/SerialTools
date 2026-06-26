@@ -66,7 +66,7 @@
     "parity": "None",
     "flow_control": "None",
     "encoding": "UTF-8",
-    "theme": "light",
+    "theme": "dark",
     "ota": {
         "port": 8080,
         "auto_stop": true,

@@ -1159,6 +1159,10 @@ class SerialTool(QMainWindow):
         # 应用初始主题（必须在所有控件创建之后调用）
         self.apply_theme(self.current_theme)
 
+        # 安装应用级事件过滤器：自动给所有 QMessageBox/QDialog 应用暗黑标题栏
+        # 零侵入解决 58+ 处原生弹窗在暗黑模式下标题栏未变暗的问题
+        QApplication.instance().installEventFilter(self)
+
     def toggle_repeat(self):
         """切换重复发送状态"""
         if self.check_repeat.isChecked():
@@ -3568,7 +3572,27 @@ class SerialTool(QMainWindow):
             self.append_text(f"[错误]: 保存多字符项目失败: {e}\n")
 
     def eventFilter(self, obj, event):
-        """事件过滤器：右键重命名按钮文本 / 发送栏上下键历史记录导航 / 接收区滚轮暂停跟底"""
+        """事件过滤器：右键重命名按钮文本 / 发送栏上下键历史记录导航 / 接收区滚轮暂停跟底 / 自动给弹窗应用暗黑标题栏"""
+        # 自动给所有 QMessageBox/独立 QDialog 应用当前主题（标题栏暗色处理）
+        # 仅在暗黑模式下生效，拦截 Show 事件一次性处理
+        # 注意：只处理 QMessageBox 和无父窗口的顶级 QDialog（避免干扰主窗口的子 QDialog）
+        if event.type() == QEvent.Show and self.current_theme == 'dark':
+            if not getattr(obj, '_themed', False):
+                # QMessageBox：原生弹窗，需要 DWM 标题栏处理
+                if isinstance(obj, QMessageBox):
+                    try:
+                        apply_dialog_theme(obj, True)
+                        obj._themed = True
+                    except Exception:
+                        pass
+                # 独立顶级 QDialog（无父窗口）：可能是未处理主题的遗留对话框
+                elif isinstance(obj, QDialog) and obj.parent() is None:
+                    try:
+                        apply_dialog_theme(obj, True)
+                        obj._themed = True
+                    except Exception:
+                        pass
+
         # 构造期间可能被提前调用，对尚未创建的控件做防御性判断
         text_recv = getattr(self, 'text_recv', None)
         text_send = getattr(self, 'text_send', None)
