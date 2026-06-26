@@ -148,7 +148,7 @@ QHeaderView::section {
 }
 QHeaderView::section:hover { background-color: #2C313C; }
 QStatusBar  { background-color: #21252B; border-top: 1px solid #181A1F; color: #6A7384; }
-QStatusBar QLabel#status_sep { color: #3E4451; }
+QStatusBar::item { border: none; }
 QSplitter::handle { background-color: #3E4451; }
 QSplitter::handle:hover { background-color: #4B5363; }
 QSplitter::handle:pressed { background-color: #5C6370; }
@@ -289,7 +289,7 @@ QHeaderView::section {
 }
 QHeaderView::section:hover { background-color: #D0D0D0; }
 QStatusBar  { background-color: #E8E8E8; border-top: 1px solid #CCCCCC; color: #333333; }
-QStatusBar QLabel#status_sep { color: #CCCCCC; }
+QStatusBar::item { border: none; }
 QSplitter::handle { background-color: #CCCCCC; }
 QSplitter::handle:hover { background-color: #AAAAAA; }
 QSplitter::handle:pressed { background-color: #999999; }

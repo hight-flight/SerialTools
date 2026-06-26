@@ -1140,14 +1140,16 @@ class SerialTool(QMainWindow):
         self.status_log.setFont(QFont("Microsoft YaHei", 9))
         
         self.statusBar().addPermanentWidget(self.status_connection)
-        _sep1 = QLabel("·"); _sep1.setObjectName("status_sep"); _sep1.setFont(QFont("Microsoft YaHei", 9))
-        self.statusBar().addPermanentWidget(_sep1)
+        # 纯间距分隔（VSCode 风格）：无分隔符，用固定宽度空白 QLabel 做间距
+        def _make_gap(w=16):
+            gap = QLabel()
+            gap.setFixedWidth(w)
+            return gap
+        self.statusBar().addPermanentWidget(_make_gap())
         self.statusBar().addPermanentWidget(self.status_baud)
-        _sep2 = QLabel("·"); _sep2.setObjectName("status_sep"); _sep2.setFont(QFont("Microsoft YaHei", 9))
-        self.statusBar().addPermanentWidget(_sep2)
+        self.statusBar().addPermanentWidget(_make_gap())
         self.statusBar().addPermanentWidget(self.status_log)
-        _sep3 = QLabel("·"); _sep3.setObjectName("status_sep"); _sep3.setFont(QFont("Microsoft YaHei", 9))
-        self.statusBar().addPermanentWidget(_sep3)
+        self.statusBar().addPermanentWidget(_make_gap())
         
         # 版本号显示
         self.status_version = QLabel(f"版本: {VERSION}")
