@@ -201,6 +201,12 @@ def check_dependencies():
         print("  - pyqtgraph: OK（示波器可用）")
     except ImportError:
         print("  - pyqtgraph: 未安装（示波器将不可用，其他功能正常）")
+    # PNG转ICO需要Pillow
+    try:
+        from PIL import Image
+        print("  - Pillow: OK（PNG转ICO可用）")
+    except ImportError:
+        print("  - Pillow: 未安装（PNG图标无法转换为ICO，请运行: pip install pillow）")
     print("  [OK] 依赖检查通过")
     return True
 
@@ -306,23 +312,40 @@ def find_icon():
     # 在当前目录和icons子目录中搜索
     search_dirs = ['.', 'icons', 'resources']
     
-    # 优先搜索ico文件
+    # 优先搜索ico文件：优先匹配名称含"图标"/"icon"/"app"的文件
+    icon_keywords = ['图标', 'icon', 'app', 'logo']
     for dir_path in search_dirs:
         if os.path.exists(dir_path):
-            for filename in os.listdir(dir_path):
-                if filename.lower().endswith('.ico'):
-                    icon_path = os.path.join(dir_path, filename)
-                    print(f"  - 找到图标文件: {icon_path}")
-                    return icon_path
+            all_icos = [f for f in os.listdir(dir_path) if f.lower().endswith('.ico')]
+            for kw in icon_keywords:
+                for f in all_icos:
+                    if kw in f.lower():
+                        icon_path = os.path.join(dir_path, f)
+                        print(f"  - 找到图标文件: {icon_path}")
+                        return icon_path
+            # 没有关键词匹配时，取第一个
+            if all_icos:
+                icon_path = os.path.join(dir_path, all_icos[0])
+                print(f"  - 找到图标文件: {icon_path}")
+                return icon_path
     
-    # 搜索png文件
+    # 搜索png文件：优先匹配名称含"图标"/"icon"/"app"的文件，避免误选UI素材
     found_png = None
+    icon_keywords = ['图标', 'icon', 'app', 'logo']
     for dir_path in search_dirs:
         if os.path.exists(dir_path):
-            for filename in os.listdir(dir_path):
-                if filename.lower().endswith('.png'):
-                    found_png = os.path.join(dir_path, filename)
+            all_pngs = [f for f in os.listdir(dir_path) if f.lower().endswith('.png')]
+            # 优先匹配含关键词的文件名
+            for kw in icon_keywords:
+                for f in all_pngs:
+                    if kw in f.lower():
+                        found_png = os.path.join(dir_path, f)
+                        break
+                if found_png:
                     break
+            # 没有关键词匹配时，取第一个
+            if not found_png and all_pngs:
+                found_png = os.path.join(dir_path, all_pngs[0])
             if found_png:
                 break
     
