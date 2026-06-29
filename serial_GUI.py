@@ -1297,27 +1297,43 @@ class SerialTool(QMainWindow):
                 except Exception:
                     pass
 
+        def _build_msgbox(icon, parent, title, text, args, kwargs):
+            """统一构造 QMessageBox：正确分离 buttons / defaultButton。
+
+            QMessageBox 静态方法签名：
+              xxx(parent, title, text, buttons=..., defaultButton=NoButton)
+            构造函数签名：
+              QMessageBox(icon, title, text, buttons=NoButton, parent=None, ...)
+            不能把 *args 直接展开到构造函数，否则 defaultButton 会被错放到 parent 位置。
+            """
+            buttons = args[0] if len(args) >= 1 else kwargs.pop('buttons', QMessageBox.NoButton)
+            default_btn = args[1] if len(args) >= 2 else kwargs.pop('defaultButton', QMessageBox.NoButton)
+            msgbox = QMessageBox(icon, title, text, buttons, parent=parent)
+            if default_btn != QMessageBox.NoButton:
+                msgbox.setDefaultButton(default_btn)
+            return msgbox
+
         @staticmethod
         def _patched_information(parent, title, text, *args, **kwargs):
-            msgbox = QMessageBox(QMessageBox.Information, title, text, *args, parent=parent, **kwargs) if args else QMessageBox(QMessageBox.Information, title, text, parent=parent)
+            msgbox = _build_msgbox(QMessageBox.Information, parent, title, text, args, kwargs)
             _apply_theme_before_exec(msgbox)
             return msgbox.exec_()
 
         @staticmethod
         def _patched_warning(parent, title, text, *args, **kwargs):
-            msgbox = QMessageBox(QMessageBox.Warning, title, text, *args, parent=parent, **kwargs) if args else QMessageBox(QMessageBox.Warning, title, text, parent=parent)
+            msgbox = _build_msgbox(QMessageBox.Warning, parent, title, text, args, kwargs)
             _apply_theme_before_exec(msgbox)
             return msgbox.exec_()
 
         @staticmethod
         def _patched_critical(parent, title, text, *args, **kwargs):
-            msgbox = QMessageBox(QMessageBox.Critical, title, text, *args, parent=parent, **kwargs) if args else QMessageBox(QMessageBox.Critical, title, text, parent=parent)
+            msgbox = _build_msgbox(QMessageBox.Critical, parent, title, text, args, kwargs)
             _apply_theme_before_exec(msgbox)
             return msgbox.exec_()
 
         @staticmethod
         def _patched_question(parent, title, text, *args, **kwargs):
-            msgbox = QMessageBox(QMessageBox.Question, title, text, *args, parent=parent, **kwargs) if args else QMessageBox(QMessageBox.Question, title, text, parent=parent)
+            msgbox = _build_msgbox(QMessageBox.Question, parent, title, text, args, kwargs)
             _apply_theme_before_exec(msgbox)
             return msgbox.exec_()
 
