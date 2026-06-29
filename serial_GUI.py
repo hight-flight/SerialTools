@@ -4095,6 +4095,15 @@ class SerialTool(QMainWindow):
         plot_widget.setLabel('left', '数值')
         plot_widget.setLabel('bottom', '采样序号')
         plot_widget.addLegend()
+        # 禁用 pyqtgraph 图表右键菜单（对普通用户无意义，避免英文菜单干扰）
+        _plot_item = plot_widget.getPlotItem()
+        if _plot_item is not None and _plot_item.vb is not None:
+            _plot_item.vb.menu = None
+            if hasattr(_plot_item, 'ctrl') and getattr(_plot_item.ctrl, 'menu', None) is not None:
+                try:
+                    _plot_item.ctrl.menu = None
+                except Exception:
+                    pass
         # 空状态提示文字
         empty_color = (0xAB, 0xB2, 0xBF) if self.current_theme == 'dark' else (0x66, 0x66, 0x66)
         empty_text = pg.TextItem('等待串口数据…', color=empty_color, anchor=(0.5, 0.5))
