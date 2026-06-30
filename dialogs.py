@@ -6,7 +6,8 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QComboBox, QPushButton, QLineEdit,
                              QMessageBox, QTableWidget, QTableWidgetItem,
-                             QHeaderView, QAbstractItemView, QFrame, QFormLayout)
+                             QHeaderView, QAbstractItemView, QFrame, QFormLayout,
+                             QTextBrowser, QSizePolicy)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 
@@ -249,8 +250,21 @@ def show_serial_monitor(parent, is_dark=False):
 # ═══════════════════════════════════════════════════════════════
 
 def show_usage_dialog(parent, is_dark=False):
-    """显示使用说明"""
-    msg = QMessageBox(QMessageBox.Information, "使用说明",
+    """显示使用说明（可滚动浏览）"""
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("使用说明")
+    dialog.setMinimumSize(520, 480)
+    dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+    layout = QVBoxLayout(dialog)
+    layout.setContentsMargins(12, 12, 12, 8)
+    layout.setSpacing(8)
+
+    browser = QTextBrowser()
+    browser.setOpenExternalLinks(False)
+    browser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    html = (
         "<b>hight-flight 串口调试助手</b> v" + VERSION + "<br><br>"
 
         "<b>━━ 主界面 ━━</b><br>"
@@ -258,11 +272,15 @@ def show_usage_dialog(parent, is_dark=False):
         "• 切换暗黑/明亮模式：视图 → 暗黑模式<br>"
         "• 清空接收区会弹出确认提示<br><br>"
 
-        "<b>━━ 串口连接 ━━</b><br>"
-        "1. 选择连接参数，点击「打开连接」<br>"
-        "2. 波特率选「自定义」可输入任意值 (1～1000000)<br>"
-        "3. 「更多串口设置」可配数据位/停止位/校验位/流控制<br>"
-        "4. RTS/DTR 勾选后立即生效<br><br>"
+        "<b>━━ 连接 ━━</b><br>"
+        "支持四种连接模式：串口 / UDP / TCP Client / TCP Server<br>"
+        "<b>串口：</b>选择端口和波特率，点击「打开连接」<br>"
+        "  波特率选「自定义」可输入任意值 (1～1000000)<br>"
+        "  「更多设置」可配数据位/停止位/校验位/流控制<br>"
+        "  RTS/DTR 勾选后立即生效<br>"
+        "<b>UDP：</b>配置本地/远端 IP 和端口，支持广播<br>"
+        "<b>TCP Client：</b>配置远端 IP 和端口，主动连接服务端<br>"
+        "<b>TCP Server：</b>配置本地监听 IP 和端口，等待客户端连接<br><br>"
 
         "<b>━━ 发送数据 ━━</b><br>"
         "• 在发送区输入内容，点击「发送」(Ctrl+Return)<br>"
@@ -279,7 +297,8 @@ def show_usage_dialog(parent, is_dark=False):
         "• 显示时间：勾选后每条数据前追加时间戳<br>"
         "• 筛选：支持包含/忽略大小写/正则，逗号分隔多关键字<br>"
         "• 编码：支持 UTF-8/GBK/GB2312/ASCII/ISO-8859-1/GB18030<br>"
-        "• 自动保存：勾选后全部接收数据持久化到日志文件<br><br>"
+        "• 自动保存：勾选后全部接收数据持久化到日志文件<br>"
+        "• ANSI 颜色：自动解析终端 ANSI 转义序列并着色显示<br><br>"
 
         "<b>━━ 多字符发送 ━━</b><br>"
         "• 可预设最多 N 条指令，每条独立设置 HEX/字符串/延时/顺序<br>"
@@ -300,14 +319,41 @@ def show_usage_dialog(parent, is_dark=False):
         "  通道识别：N 通道 × M 字节/值 = 帧长，按帧循环取<br>"
         "  例 — 2 通道 + uint8：AA BB CC DD → CH1:AA,CC CH2:BB,DD<br>"
         "  例 — 2 通道 + uint16_be：00 64 00 C8 → CH1:100 CH2:200<br>"
-        "  单片机按固定帧格式连续发送 ADC 采样值即可显示波形<br><br>"
+        "  单片机按固定帧格式连续发送 ADC 采样值即可显示波形<br>"
+        "<b>数据分析面板：</b><br>"
+        "  JSON 数据实时解析与可视化，支持字段跟踪和图表显示<br>"
+        "  自动捕获串口数据中的 JSON 对象，树形/表格双视图<br>"
+        "  可跟踪指定字段绘制实时曲线，支持告警阈值<br><br>"
+
+        "<b>━━ OTA 升级 ━━</b><br>"
+        "• 内置 HTTP 服务器，通过串口指令引导设备下载固件<br>"
+        "• 支持选择固件文件、配置本机 IP 和端口<br>"
+        "• 自动发送 OTA 指令并监控升级进度<br><br>"
 
         "<b>━━ 快捷键 ━━</b><br>"
         "  Ctrl+Return — 发送数据<br>"
         "  Ctrl+S — 保存接收日志"
     )
-    apply_dialog_theme(msg, is_dark)
-    msg.exec_()
+    browser.setHtml(html)
+    layout.addWidget(browser)
+
+    btn_close = QPushButton("关闭")
+    btn_close.setFont(QFont("Microsoft YaHei", 9))
+    btn_close.clicked.connect(dialog.accept)
+    layout.addWidget(btn_close, alignment=Qt.AlignRight)
+
+    apply_dialog_theme(dialog, is_dark)
+    # QTextBrowser 背景跟随主题
+    if is_dark:
+        browser.setStyleSheet(
+            "QTextBrowser { background: #282C34; color: #ABB2BF; border: 1px solid #3E4451; }"
+        )
+    else:
+        browser.setStyleSheet(
+            "QTextBrowser { background: #FFFFFF; color: #333333; border: 1px solid #CCCCCC; }"
+        )
+
+    dialog.exec_()
 
 
 # ═══════════════════════════════════════════════════════════════
