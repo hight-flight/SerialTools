@@ -13,7 +13,7 @@
     "auto_save": false,
     "save_directory": "D:\\script\\code_project\\serial_GUI\\logs",
     "hex_recv": false,
-    "hex_send": false,
+    "hex_send": true,
     "show_timestamp": true,
     "newline": true,
     "rts": false,
@@ -46,6 +46,13 @@
         }
     ],
     "send_history": [
+        "11223332",
+        "11 22 33 32",
+        "11 22 33",
+        "11 22 23 34 44",
+        "11 22 33 432  我完全",
+        "11 22 33",
+        "1212",
         "version",
         "version \n",
         "ping 192.168.5.58\n",

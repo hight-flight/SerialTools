@@ -697,7 +697,7 @@ class SerialTool(QMainWindow):
         # 发送区设置：HEX发送
         self.check_hex_send = QCheckBox("HEX发送")
         self.check_hex_send.setFont(QFont("Microsoft YaHei", 9))
-        self.check_hex_send.stateChanged.connect(self._validate_hex_input)
+        self.check_hex_send.stateChanged.connect(self._on_hex_send_toggled)
         send_settings_layout.addWidget(self.check_hex_send)
 
         # 回车换行勾选选项
@@ -822,6 +822,7 @@ class SerialTool(QMainWindow):
         self.text_send.textChanged.connect(self._on_send_text_changed)
         self.text_send.installEventFilter(self)  # 捕获上下键实现历史记录导航
         self._setting_history_text = False       # 标志：是否正在由历史导航设置文本
+        self._formatting_text = False            # 标志：是否正在格式化HEX文本
         # 首/尾字段 HEX 校验同步
         self.text_ota.textChanged.connect(self._validate_hex_input)
         self.text_tail.textChanged.connect(self._validate_hex_input)
@@ -1954,19 +1955,104 @@ class SerialTool(QMainWindow):
         """文件发送进度回调"""
         self.append_text(f"{progress_msg}\n")
 
+    def _on_hex_send_toggled(self, state):
+        """HEX发送复选框状态切换时的一次性文本转换"""
+        if state == Qt.Checked:
+            text = self.text_send.toPlainText()
+            raw_text = text.replace(' ', '').replace('\n', '').replace('\r', '')
+            formatted_text = ' '.join(raw_text[i:i+2] for i in range(0, len(raw_text), 2)) if raw_text else ''
+            self._formatting_text = True
+            try:
+                self.text_send.setPlainText(formatted_text)
+            finally:
+                self._formatting_text = False
+            cursor = self.text_send.textCursor()
+            cursor.movePosition(cursor.End)
+            self.text_send.setTextCursor(cursor)
+        else:
+            text = self.text_send.toPlainText()
+            raw_text = text.replace(' ', '').replace('\n', '').replace('\r', '')
+            if raw_text != text:
+                self._formatting_text = True
+                try:
+                    self.text_send.setPlainText(raw_text)
+                finally:
+                    self._formatting_text = False
+                cursor = self.text_send.textCursor()
+                cursor.movePosition(cursor.End)
+                self.text_send.setTextCursor(cursor)
+
     def _validate_hex_input(self):
-        """实时校验 HEX 发送输入框格式（主发送框 + 首/尾字段），无效时显示红色边框提示"""
+        """实时校验 HEX 发送输入框格式（主发送框 + 首/尾字段），无效时显示红色边框提示，HEX模式下自动格式化每两个字符加空格"""
         if not self.check_hex_send.isChecked():
             self.text_send.setStyleSheet("")
             self.text_ota.setStyleSheet("")
             self.text_tail.setStyleSheet("")
             return
-        # 校验主发送框
+
+        # 仅当主发送框内容变化时才格式化，避免编辑首/尾字段时重复触发
+        sender = self.sender()
+        if sender is self.text_send and not self._formatting_text and not self._setting_history_text:
+            self._formatting_text = True
+            try:
+                self._format_hex_text(self.text_send)
+            finally:
+                self._formatting_text = False
+
         self._validate_hex_field(self.text_send, self.text_send.toPlainText())
-        # 校验首字段
         self._validate_hex_field(self.text_ota, self.text_ota.text())
-        # 校验尾字段
         self._validate_hex_field(self.text_tail, self.text_tail.text())
+
+    def _format_hex_text(self, widget):
+        """将HEX文本格式化为每两个字符加一个空格，保留光标位置"""
+        text = widget.toPlainText()
+        raw_text = text.replace(' ', '').replace('\n', '').replace('\r', '')
+        
+        if not raw_text:
+            return
+
+        formatted_text = ' '.join(raw_text[i:i+2] for i in range(0, len(raw_text), 2))
+        
+        if formatted_text == text:
+            return
+
+        cursor = widget.textCursor()
+        position = cursor.position()
+        
+        widget.setPlainText(formatted_text)
+        
+        new_cursor = widget.textCursor()
+        new_position = self._calculate_new_cursor_position(position, text, formatted_text)
+        new_cursor.setPosition(new_position)
+        widget.setTextCursor(new_cursor)
+
+    def _calculate_new_cursor_position(self, old_pos, old_text, new_text):
+        """根据旧光标位置计算新光标位置"""
+        if old_pos <= 0:
+            return 0
+        
+        old_pos = min(old_pos, len(old_text))
+        
+        raw_chars_before = 0
+        for i in range(old_pos):
+            if old_text[i] != ' ':
+                raw_chars_before += 1
+        
+        new_pos = 0
+        raw_count = 0
+        for i, char in enumerate(new_text):
+            if raw_count >= raw_chars_before:
+                new_pos = i
+                break
+            if char != ' ':
+                raw_count += 1
+                new_pos = i + 1
+
+        # 若光标落在格式化空格上，跳过到后续非空格字符，避免漂移
+        while new_pos < len(new_text) and new_text[new_pos] == ' ':
+            new_pos += 1
+
+        return new_pos
 
     def _validate_hex_field(self, widget, text):
         """校验单个字段的 HEX 格式，无效时设置红色边框"""
@@ -3732,9 +3818,18 @@ class SerialTool(QMainWindow):
                 # history_index == 0，退出历史模式，恢复草稿
                 self.history_index = -1
                 self._setting_history_text = True
-                self.text_send.setPlainText(self._draft_text)
-                self._setting_history_text = False
-                # 将光标移到末尾
+                self._formatting_text = True
+                try:
+                    text = self._draft_text
+                    if self.check_hex_send.isChecked():
+                        raw_text = text.replace(' ', '').replace('\n', '').replace('\r', '')
+                        text = ' '.join(raw_text[i:i+2] for i in range(0, len(raw_text), 2)) if raw_text else ''
+                    else:
+                        text = text.replace(' ', '').replace('\n', '').replace('\r', '')
+                    self.text_send.setPlainText(text)
+                finally:
+                    self._formatting_text = False
+                    self._setting_history_text = False
                 cursor = self.text_send.textCursor()
                 cursor.movePosition(cursor.End)
                 self.text_send.setTextCursor(cursor)
@@ -3745,9 +3840,18 @@ class SerialTool(QMainWindow):
         # 设置历史文本
         history_item = self.send_history[self.history_index]
         self._setting_history_text = True
-        self.text_send.setPlainText(history_item)
-        self._setting_history_text = False
-        # 将光标移到末尾
+        self._formatting_text = True
+        try:
+            text = history_item
+            if self.check_hex_send.isChecked():
+                raw_text = text.replace(' ', '').replace('\n', '').replace('\r', '')
+                text = ' '.join(raw_text[i:i+2] for i in range(0, len(raw_text), 2)) if raw_text else ''
+            else:
+                text = text.replace(' ', '').replace('\n', '').replace('\r', '')
+            self.text_send.setPlainText(text)
+        finally:
+            self._formatting_text = False
+            self._setting_history_text = False
         cursor = self.text_send.textCursor()
         cursor.movePosition(cursor.End)
         self.text_send.setTextCursor(cursor)
