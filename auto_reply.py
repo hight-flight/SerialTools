@@ -83,9 +83,11 @@ class AutoReplyDialog(QDialog):
         table_layout.setSpacing(6)
 
         self.table_rules = QTableWidget()
-        self.table_rules.setColumnCount(4)
-        self.table_rules.setHorizontalHeaderLabels(["序号", "触发条件", "匹配模式", "响应内容"])
+        self.table_rules.setColumnCount(5)
+        self.table_rules.setHorizontalHeaderLabels(["序号", "触发条件", "匹配模式", "响应内容", "触发次数"])
         self.table_rules.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_rules.setColumnWidth(4, 100)
+        self.table_rules.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.table_rules.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table_rules.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_rules.setMinimumHeight(150)
@@ -385,7 +387,7 @@ class AutoReplyDialog(QDialog):
             empty_item.setTextAlignment(Qt.AlignCenter)
             self.table_rules.setItem(0, 0, empty_item)
             # 合并单元格显示提示
-            self.table_rules.setSpan(0, 0, 1, 4)
+            self.table_rules.setSpan(0, 0, 1, 5)
             return
 
         for i, rule in enumerate(self._rules):
@@ -403,8 +405,15 @@ class AutoReplyDialog(QDialog):
                 response_display = response_display[:30] + "..."
             self.table_rules.setItem(row, 3, QTableWidgetItem(response_display))
 
+            # 触发次数 / 最大次数
+            max_txt = f"{rule['max_count']}" if rule['max_count'] > 0 else "不限"
+            count_txt = f"{rule['count']}/{max_txt}"
+            count_item = QTableWidgetItem(count_txt)
+            count_item.setTextAlignment(Qt.AlignCenter)
+            self.table_rules.setItem(row, 4, count_item)
+
             if not rule['enabled']:
-                for col in range(4):
+                for col in range(5):
                     item = self.table_rules.item(row, col)
                     if item:
                         item.setForeground(Qt.gray)
@@ -592,8 +601,15 @@ class AutoReplyDialog(QDialog):
                 if matched:
                     matched_any = True
                     rule['count'] += 1
-                    self._append_log(f"规则{self._rules.index(rule)+1}触发: 收到 \"{text.strip()[:30]}...\"")
+                    idx = self._rules.index(rule) + 1
+                    max_txt = f"{rule['max_count']}" if rule['max_count'] > 0 else "不限"
+                    self._append_log(f"规则{idx}触发 (第{rule['count']}/{max_txt}次): 收到 \"{text.strip()[:30]}...\"")
                     self._send_response(rule)
+                    # 实时更新表格中的触发次数
+                    count_txt = f"{rule['count']}/{max_txt}"
+                    row_idx = self._rules.index(rule)
+                    if row_idx < self.table_rules.rowCount():
+                        self.table_rules.setItem(row_idx, 4, QTableWidgetItem(count_txt))
 
                     if self.check_stop_after_match.isChecked():
                         break
