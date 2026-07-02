@@ -2,12 +2,18 @@
 主题模块：颜色常量、QSS 样式表、对话框主题应用工具函数。
 """
 
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 
 import platform
 
+from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import QApplication
+
+
+class DataReceiver(QObject):
+    """共享数据接收器：用于子对话框解耦串口数据接收信号。"""
+    data_received = pyqtSignal(bytes)
 
 # --- 主题颜色常量 ---
 THEME_COLORS = {

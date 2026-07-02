@@ -332,6 +332,13 @@ class SerialTool(QMainWindow):
         act_ota = QAction("OTA 升级控制中心(&O)", self)
         act_ota.triggered.connect(self.open_ota_center)
         tool_menu.addAction(act_ota)
+        act_gsm = QAction("GSM 调试助手", self)
+        act_gsm.triggered.connect(self.show_gsm_debugger)
+        tool_menu.addAction(act_gsm)
+
+        act_auto_reply = QAction("自动应答", self)
+        act_auto_reply.triggered.connect(self.show_auto_reply)
+        tool_menu.addAction(act_auto_reply)
 
         # 帮助菜单
         help_menu = menubar.addMenu("帮助(&H)")
@@ -2481,6 +2488,20 @@ class SerialTool(QMainWindow):
             except RuntimeError:
                 pass
             self._ota_dialog = None
+        # 关闭 GSM 调试助手
+        if hasattr(self, '_gsm_dialog') and self._gsm_dialog is not None:
+            try:
+                self._gsm_dialog.close()
+            except RuntimeError:
+                pass
+            self._gsm_dialog = None
+        # 关闭自动应答对话框
+        if hasattr(self, '_auto_reply_dialog') and self._auto_reply_dialog is not None:
+            try:
+                self._auto_reply_dialog.close()
+            except RuntimeError:
+                pass
+            self._auto_reply_dialog = None
         # 保存配置
         self.save_config()
         # 清理 PID 配置文件（已同步到基础配置，PID 文件可删除）
@@ -2546,6 +2567,7 @@ class SerialTool(QMainWindow):
                 # 自动保存
                 if self.auto_save_enabled and self.current_log_file:
                     self.auto_save_data(log_entry + '\n')
+                
             else:
                 # 文本显示，处理特殊字符和转义序列
                 # 使用用户选择的编码进行解码
@@ -2568,6 +2590,7 @@ class SerialTool(QMainWindow):
                 # 自动保存
                 if self.auto_save_enabled and self.current_log_file:
                     self.auto_save_data(log_entry + '\n')
+                
         except Exception as e:
             error_msg = f"[解码错误]: {e}"
             # 添加到日志缓冲区（deque自动管理大小）
@@ -4079,6 +4102,38 @@ class SerialTool(QMainWindow):
         """CRC 计算器弹窗"""
         show_crc_calculator(self, is_dark=(self.current_theme == 'dark'))
 
+    def show_auto_reply(self):
+        """自动应答：当接收到特定数据时自动发送预设响应"""
+        from auto_reply import AutoReplyDialog
+        if hasattr(self, '_auto_reply_dialog') and self._auto_reply_dialog is not None:
+            try:
+                self._auto_reply_dialog.show()
+                self._auto_reply_dialog.raise_()
+                self._auto_reply_dialog.activateWindow()
+                return
+            except RuntimeError:
+                self._auto_reply_dialog = None
+
+        self._auto_reply_dialog = AutoReplyDialog(self)
+        dlg = self._auto_reply_dialog
+
+        if hasattr(self, 'read_thread') and self.read_thread:
+            self.read_thread.receive_data_signal.connect(dlg.handle_receive_data)
+
+        def on_finished():
+            if hasattr(self, 'read_thread') and self.read_thread:
+                try:
+                    self.read_thread.receive_data_signal.disconnect(dlg.handle_receive_data)
+                except (TypeError, RuntimeError):
+                    pass
+            if self._auto_reply_dialog is dlg:
+                self._auto_reply_dialog = None
+
+        dlg.finished.connect(on_finished)
+        self._apply_dialog_theme(dlg)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.show()
+
     def hex_converter(self):
         """HEX 转换器弹窗：HEX ↔ ASCII ↔ Decimal 互转"""
         show_hex_converter(self, is_dark=(self.current_theme == 'dark'))
@@ -4772,6 +4827,38 @@ class SerialTool(QMainWindow):
         self._ota_dialog = OTAControlCenter(self)
         self._apply_dialog_theme(self._ota_dialog)
         self._ota_dialog.show()
+
+    def show_gsm_debugger(self):
+        """打开 GSM 调试助手对话框。"""
+        from gsm_debugger import GSMDebuggerDialog
+        if hasattr(self, '_gsm_dialog') and self._gsm_dialog is not None:
+            try:
+                self._gsm_dialog.show()
+                self._gsm_dialog.raise_()
+                self._gsm_dialog.activateWindow()
+                return
+            except RuntimeError:
+                self._gsm_dialog = None
+
+        self._gsm_dialog = GSMDebuggerDialog(self)
+        dlg = self._gsm_dialog
+
+        if hasattr(self, 'read_thread') and self.read_thread:
+            self.read_thread.receive_data_signal.connect(dlg.handle_receive_data)
+
+        def on_finished():
+            if hasattr(self, 'read_thread') and self.read_thread:
+                try:
+                    self.read_thread.receive_data_signal.disconnect(dlg.handle_receive_data)
+                except (TypeError, RuntimeError):
+                    pass
+            if self._gsm_dialog is dlg:
+                self._gsm_dialog = None
+
+        dlg.finished.connect(on_finished)
+        self._apply_dialog_theme(dlg)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.show()
 
     def _apply_dialog_theme(self, dialog):
         """为子对话框应用当前主题（暗黑/明亮），支持运行时切换。"""
