@@ -14,7 +14,8 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QComboBox, QPushButton, QLineEdit, QTextEdit,
                              QMessageBox, QTableWidget, QTableWidgetItem,
                              QHeaderView, QAbstractItemView, QGroupBox,
-                             QFrame, QSizePolicy, QCheckBox)
+                             QFrame, QSizePolicy, QCheckBox, QTabWidget,
+                             QWidget)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QTextCursor, QColor
 
@@ -33,19 +34,50 @@ class GSMDebuggerDialog(QDialog):
 
     def _init_ui(self):
         self.setWindowTitle("GSM 调试助手")
-        self.setMinimumSize(720, 580)
+        self.setMinimumSize(720, 620)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
 
-        self._build_status_bar(layout)
-        self._build_info_buttons(layout)
-        self._build_control_buttons(layout)
-        self._build_command_input(layout)
+        # ── 标签页：按功能域分组，降低单屏按钮密度 ──
+        self.tab_widget = QTabWidget()
+
+        # 标签页 1：AT 指令终端
+        tab_terminal = QWidget()
+        terminal_layout = QVBoxLayout(tab_terminal)
+        terminal_layout.setSpacing(6)
+        terminal_layout.setContentsMargins(4, 4, 4, 4)
+        self._build_status_bar(terminal_layout)
+        self._build_info_buttons(terminal_layout)
+        self._build_control_buttons(terminal_layout)
+        self._build_command_input(terminal_layout)
+        terminal_layout.addStretch()
+        self.tab_widget.addTab(tab_terminal, "AT 终端")
+
+        # 标签页 2：短信管理
+        tab_sms = QWidget()
+        sms_tab_layout = QVBoxLayout(tab_sms)
+        sms_tab_layout.setSpacing(6)
+        sms_tab_layout.setContentsMargins(4, 4, 4, 4)
+        self._build_sms_section(sms_tab_layout)
+        self.tab_widget.addTab(tab_sms, "短信管理")
+
+        # 标签页 3：通话控制
+        tab_call = QWidget()
+        call_tab_layout = QVBoxLayout(tab_call)
+        call_tab_layout.setSpacing(6)
+        call_tab_layout.setContentsMargins(4, 4, 4, 4)
+        self._build_call_section(call_tab_layout)
+        call_tab_layout.addStretch()
+        self.tab_widget.addTab(tab_call, "通话控制")
+
+        layout.addWidget(self.tab_widget)
+
+        # ── 响应区（全局可见，任何标签页的操作结果都显示在这里）──
         self._build_response_area(layout)
-        self._build_sms_section(layout)
-        self._build_call_section(layout)
+
+        # ── 底部选项栏 ──
         self._build_options_bar(layout)
 
     def _build_status_bar(self, parent_layout):
