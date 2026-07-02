@@ -11,6 +11,26 @@ from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import QApplication
 
 
+def unescape_text(text):
+    """将字面转义序列解码为实际控制字符。
+
+    使用 Python 标准 unicode_escape 解码器，支持：
+        \\\\  →  \\
+        \\r   →  CR  (0x0D, 回车)
+        \\n   →  LF  (0x0A, 换行)
+        \\t   →  TAB (0x09, 制表符)
+        \\xNN →  十六进制字节（如 \\x0D → 0x0D）
+        \\uNNNN / \\UNNNNNNNN → Unicode 字符
+
+    解码失败时返回原文，不影响发送流程。
+    """
+    import codecs
+    try:
+        return codecs.decode(text, 'unicode_escape')
+    except Exception:
+        return text
+
+
 class DataReceiver(QObject):
     """共享数据接收器：用于子对话框解耦串口数据接收信号。"""
     data_received = pyqtSignal(bytes)

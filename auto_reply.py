@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtCore import Qt, QTimer, QMutexLocker
 from PyQt5.QtGui import QFont, QTextCursor
 
-from theme import apply_dialog_theme, DataReceiver
+from theme import apply_dialog_theme, DataReceiver, unescape_text
 
 
 class AutoReplyDialog(QDialog):
@@ -70,6 +70,9 @@ class AutoReplyDialog(QDialog):
 
         self.check_log_to_receive = QCheckBox("发送后记录到接收区")
         global_layout.addWidget(self.check_log_to_receive)
+
+        self.check_newline = QCheckBox("回车换行")
+        global_layout.addWidget(self.check_newline)
 
         global_layout.addStretch()
         parent_layout.addWidget(global_group)
@@ -445,13 +448,25 @@ class AutoReplyDialog(QDialog):
                 'max_count': rule['max_count']
             })
 
+        config = {
+            'rules': rules_data,
+            'global': {
+                'enabled': self.check_enable.isChecked(),
+                'delay': self.spin_delay.value(),
+                'case_ignore': self.check_case_ignore.isChecked(),
+                'stop_after_match': self.check_stop_after_match.isChecked(),
+                'log_to_receive': self.check_log_to_receive.isChecked(),
+                'newline': self.check_newline.isChecked(),
+            }
+        }
+
         config_dir = os.path.join(os.path.expanduser('~'), '.serial_GUI')
         os.makedirs(config_dir, exist_ok=True)
         config_path = os.path.join(config_dir, 'auto_reply_rules.json')
 
         try:
             with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(rules_data, f, ensure_ascii=False, indent=2)
+                json.dump(config, f, ensure_ascii=False, indent=2)
             self._append_log("规则已保存")
         except Exception as e:
             QMessageBox.warning(self, "保存失败", f"保存规则失败: {e}")
@@ -467,24 +482,55 @@ class AutoReplyDialog(QDialog):
             QMessageBox.warning(self, "加载失败", "未找到规则配置文件")
             return
 
+        # 如果当前有未保存的规则，提示确认
+        if self._rules:
+            reply = QMessageBox.question(
+                self, "确认加载",
+                "加载规则将覆盖当前规则列表，是否继续？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
-                rules_data = json.load(f)
+                data = json.load(f)
 
-            self._rules = []
-            for data in rules_data:
-                self._rules.append({
-                    'trigger': data.get('trigger', ''),
-                    'match_mode': data.get('match_mode', '文本包含'),
-                    'response': data.get('response', ''),
-                    'response_format': data.get('response_format', '文本'),
-                    'enabled': data.get('enabled', True),
-                    'max_count': data.get('max_count', 0),
+            # 兼容旧格式（纯规则列表）和新格式（含 global 配置）
+            if isinstance(data, list):
+                rules_data = data
+                global_settings = {}
+            else:
+                rules_data = data.get('rules', [])
+                global_settings = data.get('global', {})
+
+            # 先构建临时列表，成功后再替换，避免加载失败清空现有规则
+            new_rules = []
+            for r in rules_data:
+                new_rules.append({
+                    'trigger': r.get('trigger', ''),
+                    'match_mode': r.get('match_mode', '文本包含'),
+                    'response': r.get('response', ''),
+                    'response_format': r.get('response_format', '文本'),
+                    'enabled': r.get('enabled', True),
+                    'max_count': r.get('max_count', 0),
                     'count': 0
                 })
 
+            self._rules = new_rules
+
+            # 恢复全局设置
+            if global_settings:
+                self.check_enable.setChecked(global_settings.get('enabled', False))
+                self.spin_delay.setValue(global_settings.get('delay', 100))
+                self.check_case_ignore.setChecked(global_settings.get('case_ignore', False))
+                self.check_stop_after_match.setChecked(global_settings.get('stop_after_match', False))
+                self.check_log_to_receive.setChecked(global_settings.get('log_to_receive', False))
+                self.check_newline.setChecked(global_settings.get('newline', False))
+
             self._refresh_rules_table()
-            self._append_log("规则已加载")
+            self._clear_editor()
+            self._append_log(f"规则已加载（{len(new_rules)} 条）")
         except Exception as e:
             QMessageBox.warning(self, "加载失败", f"加载规则失败: {e}")
 
@@ -526,7 +572,7 @@ class AutoReplyDialog(QDialog):
                     if trigger_hex in data_hex:
                         matched = True
                 elif rule['match_mode'] == '文本包含':
-                    trigger = rule['trigger']
+                    trigger = unescape_text(rule['trigger'])
                     if self.check_case_ignore.isChecked():
                         if trigger.lower() in text.lower():
                             matched = True
@@ -534,7 +580,7 @@ class AutoReplyDialog(QDialog):
                         if trigger in text:
                             matched = True
                 elif rule['match_mode'] == '文本完全':
-                    trigger = rule['trigger']
+                    trigger = unescape_text(rule['trigger'])
                     stripped_text = text.strip()
                     if self.check_case_ignore.isChecked():
                         if trigger.lower() == stripped_text.lower():
@@ -567,12 +613,17 @@ class AutoReplyDialog(QDialog):
                 hex_str = rule['response'].replace(' ', '')
                 response_data = bytes.fromhex(hex_str)
             else:
-                response_data = rule['response'].encode('utf-8')
+                # 处理转义序列（\r \n \t \\ → 实际控制字符）
+                response_text = unescape_text(rule['response'])
+                # 处理回车换行
+                if self.check_newline.isChecked():
+                    response_text = response_text.rstrip('\r\n') + '\r\n'
+                response_data = response_text.encode('utf-8')
 
             delay = self.spin_delay.value()
             timer = QTimer(self)
             timer.setSingleShot(True)
-            timer.timeout.connect(lambda: self._do_send(response_data))
+            timer.timeout.connect(lambda rd=response_data: self._do_send(rd))
             timer.start(delay)
 
             self._append_log(f"发送响应: {rule['response'][:50]}...")

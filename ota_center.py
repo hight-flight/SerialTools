@@ -10,12 +10,13 @@ import time
 import json
 import shutil
 import datetime
-import codecs
 import urllib.parse
 import functools
 import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
+
+from theme import unescape_text
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QComboBox, QPushButton, QTextEdit, QCheckBox,
@@ -770,14 +771,6 @@ class OTAControlCenter(QDialog):
             QMessageBox.warning(self, "提示",
                                 f"服务目录: {self._serve_dir}")
 
-    @staticmethod
-    def _decode_escapes(s):
-        """将字面转义序列解码为控制字符：\\r→CR, \\n→LF, \\t→TAB, \\\\→\\。"""
-        try:
-            return codecs.decode(s, 'unicode_escape')
-        except Exception:
-            return s
-
     # ─────────────────────────────────────────────────────────────
     #  OTA 流程控制 —— 状态机
     # ─────────────────────────────────────────────────────────────
@@ -988,7 +981,7 @@ class OTAControlCenter(QDialog):
                 pass
 
             # 解码转义序列（\r \n \t \\）为实际控制字符
-            cmd = self._decode_escapes(cmd)
+            cmd = unescape_text(cmd)
             cmd_bytes = cmd.encode('utf-8')
 
             # 通过串口发送（清空输入缓冲，防止残留数据干扰）

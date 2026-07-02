@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtCore import Qt, QTimer, QMutexLocker
 from PyQt5.QtGui import QFont, QTextCursor, QColor
 
-from theme import apply_dialog_theme, DataReceiver
+from theme import apply_dialog_theme, DataReceiver, unescape_text
 
 
 class GSMDebuggerDialog(QDialog):
@@ -392,9 +392,9 @@ class GSMDebuggerDialog(QDialog):
         self.edit_command.setText(command)
 
         if self.check_newline.isChecked():
-            cmd_to_send = command + "\r\n"
+            cmd_to_send = unescape_text(command) + "\r\n"
         else:
-            cmd_to_send = command
+            cmd_to_send = unescape_text(command)
 
         data = cmd_to_send.encode('utf-8')
 
@@ -435,7 +435,7 @@ class GSMDebuggerDialog(QDialog):
         if not hasattr(self.parent_window, 'transport') or not self.parent_window.transport or not self.parent_window.transport.is_open:
             QMessageBox.warning(self, "连接错误", "串口连接已断开")
             return
-        data = content.encode('utf-8') + b'\x1A'
+        data = unescape_text(content).encode('utf-8') + b'\x1A'
         try:
             with QMutexLocker(self.parent_window.serial_mutex):
                 self.parent_window.transport.write(data)

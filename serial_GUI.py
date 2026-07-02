@@ -21,7 +21,7 @@ from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPalette, Q
 from dialogs import (show_crc_calculator, show_hex_converter,
                          show_serial_monitor, show_usage_dialog,
                          show_about_dialog)
-from theme import THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, VERSION
+from theme import THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, VERSION, unescape_text
 from transport import TransportWrapper, TransportReadThread
 # 注意：JsonViewerDialog 和 OTAControlCenter 改为延迟导入（懒加载），
 # 避免启动时加载 pyqtgraph/numpy/http.server 等重型依赖，显著加快 exe 首次启动速度。
@@ -1793,9 +1793,24 @@ class SerialTool(QMainWindow):
                 # 如果 JSON 面板已打开，重新连接到新的 read_thread
                 if hasattr(self, '_json_viewer_dlg') and self._json_viewer_dlg is not None:
                     try:
-                        self.read_thread.receive_data_signal.connect(self._json_viewer_dlg.feed_raw_data)
+                        self.read_thread.receive_data_signal.disconnect(self._json_viewer_dlg.feed_raw_data)
                     except (TypeError, RuntimeError):
                         pass
+                    self.read_thread.receive_data_signal.connect(self._json_viewer_dlg.feed_raw_data)
+                # 如果自动应答对话框已打开，重新连接到新的 read_thread
+                if hasattr(self, '_auto_reply_dialog') and self._auto_reply_dialog is not None:
+                    try:
+                        self.read_thread.receive_data_signal.disconnect(self._auto_reply_dialog.handle_receive_data)
+                    except (TypeError, RuntimeError):
+                        pass
+                    self.read_thread.receive_data_signal.connect(self._auto_reply_dialog.handle_receive_data)
+                # 如果 GSM 调试器已打开，重新连接到新的 read_thread
+                if hasattr(self, '_gsm_dialog') and self._gsm_dialog is not None:
+                    try:
+                        self.read_thread.receive_data_signal.disconnect(self._gsm_dialog.handle_receive_data)
+                    except (TypeError, RuntimeError):
+                        pass
+                    self.read_thread.receive_data_signal.connect(self._gsm_dialog.handle_receive_data)
                 self.read_thread.start()
                 self._sync_button_text("关闭连接")
                 self.append_text(f"--- {connection_desc} 已打开 ---")
@@ -2166,6 +2181,8 @@ class SerialTool(QMainWindow):
                 # 如果勾选了尾字段，添加到内容后面
                 if self.check_tail_field.isChecked() and tail_field:
                     content = content + tail_field
+                # 处理转义序列（\r \n \t \\ → 实际控制字符）
+                content = unescape_text(content)
                 # 处理回车换行
                 if self.check_newline.isChecked():
                     content = content.rstrip('\r\n')  # 去除末尾的换行符，避免重复添加
