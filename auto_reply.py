@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QMessageBox, QTableWidget, QTableWidgetItem,
                              QHeaderView, QAbstractItemView, QGroupBox,
                              QFrame, QCheckBox, QSpinBox)
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QMutexLocker
 from PyQt5.QtGui import QFont, QTextCursor
 
 from theme import apply_dialog_theme, DataReceiver
@@ -585,7 +585,7 @@ class AutoReplyDialog(QDialog):
         if getattr(self, '_closing', False):
             return
         try:
-            with self.parent_window.serial_mutex:
+            with QMutexLocker(self.parent_window.serial_mutex):
                 self.parent_window.transport.write(data)
 
             if self.check_log_to_receive.isChecked():

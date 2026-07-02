@@ -1540,6 +1540,20 @@ class SerialTool(QMainWindow):
                     self._apply_dialog_theme(self._json_viewer_dlg)
             except RuntimeError:
                 pass
+        # 同步 GSM 调试助手主题
+        if hasattr(self, '_gsm_dialog') and self._gsm_dialog is not None:
+            try:
+                if self._gsm_dialog.isVisible():
+                    self._apply_dialog_theme(self._gsm_dialog)
+            except RuntimeError:
+                pass
+        # 同步自动应答对话框主题
+        if hasattr(self, '_auto_reply_dialog') and self._auto_reply_dialog is not None:
+            try:
+                if self._auto_reply_dialog.isVisible():
+                    self._apply_dialog_theme(self._auto_reply_dialog)
+            except RuntimeError:
+                pass
         theme_display = "暗黑模式" if new_theme == 'dark' else "亮色模式"
         self.append_text(f"[系统]: 已切换至{theme_display}\n")
     def handle_baud_change(self, index):

@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QHeaderView, QAbstractItemView, QGroupBox,
                              QFrame, QSizePolicy, QCheckBox, QTabWidget,
                              QWidget)
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QMutexLocker
 from PyQt5.QtGui import QFont, QTextCursor, QColor
 
 from theme import apply_dialog_theme, DataReceiver
@@ -248,10 +248,10 @@ class GSMDebuggerDialog(QDialog):
         btn_send.clicked.connect(self._send_command_from_input)
         input_layout.addWidget(btn_send)
 
-        btn_clear = QPushButton("清空")
-        btn_clear.setMinimumWidth(72)
-        btn_clear.clicked.connect(self._clear_response)
-        input_layout.addWidget(btn_clear)
+        btn_clear_input = QPushButton("清空")
+        btn_clear_input.setMinimumWidth(72)
+        btn_clear_input.clicked.connect(self._clear_command_input)
+        input_layout.addWidget(btn_clear_input)
 
         parent_layout.addLayout(input_layout)
 
@@ -362,6 +362,11 @@ class GSMDebuggerDialog(QDialog):
 
         options_layout.addStretch()
 
+        btn_clear_response = QPushButton("清空响应")
+        btn_clear_response.setMinimumWidth(80)
+        btn_clear_response.clicked.connect(self._clear_response)
+        options_layout.addWidget(btn_clear_response)
+
         btn_close = QPushButton("关闭")
         btn_close.setMinimumWidth(72)
         btn_close.clicked.connect(self.close)
@@ -394,7 +399,7 @@ class GSMDebuggerDialog(QDialog):
         data = cmd_to_send.encode('utf-8')
 
         try:
-            with self.parent_window.serial_mutex:
+            with QMutexLocker(self.parent_window.serial_mutex):
                 self.parent_window.transport.write(data)
             self._append_sent_command(f">>> {command}")
         except Exception as e:
@@ -432,7 +437,7 @@ class GSMDebuggerDialog(QDialog):
             return
         data = content.encode('utf-8') + b'\x1A'
         try:
-            with self.parent_window.serial_mutex:
+            with QMutexLocker(self.parent_window.serial_mutex):
                 self.parent_window.transport.write(data)
             self._append_sent_command(f">>> {content} (Ctrl+Z)")
         except Exception as e:
@@ -500,7 +505,12 @@ class GSMDebuggerDialog(QDialog):
         QTimer.singleShot(400, lambda: self._send_command("AT+CREG?"))
         QTimer.singleShot(600, lambda: self._send_command("AT+COPS?"))
 
+    def _clear_command_input(self):
+        """清空命令输入框。"""
+        self.edit_command.clear()
+
     def _clear_response(self):
+        """清空指令响应区域。"""
         self.text_response.clear()
 
     def _append_sent_command(self, text):
