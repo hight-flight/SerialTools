@@ -399,6 +399,60 @@ def verify_main_script():
     print("  [OK] 主脚本验证通过")
     return True
 
+def find_upx():
+    """查找 UPX 压缩工具，返回 (已安装, 目录路径)
+
+    Returns:
+        (True, None)    - UPX 在系统 PATH 上，无需 --upx-dir
+        (True, upx_dir)  - UPX 在本地 upx/ 目录，需 --upx-dir <upx_dir>
+        (False, None)   - 未找到
+    """
+    from shutil import which
+
+    # 1) PATH 中查找（PyInstaller 会自动搜索 PATH，无需 --upx-dir）
+    if which('upx') or which('upx.exe'):
+        print("  - UPX: 已安装（系统 PATH 中）")
+        return (True, None)
+
+    # 2) 检查 upx 子目录
+    upx_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'upx')
+    upx_exe = os.path.join(upx_dir, 'upx.exe')
+    if os.path.exists(upx_exe):
+        print(f"  - UPX: 已安装（本地目录: {upx_dir}）")
+        return (True, upx_dir)
+
+    # 3) 尝试自动下载
+    print("  - UPX: 未安装，尝试自动下载...")
+    try:
+        import urllib.request
+        import zipfile
+
+        upx_url = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
+        zip_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'upx.zip')
+
+        print(f"    正在从 {upx_url} 下载...")
+        urllib.request.urlretrieve(upx_url, zip_path)
+
+        print("    正在解压...")
+        os.makedirs(upx_dir, exist_ok=True)
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            for info in zf.infolist():
+                if info.filename.endswith('upx.exe'):
+                    info.filename = os.path.basename(info.filename)
+                    zf.extract(info, upx_dir)
+                    break
+        os.remove(zip_path)
+
+        if os.path.exists(upx_exe):
+            print(f"  - UPX: 下载成功（{upx_dir}）")
+            return (True, upx_dir)
+    except Exception as e:
+        print(f"  - UPX 自动下载失败: {e}")
+
+    print("    手动安装: https://github.com/upx/upx/releases")
+    return (False, None)
+
+
 def build_application(icon_path=None, onedir=False):
     """构建应用程序
 
@@ -413,6 +467,15 @@ def build_application(icon_path=None, onedir=False):
     else:
         print("  [模式] --onefile 单文件模式（默认）")
 
+    # 单文件模式下查找 UPX 压缩工具（可减少 30-50% 体积）
+    upx_ok = False
+    upx_dir = None
+    if not onedir:
+        upx_ok, upx_dir = find_upx()
+        if upx_ok:
+            print("  [优化] UPX 压缩已启用（可减少 EXE 体积 30-50%）")
+    print("")
+
     # 获取跨平台路径分隔符
     path_sep = get_path_separator()
 
@@ -422,28 +485,77 @@ def build_application(icon_path=None, onedir=False):
         '--windowed',         # 无命令行窗口（GUI应用）
         '--name', APP_NAME,   # 可执行文件名
         '--add-data', f'{CONFIG_FILE}{path_sep}.',  # 添加配置文件（跨平台兼容）
-        # 懒加载依赖（示波器）
+        # 懒加载依赖（示波器 + 数据分析）
         '--hidden-import', 'pyqtgraph',
         '--hidden-import', 'numpy',
-        '--collect-submodules', 'pyqtgraph',  # 收集 pyqtgraph 全部子模块
+        '--collect-submodules', 'pyqtgraph',  # pyqtgraph 需全部子模块
+        # OTA 升级功能依赖
+        '--hidden-import', 'http.server',
         # 串口枚举（lazy import 场景）
         '--hidden-import', 'serial.tools.list_ports',
         '--hidden-import', 'serial.tools.list_ports_common',
         '--hidden-import', 'serial.tools.list_ports_linux',
         '--hidden-import', 'serial.tools.list_ports_windows',
         '--hidden-import', 'serial.tools.list_ports_osx',
-        # 排除无关大型库，减小体积 + 消除无关 warning
+        # === 排除未使用的重型 PyQt5 子模块（QtWebEngine 约 50-100MB）===
+        '--exclude-module', 'PyQt5.QtWebEngine',
+        '--exclude-module', 'PyQt5.QtWebEngineWidgets',
+        '--exclude-module', 'PyQt5.QtWebChannel',
+        '--exclude-module', 'PyQt5.QtBluetooth',
+        '--exclude-module', 'PyQt5.QtMultimedia',
+        '--exclude-module', 'PyQt5.QtMultimediaWidgets',
+        '--exclude-module', 'PyQt5.QtSql',
+        '--exclude-module', 'PyQt5.QtTest',
+        '--exclude-module', 'PyQt5.QtHelp',
+        '--exclude-module', 'PyQt5.QtDesigner',
+        '--exclude-module', 'PyQt5.QtSensors',
+        '--exclude-module', 'PyQt5.QtPositioning',
+        '--exclude-module', 'PyQt5.QtQml',
+        '--exclude-module', 'PyQt5.QtQuick',
+        '--exclude-module', 'PyQt5.QtQuickWidgets',
+        '--exclude-module', 'PyQt5.QtDBus',
+        '--exclude-module', 'PyQt5.QtXmlPatterns',
+        # === 排除未使用的大型 Python 包 ===
         '--exclude-module', 'torch',
         '--exclude-module', 'tensorflow',
         '--exclude-module', 'tkinter',
         '--exclude-module', 'matplotlib',
         '--exclude-module', 'PIL',
         '--exclude-module', 'cv2',
+        '--exclude-module', 'scipy',
+        '--exclude-module', 'pandas',
+        '--exclude-module', 'notebook',
+        '--exclude-module', 'jupyter',
+        '--exclude-module', 'cryptography',
+        '--exclude-module', 'lxml',
+        '--exclude-module', 'h5py',
+        '--exclude-module', 'bs4',
+        '--exclude-module', 'zmq',
+        '--exclude-module', 'IPython',
+        '--exclude-module', 'bokeh',
+        '--exclude-module', 'sympy',
+        '--exclude-module', 'dateutil',
+        # === 排除未使用的标准库（减少体积约 5-10MB）===
+        '--exclude-module', 'unittest',
+        '--exclude-module', 'doctest',
+        '--exclude-module', 'pdb',
+        '--exclude-module', 'lib2to3',
+        '--exclude-module', 'turtledemo',
+        '--exclude-module', 'distutils',
+        '--exclude-module', 'setuptools',
+        '--exclude-module', 'pkg_resources',
+        '--exclude-module', 'email',
+        '--exclude-module', 'curses',
     ]
 
     # onedir 模式：禁用 UPX，避免启动时解压与杀软扫描开销（方案②）
     if onedir:
         args.append('--noupx')
+
+    # 单文件模式：UPX 在本地目录时传入 --upx-dir（在 PATH 上则不需要）
+    if upx_ok and upx_dir:
+        args.append('--upx-dir')
+        args.append(upx_dir)
 
     args.append(MAIN_SCRIPT)  # 主脚本
     
