@@ -23,8 +23,12 @@ from dialogs import (show_crc_calculator, show_hex_converter,
                          show_about_dialog)
 from theme import THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, VERSION, unescape_text
 from transport import TransportWrapper, TransportReadThread
-# 注意：JsonViewerDialog 和 OTAControlCenter 改为延迟导入（懒加载），
-# 避免启动时加载 pyqtgraph/numpy/http.server 等重型依赖，显著加快 exe 首次启动速度。
+# 注意：JsonViewerDialog 和 AutoReplyDialog 保持延迟导入（懒加载），
+# 因为它们依赖 pyqtgraph/numpy 等重型模块，懒加载可显著加快 exe 首次启动速度。
+# OTAControlCenter 和 GSMDebuggerDialog 只依赖轻量 stdlib 模块，改为顶层导入，
+# 确保 PyInstaller 能静态追踪完整依赖链，避免打包后缺失模块导致闪退。
+from ota_center import OTAControlCenter
+from gsm_debugger import GSMDebuggerDialog
 
 # ANSI 颜色转义序列匹配正则（模块级预编译，避免每次接收数据都重新编译）
 _ANSI_PATTERN = re.compile(r'\x1B(?:\[([0-9;]*)m)?')
@@ -4844,7 +4848,6 @@ class SerialTool(QMainWindow):
 
     def open_ota_center(self):
         """打开 OTA 升级控制中心对话框。"""
-        from ota_center import OTAControlCenter  # 懒加载，避免启动时导入 http.server 等重型依赖
         # 如果已有实例则激活并显示，否则创建新实例
         if hasattr(self, '_ota_dialog') and self._ota_dialog is not None:
             try:
@@ -4855,13 +4858,16 @@ class SerialTool(QMainWindow):
             except RuntimeError:
                 self._ota_dialog = None
 
-        self._ota_dialog = OTAControlCenter(self)
-        self._apply_dialog_theme(self._ota_dialog)
-        self._ota_dialog.show()
+        try:
+            self._ota_dialog = OTAControlCenter(self)
+            self._apply_dialog_theme(self._ota_dialog)
+            self._ota_dialog.show()
+        except Exception as e:
+            QMessageBox.critical(self, "OTA 控制中心错误",
+                                f"打开 OTA 升级控制中心失败:\n{e}")
 
     def show_gsm_debugger(self):
         """打开 GSM 调试助手对话框。"""
-        from gsm_debugger import GSMDebuggerDialog
         if hasattr(self, '_gsm_dialog') and self._gsm_dialog is not None:
             try:
                 self._gsm_dialog.show()
@@ -4871,25 +4877,29 @@ class SerialTool(QMainWindow):
             except RuntimeError:
                 self._gsm_dialog = None
 
-        self._gsm_dialog = GSMDebuggerDialog(self)
-        dlg = self._gsm_dialog
+        try:
+            self._gsm_dialog = GSMDebuggerDialog(self)
+            dlg = self._gsm_dialog
 
-        if hasattr(self, 'read_thread') and self.read_thread:
-            self.read_thread.receive_data_signal.connect(dlg.handle_receive_data)
-
-        def on_finished():
             if hasattr(self, 'read_thread') and self.read_thread:
-                try:
-                    self.read_thread.receive_data_signal.disconnect(dlg.handle_receive_data)
-                except (TypeError, RuntimeError):
-                    pass
-            if self._gsm_dialog is dlg:
-                self._gsm_dialog = None
+                self.read_thread.receive_data_signal.connect(dlg.handle_receive_data)
 
-        dlg.finished.connect(on_finished)
-        self._apply_dialog_theme(dlg)
-        dlg.setAttribute(Qt.WA_DeleteOnClose)
-        dlg.show()
+            def on_finished():
+                if hasattr(self, 'read_thread') and self.read_thread:
+                    try:
+                        self.read_thread.receive_data_signal.disconnect(dlg.handle_receive_data)
+                    except (TypeError, RuntimeError):
+                        pass
+                if self._gsm_dialog is dlg:
+                    self._gsm_dialog = None
+
+            dlg.finished.connect(on_finished)
+            self._apply_dialog_theme(dlg)
+            dlg.setAttribute(Qt.WA_DeleteOnClose)
+            dlg.show()
+        except Exception as e:
+            QMessageBox.critical(self, "GSM 调试助手错误",
+                                f"打开 GSM 调试助手失败:\n{e}")
 
     def _apply_dialog_theme(self, dialog):
         """为子对话框应用当前主题（暗黑/明亮），支持运行时切换。"""

@@ -550,7 +550,6 @@ def build_application(icon_path=None, onedir=False):
         '--exclude-module', 'distutils',
         '--exclude-module', 'setuptools',
         '--exclude-module', 'pkg_resources',
-        '--exclude-module', 'email',
         '--exclude-module', 'curses',
     ]
 
