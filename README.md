@@ -22,6 +22,9 @@
 - ✅ **串口监视器** - 实时监视串口状态
 - ✅ **Modbus 工具** - Modbus 协议调试支持
 - ✅ **主题切换** - 支持明暗主题切换
+- ✅ **自动回复** - 支持配置规则自动响应接收数据
+- ✅ **GSM调试** - 内置 GSM 模块调试功能
+- ✅ **JSON数据查看** - 支持 JSON 格式数据解析与可视化
 
 ---
 
@@ -78,6 +81,9 @@ pyserial
 | 示波器 | 图形化显示通信数据变化 |
 | 串口监视器 | 实时监视串口引脚状态 |
 | Modbus 工具 | Modbus 协议调试 |
+| 自动回复 | 配置规则自动响应接收数据 |
+| GSM调试 | AT指令调试、短信发送、电话控制 |
+| JSON查看器 | 解析并图形化展示 JSON 数据 |
 
 ---
 
@@ -86,18 +92,19 @@ pyserial
 ```
 SerialTools/
 ├── serial_GUI.py              # 主程序入口
-├── transport.py              # 多协议通信模块（串口/UDP/TCP）
-├── dialogs.py               # 对话框组件
-├── ota_center.py            # OTA 远程升级中心
-├── data_viewer.py            # 数据分析面板
-├── theme.py                 # 主题管理
-├── serial_config.json       # 配置文件
-├── requirements.txt         # 依赖列表
-├── build_app.py             # 打包脚本
-├── convert_json_to_csv.py   # 格式转换工具
-├── themes/                 # 主题配置文件
-│   └── design-tokens.md    # 设计系统文档
-└── VERSION_INFO_README.md  # 版本信息配置说明
+├── transport.py               # 多协议通信模块（串口/UDP/TCP）
+├── dialogs.py                 # 对话框组件
+├── auto_reply.py              # 自动回复功能
+├── gsm_debugger.py            # GSM 模块调试工具
+├── data_viewer.py             # 数据分析面板 / JSON 查看器
+├── ota_center.py              # OTA 远程升级中心
+├── theme.py                   # 主题管理
+├── build_app.py               # 打包脚本
+├── serial_config.json         # 配置文件
+├── requirements.txt           # 依赖列表
+├── themes/                    # 主题配置文件
+│   └── design-tokens.md      # 设计系统文档
+└── VERSION_INFO_README.md     # 版本信息配置说明
 ```
 
 ---
