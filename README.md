@@ -129,6 +129,5 @@ python build_app.py
 
 欢迎提交 Issue 和 Pull Request！
 
-- 作者：TRAE
-- 邮箱：contact@aigei.com
-- 网站：https://www.aigei.com
+- 作者：GAOXIANG
+- 邮箱：770807059@qq.com
