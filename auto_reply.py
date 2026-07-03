@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QComboBox, QPushButton, QLineEdit, QTextEdit,
                              QMessageBox, QTableWidget, QTableWidgetItem,
                              QHeaderView, QAbstractItemView, QGroupBox,
-                             QFrame, QCheckBox, QSpinBox)
+                             QFrame, QCheckBox, QSpinBox, QFileDialog)
 from PyQt5.QtCore import Qt, QTimer, QMutexLocker
 from PyQt5.QtGui import QFont, QTextCursor
 
@@ -29,6 +29,8 @@ class AutoReplyDialog(QDialog):
         self._data_buffer = b''
         self._data_receiver = DataReceiver()
         self._data_receiver.data_received.connect(self._process_receive_data)
+        import os
+        self._last_rules_dir = os.path.join(os.path.expanduser('~'), '.serial_GUI')
         self._init_ui()
         self.setAttribute(Qt.WA_DeleteOnClose)
 
@@ -457,10 +459,11 @@ class AutoReplyDialog(QDialog):
             "当串口接收到满足条件的特定数据时，自动发送预设的响应内容。\n\n"
             "▎全局设置\n"
             "• 启用自动应答：主开关，勾选后自动应答功能生效。\n"
+            "  注：此状态为运行时状态，不随规则文件保存或恢复。\n"
             "• 响应延迟：收到触发数据后，延迟指定毫秒再发送响应。\n"
-            "• 忽略大小写：文本匹配时忽略英文字母大小写。\n"
+            "• 忽略大小写：文本匹配时忽略英文字母大小写（仅文本模式）。\n"
             "• 匹配后停止：命中一条规则后不再继续匹配后续规则。\n"
-            "• 发送后记录到接收区：将自动发送的响应内容显示在主窗口接收区。\n\n"
+            "• 发送后记录到接收区：将自动发送的响应内容以[发送]标记显示在主窗口接收区。\n\n"
             "▎规则编辑\n"
             "• 触发条件：要匹配的数据内容。\n"
             "• 匹配模式：\n"
@@ -468,17 +471,26 @@ class AutoReplyDialog(QDialog):
             "  - 文本完全：接收数据与触发条件完全一致才匹配。\n"
             "  - HEX匹配：按十六进制数据匹配，如 01 03。\n"
             "• 响应内容：匹配成功后自动发送的数据。\n"
-            "• 回车换行：自动在响应内容末尾添加 \\r\\n。\n"
+            "• 回车换行：自动在响应内容末尾添加 \\r\\n（逐条规则独立设置）。\n"
             "• 响应格式：文本（UTF-8编码）或 HEX（十六进制，如 01 02）。\n"
             "• 启用此规则：单条规则的开关。\n"
             "• 最大响应次数：达到次数后规则自动停用（0 表示不限）。\n\n"
+            "▎规则列表标识\n"
+            "响应内容列会显示以下标识：\n"
+            "• [HEX]：响应格式为十六进制。\n"
+            "• [+\\r\\n]：启用了回车换行。\n"
+            "• [HEX +\\r\\n]：同时启用以上两项。\n\n"
             "▎规则管理\n"
             "• 在规则列表中点击可编辑已有规则。\n"
             "• 上移/下移按钮调整规则的匹配优先级（从上到下依次匹配）。\n"
-            "• 支持保存/加载规则配置，方便多场景切换。\n\n"
+            "• 保存规则：弹出文件选择对话框，可自定义保存路径和文件名（.json格式）。\n"
+            "• 加载规则：弹出文件选择对话框，可选择任意规则文件导入。\n"
+            "  注：加载规则会覆盖当前规则列表，请谨慎操作。\n\n"
             "▎提示\n"
             "• 规则日志显示所有匹配和响应记录，便于调试。\n"
-            "• 触发条件和响应内容支持转义序列：\\r、\\n、\\t、\\\\。"
+            "• 触发条件和响应内容支持转义序列：\\r、\\n、\\t、\\\\。\n"
+            "• 手动输入 help\\r\\n 和勾选回车换行效果相同，不会重复添加。\n"
+            "• 规则文件格式错误时会显示具体错误信息，便于排查。"
         )
         QMessageBox.information(self, "帮助 - 自动应答", help_text)
 
@@ -501,7 +513,6 @@ class AutoReplyDialog(QDialog):
         config = {
             'rules': rules_data,
             'global': {
-                'enabled': self.check_enable.isChecked(),
                 'delay': self.spin_delay.value(),
                 'case_ignore': self.check_case_ignore.isChecked(),
                 'stop_after_match': self.check_stop_after_match.isChecked(),
@@ -509,29 +520,63 @@ class AutoReplyDialog(QDialog):
             }
         }
 
-        config_dir = os.path.join(os.path.expanduser('~'), '.serial_GUI')
-        os.makedirs(config_dir, exist_ok=True)
-        config_path = os.path.join(config_dir, 'auto_reply_rules.json')
+        os.makedirs(self._last_rules_dir, exist_ok=True)
+        default_path = os.path.join(self._last_rules_dir, 'auto_reply_rules.json')
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "保存规则文件", default_path,
+            "JSON文件 (*.json);;所有文件 (*)"
+        )
+
+        if not file_path:
+            return
+
+        if not file_path.endswith('.json'):
+            file_path += '.json'
 
         try:
-            with open(config_path, 'w', encoding='utf-8') as f:
+            with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
-            self._append_log("规则已保存")
+            self._last_rules_dir = os.path.dirname(file_path)
+            self._append_log(f"规则已保存到: {os.path.basename(file_path)}")
         except Exception as e:
             QMessageBox.warning(self, "保存失败", f"保存规则失败: {e}")
+
+    def _validate_rules_data(self, data):
+        if isinstance(data, list):
+            rules_data = data
+        elif isinstance(data, dict):
+            rules_data = data.get('rules', [])
+        else:
+            return False, "文件格式错误：不是有效的JSON格式"
+
+        if not isinstance(rules_data, list):
+            return False, "文件格式错误：rules字段必须是数组"
+
+        for i, rule in enumerate(rules_data):
+            if not isinstance(rule, dict):
+                return False, f"第{i+1}条规则格式错误：不是对象"
+            if 'trigger' not in rule or not isinstance(rule['trigger'], str):
+                return False, f"第{i+1}条规则缺少或无效的触发条件"
+            if 'response' not in rule or not isinstance(rule['response'], str):
+                return False, f"第{i+1}条规则缺少或无效的响应内容"
+
+        return True, ""
 
     def _load_rules(self):
         import json
         import os
 
-        config_dir = os.path.join(os.path.expanduser('~'), '.serial_GUI')
-        config_path = os.path.join(config_dir, 'auto_reply_rules.json')
+        os.makedirs(self._last_rules_dir, exist_ok=True)
 
-        if not os.path.exists(config_path):
-            QMessageBox.warning(self, "加载失败", "未找到规则配置文件")
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "加载规则文件", self._last_rules_dir,
+            "JSON文件 (*.json);;所有文件 (*)"
+        )
+
+        if not file_path:
             return
 
-        # 如果当前有未保存的规则，提示确认
         if self._rules:
             reply = QMessageBox.question(
                 self, "确认加载",
@@ -542,10 +587,14 @@ class AutoReplyDialog(QDialog):
                 return
 
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
+            with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
-            # 兼容旧格式（纯规则列表）和新格式（含 global 配置）
+            valid, error_msg = self._validate_rules_data(data)
+            if not valid:
+                QMessageBox.warning(self, "格式错误", f"规则文件格式不正确：\n{error_msg}")
+                return
+
             if isinstance(data, list):
                 rules_data = data
                 global_settings = {}
@@ -553,7 +602,6 @@ class AutoReplyDialog(QDialog):
                 rules_data = data.get('rules', [])
                 global_settings = data.get('global', {})
 
-            # 先构建临时列表，成功后再替换，避免加载失败清空现有规则
             new_rules = []
             for r in rules_data:
                 new_rules.append({
@@ -569,17 +617,20 @@ class AutoReplyDialog(QDialog):
 
             self._rules = new_rules
 
-            # 恢复全局设置
             if global_settings:
-                self.check_enable.setChecked(global_settings.get('enabled', False))
                 self.spin_delay.setValue(global_settings.get('delay', 100))
                 self.check_case_ignore.setChecked(global_settings.get('case_ignore', False))
                 self.check_stop_after_match.setChecked(global_settings.get('stop_after_match', False))
                 self.check_log_to_receive.setChecked(global_settings.get('log_to_receive', False))
 
+            self._last_rules_dir = os.path.dirname(file_path)
             self._refresh_rules_table()
             self._clear_editor()
-            self._append_log(f"规则已加载（{len(new_rules)} 条）")
+            self._append_log(f"规则已加载（{len(new_rules)} 条）: {os.path.basename(file_path)}")
+        except json.JSONDecodeError:
+            QMessageBox.warning(self, "加载失败", "文件不是有效的JSON格式")
+        except FileNotFoundError:
+            QMessageBox.warning(self, "加载失败", "文件不存在")
         except Exception as e:
             QMessageBox.warning(self, "加载失败", f"加载规则失败: {e}")
 
@@ -691,10 +742,10 @@ class AutoReplyDialog(QDialog):
             if self.check_log_to_receive.isChecked():
                 try:
                     text = data.decode('utf-8', errors='replace')
-                    self.parent_window.append_text(text)
+                    self.parent_window.append_text(f"[发送]: {text}")
                 except:
                     hex_str = ' '.join([f'{byte:02X}' for byte in data])
-                    self.parent_window.append_text(hex_str)
+                    self.parent_window.append_text(f"[发送]: {hex_str}")
         except Exception as e:
             self._append_log(f"发送失败: {e}")
 
