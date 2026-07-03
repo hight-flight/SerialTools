@@ -489,8 +489,14 @@ def build_application(icon_path=None, onedir=False):
         '--hidden-import', 'pyqtgraph',
         '--hidden-import', 'numpy',
         '--collect-submodules', 'pyqtgraph',  # pyqtgraph 需全部子模块
+        # 懒加载模块（函数体内 import，PyInstaller 静态分析无法检测）
+        '--hidden-import', 'ota_center',
+        '--hidden-import', 'gsm_debugger',
+        '--hidden-import', 'auto_reply',
+        '--hidden-import', 'data_viewer',
         # OTA 升级功能依赖
         '--hidden-import', 'http.server',
+        '--hidden-import', 'socketserver',
         # 串口枚举（lazy import 场景）
         '--hidden-import', 'serial.tools.list_ports',
         '--hidden-import', 'serial.tools.list_ports_common',
