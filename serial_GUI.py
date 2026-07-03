@@ -336,7 +336,7 @@ class SerialTool(QMainWindow):
         act_gsm.triggered.connect(self.show_gsm_debugger)
         tool_menu.addAction(act_gsm)
 
-        act_auto_reply = QAction("自动应答", self)
+        act_auto_reply = QAction("自动应答工具", self)
         act_auto_reply.triggered.connect(self.show_auto_reply)
         tool_menu.addAction(act_auto_reply)
 

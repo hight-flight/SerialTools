@@ -71,9 +71,6 @@ class AutoReplyDialog(QDialog):
         self.check_log_to_receive = QCheckBox("发送后记录到接收区")
         global_layout.addWidget(self.check_log_to_receive)
 
-        self.check_newline = QCheckBox("回车换行")
-        global_layout.addWidget(self.check_newline)
-
         global_layout.addStretch()
         parent_layout.addWidget(global_group)
 
@@ -83,11 +80,9 @@ class AutoReplyDialog(QDialog):
         table_layout.setSpacing(6)
 
         self.table_rules = QTableWidget()
-        self.table_rules.setColumnCount(5)
-        self.table_rules.setHorizontalHeaderLabels(["序号", "触发条件", "匹配模式", "响应内容", "触发次数"])
+        self.table_rules.setColumnCount(4)
+        self.table_rules.setHorizontalHeaderLabels(["序号", "触发条件", "匹配模式", "响应内容"])
         self.table_rules.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table_rules.setColumnWidth(4, 100)
-        self.table_rules.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.table_rules.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table_rules.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_rules.setMinimumHeight(150)
@@ -177,6 +172,9 @@ class AutoReplyDialog(QDialog):
         self.edit_response.setPlaceholderText("输入响应内容")
         row2_layout.addWidget(self.edit_response)
 
+        self.check_newline = QCheckBox("回车换行")
+        row2_layout.addWidget(self.check_newline)
+
         row2_layout.addWidget(QLabel("响应格式:"))
         self.combo_response_format = QComboBox()
         self.combo_response_format.addItems(["文本", "HEX"])
@@ -231,6 +229,11 @@ class AutoReplyDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(16)
 
+        btn_help = QPushButton("帮助")
+        btn_help.setMinimumWidth(60)
+        btn_help.clicked.connect(self._show_help)
+        btn_layout.addWidget(btn_help)
+
         btn_layout.addStretch()
 
         btn_save = QPushButton("保存规则")
@@ -269,6 +272,7 @@ class AutoReplyDialog(QDialog):
             'response_format': self.combo_response_format.currentText(),
             'enabled': self.check_enabled.isChecked(),
             'max_count': self.spin_max_count.value(),
+            'newline': self.check_newline.isChecked(),
             'count': 0
         }
 
@@ -306,6 +310,7 @@ class AutoReplyDialog(QDialog):
         self.combo_response_format.setCurrentText(rule['response_format'])
         self.check_enabled.setChecked(rule['enabled'])
         self.spin_max_count.setValue(rule['max_count'])
+        self.check_newline.setChecked(rule.get('newline', False))
         self._update_edit_mode_ui()
 
     def _update_edit_mode_ui(self):
@@ -387,7 +392,7 @@ class AutoReplyDialog(QDialog):
             empty_item.setTextAlignment(Qt.AlignCenter)
             self.table_rules.setItem(0, 0, empty_item)
             # 合并单元格显示提示
-            self.table_rules.setSpan(0, 0, 1, 5)
+            self.table_rules.setSpan(0, 0, 1, 4)
             return
 
         for i, rule in enumerate(self._rules):
@@ -403,17 +408,17 @@ class AutoReplyDialog(QDialog):
             response_display = rule['response']
             if len(response_display) > 30:
                 response_display = response_display[:30] + "..."
+            tags = []
+            if rule.get('response_format') == 'HEX':
+                tags.append("HEX")
+            if rule.get('newline', False):
+                tags.append("+\\r\\n")
+            if tags:
+                response_display += f" [{' '.join(tags)}]"
             self.table_rules.setItem(row, 3, QTableWidgetItem(response_display))
 
-            # 触发次数 / 最大次数
-            max_txt = f"{rule['max_count']}" if rule['max_count'] > 0 else "不限"
-            count_txt = f"{rule['count']}/{max_txt}"
-            count_item = QTableWidgetItem(count_txt)
-            count_item.setTextAlignment(Qt.AlignCenter)
-            self.table_rules.setItem(row, 4, count_item)
-
             if not rule['enabled']:
-                for col in range(5):
+                for col in range(4):
                     item = self.table_rules.item(row, col)
                     if item:
                         item.setForeground(Qt.gray)
@@ -427,6 +432,7 @@ class AutoReplyDialog(QDialog):
         self.combo_response_format.setCurrentIndex(0)
         self.check_enabled.setChecked(True)
         self.spin_max_count.setValue(0)
+        self.check_newline.setChecked(False)
         # 清除表格选中状态
         self.table_rules.clearSelection()
 
@@ -442,6 +448,40 @@ class AutoReplyDialog(QDialog):
     def _clear_log(self):
         self.text_log.clear()
 
+    def _show_help(self):
+        """显示自动应答功能帮助说明。"""
+        help_text = (
+            "自动应答功能使用说明\n"
+            "═══════════════════════════════════════\n\n"
+            "▎功能概述\n"
+            "当串口接收到满足条件的特定数据时，自动发送预设的响应内容。\n\n"
+            "▎全局设置\n"
+            "• 启用自动应答：主开关，勾选后自动应答功能生效。\n"
+            "• 响应延迟：收到触发数据后，延迟指定毫秒再发送响应。\n"
+            "• 忽略大小写：文本匹配时忽略英文字母大小写。\n"
+            "• 匹配后停止：命中一条规则后不再继续匹配后续规则。\n"
+            "• 发送后记录到接收区：将自动发送的响应内容显示在主窗口接收区。\n\n"
+            "▎规则编辑\n"
+            "• 触发条件：要匹配的数据内容。\n"
+            "• 匹配模式：\n"
+            "  - 文本包含：接收数据包含触发条件即匹配。\n"
+            "  - 文本完全：接收数据与触发条件完全一致才匹配。\n"
+            "  - HEX匹配：按十六进制数据匹配，如 01 03。\n"
+            "• 响应内容：匹配成功后自动发送的数据。\n"
+            "• 回车换行：自动在响应内容末尾添加 \\r\\n。\n"
+            "• 响应格式：文本（UTF-8编码）或 HEX（十六进制，如 01 02）。\n"
+            "• 启用此规则：单条规则的开关。\n"
+            "• 最大响应次数：达到次数后规则自动停用（0 表示不限）。\n\n"
+            "▎规则管理\n"
+            "• 在规则列表中点击可编辑已有规则。\n"
+            "• 上移/下移按钮调整规则的匹配优先级（从上到下依次匹配）。\n"
+            "• 支持保存/加载规则配置，方便多场景切换。\n\n"
+            "▎提示\n"
+            "• 规则日志显示所有匹配和响应记录，便于调试。\n"
+            "• 触发条件和响应内容支持转义序列：\\r、\\n、\\t、\\\\。"
+        )
+        QMessageBox.information(self, "帮助 - 自动应答", help_text)
+
     def _save_rules(self):
         import json
         import os
@@ -454,7 +494,8 @@ class AutoReplyDialog(QDialog):
                 'response': rule['response'],
                 'response_format': rule['response_format'],
                 'enabled': rule['enabled'],
-                'max_count': rule['max_count']
+                'max_count': rule['max_count'],
+                'newline': rule.get('newline', False),
             })
 
         config = {
@@ -465,7 +506,6 @@ class AutoReplyDialog(QDialog):
                 'case_ignore': self.check_case_ignore.isChecked(),
                 'stop_after_match': self.check_stop_after_match.isChecked(),
                 'log_to_receive': self.check_log_to_receive.isChecked(),
-                'newline': self.check_newline.isChecked(),
             }
         }
 
@@ -523,6 +563,7 @@ class AutoReplyDialog(QDialog):
                     'response_format': r.get('response_format', '文本'),
                     'enabled': r.get('enabled', True),
                     'max_count': r.get('max_count', 0),
+                    'newline': r.get('newline', False),
                     'count': 0
                 })
 
@@ -535,7 +576,6 @@ class AutoReplyDialog(QDialog):
                 self.check_case_ignore.setChecked(global_settings.get('case_ignore', False))
                 self.check_stop_after_match.setChecked(global_settings.get('stop_after_match', False))
                 self.check_log_to_receive.setChecked(global_settings.get('log_to_receive', False))
-                self.check_newline.setChecked(global_settings.get('newline', False))
 
             self._refresh_rules_table()
             self._clear_editor()
@@ -601,15 +641,8 @@ class AutoReplyDialog(QDialog):
                 if matched:
                     matched_any = True
                     rule['count'] += 1
-                    idx = self._rules.index(rule) + 1
-                    max_txt = f"{rule['max_count']}" if rule['max_count'] > 0 else "不限"
-                    self._append_log(f"规则{idx}触发 (第{rule['count']}/{max_txt}次): 收到 \"{text.strip()[:30]}...\"")
+                    self._append_log(f"规则{self._rules.index(rule)+1}触发: 收到 \"{text.strip()[:30]}...\"")
                     self._send_response(rule)
-                    # 实时更新表格中的触发次数
-                    count_txt = f"{rule['count']}/{max_txt}"
-                    row_idx = self._rules.index(rule)
-                    if row_idx < self.table_rules.rowCount():
-                        self.table_rules.setItem(row_idx, 4, QTableWidgetItem(count_txt))
 
                     if self.check_stop_after_match.isChecked():
                         break
@@ -632,7 +665,7 @@ class AutoReplyDialog(QDialog):
                 # 处理转义序列（\r \n \t \\ → 实际控制字符）
                 response_text = unescape_text(rule['response'])
                 # 处理回车换行
-                if self.check_newline.isChecked():
+                if rule.get('newline', False):
                     response_text = response_text.rstrip('\r\n') + '\r\n'
                 response_data = response_text.encode('utf-8')
 
