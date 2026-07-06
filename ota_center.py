@@ -362,10 +362,14 @@ class OTAControlCenter(QDialog):
         self._cmd_format_edit.setText("ota {url}\\r\\n")
         self._cmd_format_edit.setToolTip(
             "{url} 将被替换为下载地址。默认 \\r\\n 结尾，可自由编辑")
-        # 编辑完成（失焦/回车）自动补 \r\n 并持久化其他设置（端口/超时等）；
-        # 指令本身不持久化，每次打开恢复默认值
         self._cmd_format_edit.editingFinished.connect(self._on_cmd_format_edited)
         cmd_row.addWidget(self._cmd_format_edit)
+
+        self._check_cmd_newline = QCheckBox("回车换行")
+        self._check_cmd_newline.setChecked(False)
+        self._check_cmd_newline.setToolTip("自动在指令末尾添加 \\r\\n")
+        cmd_row.addWidget(self._check_cmd_newline)
+
         ota_layout.addLayout(cmd_row)
 
         layout.addWidget(ota_group)
@@ -481,6 +485,8 @@ class OTAControlCenter(QDialog):
         self._refresh_ips()
         # OTA 指令每次打开恢复默认值（用户可临时修改用于本次升级，不持久化）
         self._cmd_format_edit.setText("ota {url}\\r\\n")
+        # 回车换行勾选框每次打开重置为关闭状态
+        self._check_cmd_newline.setChecked(False)
         # 恢复上次选择的 IP
         if self._last_ip:
             idx = self._ip_combo.findText(self._last_ip)
@@ -973,15 +979,15 @@ class OTAControlCenter(QDialog):
             cmd_template = self._cmd_format_edit.text()
             cmd = cmd_template.replace('{url}', url)
 
-            # 如果指令不含 {url} 占位符，在末尾追加 URL
             if '{url}' not in cmd_template and url not in cmd:
                 if not cmd.endswith('\n'):
-                    cmd += '\n'
-                # 默认行为：指令 + URL
-                pass
+                    cmd += '\r\n'
 
-            # 解码转义序列（\r \n \t \\）为实际控制字符
             cmd = unescape_text(cmd)
+
+            # 根据勾选框决定是否添加回车换行（在 unescape 之后，确保 rstrip 生效）
+            if self._check_cmd_newline.isChecked():
+                cmd = cmd.rstrip('\r\n') + '\r\n'
             cmd_bytes = cmd.encode('utf-8')
 
             # 通过串口发送（清空输入缓冲，防止残留数据干扰）
