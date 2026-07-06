@@ -46,7 +46,7 @@ except ImportError:
 #  常量
 # ──────────────────────────────────────────────
 MAX_CAPTURE_ITEMS = 100_000          # 捕获列表最大条目
-MAX_CURVE_POINTS = 5000             # 每条曲线最大原始点数
+MAX_CURVE_POINTS = 50000            # 每条曲线最大原始点数（提升10倍，增加显示范围）
 BATCH_UPDATE_MS = 30                # 批量更新间隔 ms（低延迟）
 CHART_REFRESH_MS = 50               # 图表刷新间隔 ms
 SEARCH_DEBOUNCE_MS = 200            # 搜索防抖 ms
