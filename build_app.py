@@ -484,8 +484,14 @@ def build_application(icon_path=None, onedir=False):
         '--onedir' if onedir else '--onefile',  # 目录模式 / 单文件模式
         '--windowed',         # 无命令行窗口（GUI应用）
         '--name', APP_NAME,   # 可执行文件名
-        '--add-data', f'{CONFIG_FILE}{path_sep}.',  # 添加配置文件（跨平台兼容）
-        # 懒加载依赖（示波器 + 数据分析）
+    ]
+    
+    # 仅当配置文件存在时才添加（避免打包失败）
+    if os.path.exists(CONFIG_FILE):
+        args.extend(['--add-data', f'{CONFIG_FILE}{path_sep}.'])
+    
+    # 懒加载依赖（示波器 + 数据分析）
+    args.extend([
         '--hidden-import', 'pyqtgraph',
         '--hidden-import', 'numpy',
         '--collect-submodules', 'pyqtgraph',  # pyqtgraph 需全部子模块
@@ -551,7 +557,7 @@ def build_application(icon_path=None, onedir=False):
         '--exclude-module', 'setuptools',
         '--exclude-module', 'pkg_resources',
         '--exclude-module', 'curses',
-    ]
+    ])
 
     # onedir 模式：禁用 UPX，避免启动时解压与杀软扫描开销（方案②）
     if onedir:
