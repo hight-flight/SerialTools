@@ -1129,6 +1129,9 @@ class ChartTrackerWidget(QWidget):
             item.setData([], [])
         # 隐藏统计浮层
         self.stats_overlay.hide()
+        # 重置图表视图范围（关键：否则看起来数据还在）
+        self.plot_widget.autoRange()
+        self.plot_widget.getPlotItem().vb.enableAutoRange()
 
     # --- Feature 2: 告警检测 ---
     def _check_alerts(self, path: str, value: float):
@@ -3622,7 +3625,7 @@ class JsonViewerDialog(QDialog):
     def _clear_all(self):
         _msg = QMessageBox(QMessageBox.Question, "确认清空",
             "确定要清空所有捕获数据和图表吗？\n此操作不可撤销。",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            QMessageBox.Yes | QMessageBox.No, self)
         if self._theme_callback:
             self._theme_callback(_msg)
         if _msg.exec_() != QMessageBox.Yes:
