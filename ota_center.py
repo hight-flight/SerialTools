@@ -17,6 +17,7 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
 from theme import unescape_text
+from app_paths import ensure_user_dirs, open_directory, resolve_app_paths
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QComboBox, QPushButton, QTextEdit, QCheckBox,
@@ -503,8 +504,10 @@ class OTAControlCenter(QDialog):
 
     @property
     def _serve_dir(self):
-        """ota_serve 服务根目录（位于程序工作目录下）。"""
-        return os.path.join(os.getcwd(), 'ota_serve')
+        """返回当前用户可写的 OTA 服务根目录。"""
+        app_paths = getattr(self.main_window, '_app_paths', resolve_app_paths())
+        ensure_user_dirs(app_paths)
+        return os.fspath(app_paths.ota_dir)
 
     # ─────────────────────────────────────────────────────────────
     #  设置持久化
@@ -516,7 +519,7 @@ class OTAControlCenter(QDialog):
         # 使用主窗口的 PID 配置文件路径，避免多实例冲突
         config_file = self.main_window.config_file if (
             self.main_window and hasattr(self.main_window, 'config_file')
-        ) else os.path.join(os.getcwd(), 'serial_config.json')
+        ) else os.fspath(resolve_app_paths().config_dir / 'serial_config.json')
         if os.path.exists(config_file):
             try:
                 with open(config_file, 'r', encoding='utf-8') as f:
@@ -563,7 +566,7 @@ class OTAControlCenter(QDialog):
         # 使用主窗口的 PID 配置文件路径，避免多实例冲突
         config_file = self.main_window.config_file if (
             self.main_window and hasattr(self.main_window, 'config_file')
-        ) else os.path.join(os.getcwd(), 'serial_config.json')
+        ) else os.fspath(resolve_app_paths().config_dir / 'serial_config.json')
         config = {}
         if os.path.exists(config_file):
             try:
@@ -772,7 +775,8 @@ class OTAControlCenter(QDialog):
         except OSError:
             pass
         try:
-            os.startfile(self._serve_dir)
+            if not open_directory(self._serve_dir):
+                raise OSError("桌面环境未接受目录打开请求")
         except Exception:
             QMessageBox.warning(self, "提示",
                                 f"服务目录: {self._serve_dir}")

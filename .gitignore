@@ -1,5 +1,6 @@
 ﻿__pycache__/
 .worktrees/
+.venv*/
 build/
 dist/
 *.spec

@@ -57,6 +57,9 @@ python serial_GUI.py
 ```
 PyQt5
 pyserial
+pyqtgraph
+numpy
+chardet
 ```
 
 ---
@@ -111,11 +114,24 @@ SerialTools/
 
 ## 🛠️ 打包发布
 
-如需打包为可执行文件：
+### Windows
 
 ```bash
 python build_app.py
 ```
+
+### Ubuntu 22.04+
+
+Linux 发布包必须在 Ubuntu 22.04 环境中构建：
+
+```bash
+python3 -m venv .venv-linux
+source .venv-linux/bin/activate
+python -m pip install -r requirements-build.txt
+python packaging/linux/build_linux.py
+```
+
+构建结果位于 `dist/linux/`，同时生成 `.deb` 安装包和 `.tar.gz` 便携包。完整说明见 [Ubuntu 发布包文档](packaging/linux/README.md)。
 
 ---
 

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=SerialTool
+Comment=串口、UDP 和 TCP 调试工具
+Exec=serialtool
+Icon=serialtool
+Terminal=false
+Categories=Utility;Development;
+StartupNotify=true

@@ -23,6 +23,7 @@ from dialogs import (show_crc_calculator, show_hex_converter,
                          show_about_dialog)
 from theme import THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, VERSION, unescape_text
 from transport import TransportWrapper, TransportReadThread
+from app_paths import ensure_user_dirs, resolve_app_paths
 # 注意：JsonViewerDialog 和 AutoReplyDialog 保持延迟导入（懒加载），
 # 因为它们依赖 pyqtgraph/numpy 等重型模块，懒加载可显著加快 exe 首次启动速度。
 # OTAControlCenter 和 GSMDebuggerDialog 只依赖轻量 stdlib 模块，改为顶层导入，
@@ -112,20 +113,20 @@ def _is_pid_alive(pid):
         return False
 
 
-def _cleanup_stale_pid_files():
+def _cleanup_stale_pid_files(config_dir=None):
     """清理残留的 PID 配置文件（进程异常退出时未清理的文件）。
 
-    扫描工作目录中的 serial_config_*.json 和 data_viewer_*.ini 文件，
+    扫描配置目录中的 serial_config_*.json 和 data_viewer_*.ini 文件，
     删除条件（满足任一即删除）：
       1. PID 对应进程已不存在
       2. 文件年龄超过 7 天（兜底，防止 PID 复用导致永久残留）
     """
     import glob
-    cwd = os.getcwd()
+    config_dir = os.fspath(config_dir or os.getcwd())
     MAX_AGE_SECONDS = 7 * 24 * 3600  # 7 天兜底阈值
     now = time.time()
     for pattern in ('serial_config_*.json', 'data_viewer_*.ini'):
-        for filepath in glob.glob(os.path.join(cwd, pattern)):
+        for filepath in glob.glob(os.path.join(config_dir, pattern)):
             try:
                 basename = os.path.basename(filepath)
                 name_part = basename.rsplit('.', 1)[0]      # 去扩展名
@@ -150,6 +151,8 @@ def _cleanup_stale_pid_files():
 class SerialTool(QMainWindow):
     def __init__(self):
         super().__init__()
+        self._app_paths = resolve_app_paths()
+        ensure_user_dirs(self._app_paths)
         self.transport = TransportWrapper()
         self.read_thread = None
         # 网络模式参数
@@ -177,7 +180,7 @@ class SerialTool(QMainWindow):
         self.log_file_size = 0
         self.max_log_file_size = 200 * 1024 * 1024  # 200MB
         self.log_file_count = 0
-        self.save_directory = os.path.join(os.getcwd(), "logs")  # 默认保存目录
+        self.save_directory = os.fspath(self._app_paths.logs_dir)
         self.max_log_files = 10  # 最大保留的日志文件数量
         
         # 数据统计变量
@@ -190,10 +193,12 @@ class SerialTool(QMainWindow):
         self.thread_pool.setMaxThreadCount(4)
         
         # 配置文件路径（PID 后缀，避免多实例互相覆盖）
-        self._base_config_file = os.path.join(os.getcwd(), "serial_config.json")
-        self.config_file = os.path.join(os.getcwd(), f"serial_config_{os.getpid()}.json")
+        self._base_config_file = os.fspath(self._app_paths.config_dir / "serial_config.json")
+        self.config_file = os.fspath(
+            self._app_paths.config_dir / f"serial_config_{os.getpid()}.json"
+        )
         # 启动时清理残留的 PID 配置文件（进程异常退出时未清理的文件）
-        _cleanup_stale_pid_files()
+        _cleanup_stale_pid_files(self._app_paths.config_dir)
         # 首次启动：从基础配置继承，保证新实例继承上次设置
         if not os.path.exists(self.config_file) and os.path.exists(self._base_config_file):
             try:
@@ -232,7 +237,7 @@ class SerialTool(QMainWindow):
     def _make_arrow_icons(self):
         """生成下拉箭头 V 型图标（QSS 接管 ComboBox 后系统箭头不显示，必须手绘）"""
         import os
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+        icon_dir = os.fspath(self._app_paths.cache_dir)
 
         def _draw(path, color_hex, size=12):
             pix = QPixmap(size, size)
@@ -254,8 +259,8 @@ class SerialTool(QMainWindow):
             pix.save(path, 'PNG')
             return path.replace('\\', '/')
 
-        dark = _draw(os.path.join(script_dir, '_arrow_dark.png'), '#6A7384')
-        light = _draw(os.path.join(script_dir, '_arrow_light.png'), '#666666')
+        dark = _draw(os.path.join(icon_dir, '_arrow_dark.png'), '#6A7384')
+        light = _draw(os.path.join(icon_dir, '_arrow_light.png'), '#666666')
         return dark, light
 
     def init_ui(self):
