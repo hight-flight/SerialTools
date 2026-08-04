@@ -45,19 +45,98 @@ class AppPathsTests(unittest.TestCase):
         self.assertEqual(paths.data_dir, Path("/tmp/data/SerialTool"))
         self.assertEqual(paths.cache_dir, Path("/tmp/cache/SerialTool"))
 
-    def test_windows保持当前工作目录兼容性(self):
+    def test_linux忽略空值和相对xdg目录(self):
+        app_paths = self._load_module()
+
+        paths = app_paths.resolve_app_paths(
+            platform_name="linux",
+            environ={
+                "HOME": "/home/tester",
+                "XDG_CONFIG_HOME": "relative-config",
+                "XDG_DATA_HOME": "",
+                "XDG_CACHE_HOME": "../relative-cache",
+            },
+        )
+
+        self.assertEqual(paths.config_dir, Path("/home/tester/.config/SerialTool"))
+        self.assertEqual(paths.data_dir, Path("/home/tester/.local/share/SerialTool"))
+        self.assertEqual(paths.cache_dir, Path("/home/tester/.cache/SerialTool"))
+
+    def test_windows使用用户可写目录(self):
         app_paths = self._load_module()
         cwd = Path("C:/SerialTool")
 
         paths = app_paths.resolve_app_paths(
             platform_name="win32",
-            environ={},
+            environ={
+                "APPDATA": "C:/Users/tester/AppData/Roaming",
+                "LOCALAPPDATA": "C:/Users/tester/AppData/Local",
+            },
             cwd=cwd,
         )
 
-        self.assertEqual(paths.config_dir, cwd)
-        self.assertEqual(paths.data_dir, cwd)
-        self.assertEqual(paths.cache_dir, cwd)
+        self.assertEqual(
+            paths.config_dir,
+            Path("C:/Users/tester/AppData/Roaming/SerialTool"),
+        )
+        self.assertEqual(
+            paths.data_dir,
+            Path("C:/Users/tester/AppData/Local/SerialTool"),
+        )
+        self.assertEqual(
+            paths.cache_dir,
+            Path("C:/Users/tester/AppData/Local/SerialTool/cache"),
+        )
+
+    def test旧工作目录配置只迁移一次(self):
+        app_paths = self._load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            legacy_dir = root / "legacy"
+            legacy_dir.mkdir()
+            (legacy_dir / "serial_config.json").write_text(
+                '{"theme": "dark"}',
+                encoding="utf-8",
+            )
+            (legacy_dir / "data_viewer.ini").write_text(
+                "layout=old",
+                encoding="utf-8",
+            )
+            paths = app_paths.resolve_app_paths(
+                platform_name="win32",
+                environ={
+                    "APPDATA": str(root / "roaming"),
+                    "LOCALAPPDATA": str(root / "local"),
+                },
+                cwd=legacy_dir,
+            )
+
+            app_paths.ensure_user_dirs(paths)
+            migrated = app_paths.migrate_legacy_user_data(paths, legacy_dir)
+
+            self.assertEqual(migrated, 2)
+            self.assertEqual(
+                (paths.config_dir / "serial_config.json").read_text(encoding="utf-8"),
+                '{"theme": "dark"}',
+            )
+            self.assertEqual(
+                (paths.config_dir / "data_viewer.ini").read_text(encoding="utf-8"),
+                "layout=old",
+            )
+
+            (legacy_dir / "serial_config.json").write_text(
+                '{"theme": "light"}',
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                app_paths.migrate_legacy_user_data(paths, legacy_dir),
+                0,
+            )
+            self.assertEqual(
+                (paths.config_dir / "serial_config.json").read_text(encoding="utf-8"),
+                '{"theme": "dark"}',
+            )
 
     def test创建全部用户可写目录(self):
         app_paths = self._load_module()

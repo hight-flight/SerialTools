@@ -23,7 +23,7 @@ from dialogs import (show_crc_calculator, show_hex_converter,
                          show_about_dialog)
 from theme import THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, VERSION, unescape_text
 from transport import TransportWrapper, TransportReadThread
-from app_paths import ensure_user_dirs, resolve_app_paths
+from app_paths import ensure_user_dirs, migrate_legacy_user_data, resolve_app_paths
 # 注意：JsonViewerDialog 和 AutoReplyDialog 保持延迟导入（懒加载），
 # 因为它们依赖 pyqtgraph/numpy 等重型模块，懒加载可显著加快 exe 首次启动速度。
 # OTAControlCenter 和 GSMDebuggerDialog 只依赖轻量 stdlib 模块，改为顶层导入，
@@ -153,6 +153,7 @@ class SerialTool(QMainWindow):
         super().__init__()
         self._app_paths = resolve_app_paths()
         ensure_user_dirs(self._app_paths)
+        migrate_legacy_user_data(self._app_paths, os.getcwd())
         self.transport = TransportWrapper()
         self.read_thread = None
         # 网络模式参数

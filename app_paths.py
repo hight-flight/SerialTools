@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable, Mapping, NamedTuple
 
 
@@ -19,6 +20,19 @@ class AppPaths(NamedTuple):
     ota_dir: Path
 
 
+def _absolute_env_path(
+    env: Mapping[str, str],
+    key: str,
+    default: Path,
+    platform_name: str,
+) -> Path:
+    value = env.get(key, "")
+    if not value:
+        return Path(default)
+    pure_path = PureWindowsPath(value) if platform_name == "win32" else PurePosixPath(value)
+    return Path(value) if pure_path.is_absolute() else Path(default)
+
+
 def resolve_app_paths(
     platform_name: str | None = None,
     environ: Mapping[str, str] | None = None,
@@ -30,10 +44,27 @@ def resolve_app_paths(
     working_dir = Path.cwd() if cwd is None else Path(cwd)
 
     if platform_name.startswith("linux"):
-        home = Path(env.get("HOME", str(Path.home())))
-        config_dir = Path(env.get("XDG_CONFIG_HOME", str(home / ".config"))) / APP_NAME
-        data_dir = Path(env.get("XDG_DATA_HOME", str(home / ".local" / "share"))) / APP_NAME
-        cache_dir = Path(env.get("XDG_CACHE_HOME", str(home / ".cache"))) / APP_NAME
+        home = _absolute_env_path(env, "HOME", Path.home(), platform_name)
+        config_dir = _absolute_env_path(
+            env, "XDG_CONFIG_HOME", home / ".config", platform_name
+        ) / APP_NAME
+        data_dir = _absolute_env_path(
+            env, "XDG_DATA_HOME", home / ".local" / "share", platform_name
+        ) / APP_NAME
+        cache_dir = _absolute_env_path(
+            env, "XDG_CACHE_HOME", home / ".cache", platform_name
+        ) / APP_NAME
+    elif platform_name == "win32":
+        home = _absolute_env_path(env, "USERPROFILE", Path.home(), platform_name)
+        roaming_dir = _absolute_env_path(
+            env, "APPDATA", home / "AppData" / "Roaming", platform_name
+        )
+        local_dir = _absolute_env_path(
+            env, "LOCALAPPDATA", home / "AppData" / "Local", platform_name
+        )
+        config_dir = roaming_dir / APP_NAME
+        data_dir = local_dir / APP_NAME
+        cache_dir = data_dir / "cache"
     else:
         config_dir = working_dir
         data_dir = working_dir
@@ -58,6 +89,26 @@ def ensure_user_dirs(paths: AppPaths) -> None:
         paths.ota_dir,
     ):
         path.mkdir(parents=True, exist_ok=True)
+
+
+def migrate_legacy_user_data(
+    paths: AppPaths,
+    legacy_dir: Path | str,
+) -> int:
+    """把旧工作目录中的用户数据复制到新目录，已有目标文件保持不变。"""
+    legacy_root = Path(legacy_dir).resolve()
+    migrated = 0
+    file_targets = {
+        "serial_config.json": paths.config_dir / "serial_config.json",
+        "data_viewer.ini": paths.config_dir / "data_viewer.ini",
+    }
+    for source_name, target in file_targets.items():
+        source = legacy_root / source_name
+        if source.is_file() and not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            migrated += 1
+    return migrated
 
 
 def resource_path(relative_path: str, bundle_dir: Path | None = None) -> Path:
