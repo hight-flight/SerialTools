@@ -127,6 +127,33 @@ class WindowsPackagingTests(unittest.TestCase):
 
             self.assertTrue(marker.is_file())
 
+    def test构建产物被占用时清理立即失败(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            (project_root / "serial_GUI.py").write_text("", encoding="utf-8")
+            output = project_root / "dist" / "SerialTool.exe"
+            output.parent.mkdir()
+            output.write_bytes(b"exe")
+
+            with mock.patch.object(
+                Path,
+                "unlink",
+                side_effect=PermissionError("文件被占用"),
+            ), self.assertRaisesRegex(RuntimeError, "关闭正在运行"):
+                build_app.clear_old_build(project_root)
+
+    def test清理失败时主流程返回失败(self):
+        options = mock.Mock(onefile=True, portable=True, setup=True)
+        with mock.patch.object(build_app, "parse_cli_args", return_value=options), \
+                mock.patch.object(
+                    build_app,
+                    "clear_old_build",
+                    side_effect=RuntimeError("文件被占用"),
+                ):
+            result = build_app.main()
+
+        self.assertEqual(result, 1)
+
     def test未安装upx时不自动下载(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with mock.patch("shutil.which", return_value=None), mock.patch(

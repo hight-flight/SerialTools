@@ -204,7 +204,12 @@ def clear_old_build(project_root=PROJECT_ROOT):
                 target.unlink()
         print("  [OK] 清理完成")
     except Exception as e:
-        print(f"  [警告] 清理过程中出现错误: {e}")
+        message = (
+            "无法清理旧的 Windows 构建产物。请关闭正在运行的 SerialTool，"
+            f"并确认文件未被杀毒软件占用后重试。原始错误：{e}"
+        )
+        print(f"  [ERROR] {message}")
+        raise RuntimeError(message) from e
     print("")
 
 
@@ -808,6 +813,9 @@ def main():
 
         print("")
         return 0
+    except RuntimeError as error:
+        print(f"\n[ERROR] 打包终止：{error}")
+        return 1
     except KeyboardInterrupt:
         print("\n\n[中断] 打包过程已被用户取消")
         return 130
