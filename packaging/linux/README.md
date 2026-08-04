@@ -18,6 +18,21 @@ python -m pip install -r requirements-build.txt
 
 ## 生成发布包
 
+推荐直接使用一键脚本。首次运行可以自动安装系统依赖：
+
+```bash
+chmod +x build_ubuntu.sh
+./build_ubuntu.sh --install-system-deps
+```
+
+后续构建直接执行：
+
+```bash
+./build_ubuntu.sh
+```
+
+也可以手动进入已经准备好的 Python 环境后运行底层构建器：
+
 ```bash
 python packaging/linux/build_linux.py
 ```

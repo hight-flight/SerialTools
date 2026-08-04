@@ -4,12 +4,16 @@ import stat
 import tarfile
 import tempfile
 import unittest
+import subprocess
+import shutil
 from pathlib import Path
 from unittest import mock
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = PROJECT_ROOT / "packaging" / "linux" / "build_linux.py"
+BUILD_WRAPPER = PROJECT_ROOT / "build_ubuntu.sh"
+GIT_ATTRIBUTES = PROJECT_ROOT / ".gitattributes"
 
 
 class LinuxPackagingTests(unittest.TestCase):
@@ -19,6 +23,46 @@ class LinuxPackagingTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
+
+    @unittest.skipIf(os.name == "nt", "Shell 行为在 Linux 环境验证")
+    @unittest.skipUnless(shutil.which("bash"), "当前环境没有 Bash")
+    def test一键脚本帮助不创建虚拟环境(self):
+        self.assertTrue(BUILD_WRAPPER.is_file(), "缺少 Ubuntu 一键打包脚本")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            venv_path = Path(temp_dir) / "build-venv"
+            result = subprocess.run(
+                ["bash", os.fspath(BUILD_WRAPPER), "--help"],
+                env={**os.environ, "SERIALTOOL_BUILD_VENV": os.fspath(venv_path)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Ubuntu 22.04+", result.stdout)
+            self.assertIn("SERIALTOOL_BUILD_VENV", result.stdout)
+            self.assertFalse(venv_path.exists())
+
+    @unittest.skipIf(os.name == "nt", "Shell 行为在 Linux 环境验证")
+    @unittest.skipUnless(shutil.which("bash"), "当前环境没有 Bash")
+    def test一键脚本语法有效(self):
+        self.assertTrue(BUILD_WRAPPER.is_file(), "缺少 Ubuntu 一键打包脚本")
+        result = subprocess.run(
+            ["bash", "-n", os.fspath(BUILD_WRAPPER)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        if os.name != "nt":
+            self.assertTrue(BUILD_WRAPPER.stat().st_mode & stat.S_IXUSR)
+
+    def test_shell脚本在windows检出时保持lf换行(self):
+        self.assertTrue(GIT_ATTRIBUTES.is_file(), "缺少 .gitattributes")
+        attributes = GIT_ATTRIBUTES.read_text(encoding="utf-8")
+        self.assertIn("*.sh text eol=lf", attributes)
 
     def test支持amd64和arm64架构名称(self):
         builder = self._load_module()

@@ -125,13 +125,11 @@ python build_app.py
 Linux 发布包必须在 Ubuntu 22.04 环境中构建：
 
 ```bash
-python3 -m venv .venv-linux
-source .venv-linux/bin/activate
-python -m pip install -r requirements-build.txt
-python packaging/linux/build_linux.py
+chmod +x build_ubuntu.sh
+./build_ubuntu.sh --install-system-deps
 ```
 
-构建结果位于 `dist/linux/`，同时生成 `.deb` 安装包和 `.tar.gz` 便携包。完整说明见 [Ubuntu 发布包文档](packaging/linux/README.md)。
+脚本会自动创建缓存虚拟环境、安装 Python 构建依赖并调用 PyInstaller。构建结果位于 `dist/linux/`，同时生成 `.deb` 安装包和 `.tar.gz` 便携包。完整说明见 [Ubuntu 发布包文档](packaging/linux/README.md)。
 
 ---
 
