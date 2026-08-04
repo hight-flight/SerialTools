@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import os
 import platform
 import re
@@ -106,6 +107,7 @@ def create_debian_layout(
     deb_arch: str,
     icon_path: Path,
     license_path: Path,
+    source_date_epoch: int = 0,
 ) -> None:
     """把 PyInstaller onedir 产物组装成 Debian 包目录。"""
     source_dir = Path(source_dir)
@@ -163,6 +165,23 @@ def create_debian_layout(
     copyright_target.parent.mkdir(parents=True)
     shutil.copy2(license_path, copyright_target)
     copyright_target.chmod(0o644)
+
+    def set_mtime(path: Path) -> None:
+        try:
+            os.utime(
+                path,
+                (source_date_epoch, source_date_epoch),
+                follow_symlinks=False,
+            )
+        except NotImplementedError:
+            os.utime(path, (source_date_epoch, source_date_epoch))
+
+    for current_dir, directory_names, file_names in os.walk(package_root):
+        for file_name in file_names:
+            set_mtime(Path(current_dir) / file_name)
+        for directory_name in directory_names:
+            set_mtime(Path(current_dir) / directory_name)
+    set_mtime(package_root)
 
 
 def _reset_build_directory(path: Path, allowed_parent: Path) -> None:
@@ -280,6 +299,7 @@ def build_deb_package(
     release_arch: str,
     deb_arch: str,
     project_root: Path,
+    source_date_epoch: int = 0,
 ) -> Path:
     """使用 dpkg-deb 生成 Ubuntu 可安装包。"""
     output_path = output_dir / f"{APP_NAME}-{version}-ubuntu22.04-{release_arch}.deb"
@@ -294,12 +314,29 @@ def build_deb_package(
             deb_arch=deb_arch,
             icon_path=project_root / "图标.png",
             license_path=project_root / "LICENSE",
+            source_date_epoch=source_date_epoch,
         )
+        environment = {
+            **os.environ,
+            "SOURCE_DATE_EPOCH": str(source_date_epoch),
+        }
         subprocess.run(
             ["dpkg-deb", "--root-owner-group", "--build", package_root, output_path],
             check=True,
+            env=environment,
         )
     return output_path
+
+
+def write_checksums(artifacts: list[Path], output_dir: Path) -> Path:
+    """为发布产物生成稳定排序的 SHA-256 校验文件。"""
+    checksum_path = Path(output_dir) / "SHA256SUMS"
+    lines = []
+    for artifact in sorted((Path(path) for path in artifacts), key=lambda path: path.name):
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        lines.append(f"{digest}  {artifact.name}\n")
+    checksum_path.write_text("".join(lines), encoding="utf-8", newline="\n")
+    return checksum_path
 
 
 def main() -> int:
@@ -327,14 +364,16 @@ def main() -> int:
 
     print(f"构建 SerialTool {version}，目标架构：{release_arch}")
     bundle_dir = build_python_bundle(PROJECT_ROOT, build_root)
+    build_epoch = source_date_epoch(PROJECT_ROOT)
     portable = build_portable_archive(
         bundle_dir,
         output_dir,
         version,
         release_arch,
-        source_date_epoch=source_date_epoch(PROJECT_ROOT),
+        source_date_epoch=build_epoch,
     )
     print(f"便携包：{portable}")
+    artifacts = [portable]
 
     if not args.skip_deb:
         if not shutil.which("dpkg-deb"):
@@ -346,8 +385,12 @@ def main() -> int:
             release_arch,
             deb_arch,
             PROJECT_ROOT,
+            source_date_epoch=build_epoch,
         )
         print(f"Debian 安装包：{deb_path}")
+        artifacts.append(deb_path)
+    checksum_file = write_checksums(artifacts, output_dir)
+    print(f"校验文件：{checksum_file}")
     return 0
 
 

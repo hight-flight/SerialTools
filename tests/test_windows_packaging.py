@@ -12,15 +12,25 @@ class WindowsPackagingTests(unittest.TestCase):
             project_root = Path(temp_dir) / "project"
             project_root.mkdir()
             (project_root / "serial_GUI.py").write_text("", encoding="utf-8")
-            (project_root / "build").mkdir()
-            (project_root / "dist").mkdir()
+            (project_root / "build" / "SerialTool").mkdir(parents=True)
+            linux_build = project_root / "build" / "linux"
+            linux_build.mkdir()
+            (linux_build / "keep.txt").write_text("保留", encoding="utf-8")
+            (project_root / "dist" / "SerialTool").mkdir(parents=True)
+            linux_dist = project_root / "dist" / "linux"
+            linux_dist.mkdir()
+            (linux_dist / "keep.txt").write_text("保留", encoding="utf-8")
+            (project_root / "dist" / "SerialTool.exe").write_bytes(b"exe")
             (project_root / "SerialTool.spec").write_text("", encoding="utf-8")
 
             build_app.clear_old_build(project_root)
 
-            self.assertFalse((project_root / "build").exists())
-            self.assertFalse((project_root / "dist").exists())
+            self.assertFalse((project_root / "build" / "SerialTool").exists())
+            self.assertFalse((project_root / "dist" / "SerialTool").exists())
+            self.assertFalse((project_root / "dist" / "SerialTool.exe").exists())
             self.assertFalse((project_root / "SerialTool.spec").exists())
+            self.assertTrue((linux_build / "keep.txt").is_file())
+            self.assertTrue((linux_dist / "keep.txt").is_file())
 
     def test缺少项目入口时拒绝清理(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -54,6 +64,30 @@ class WindowsPackagingTests(unittest.TestCase):
         joined = " ".join(str(item) for item in args)
         self.assertNotIn("serial_config.json", joined)
         self.assertIn("serial_GUI.py", joined)
+
+    def test_windows发布不收集无关平台和全部pyqtgraph子模块(self):
+        args = build_app.build_pyinstaller_arguments(onedir=True)
+        joined = " ".join(str(item) for item in args)
+
+        self.assertNotIn("--collect-submodules pyqtgraph", joined)
+        self.assertNotIn("serial.tools.list_ports_linux", joined)
+        self.assertNotIn("serial.tools.list_ports_osx", joined)
+        self.assertIn("serial.tools.list_ports_windows", joined)
+
+    def test_inno脚本生成到指定构建目录(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "installer"
+            script = Path(
+                build_app.generate_iss(
+                    "1.3.5",
+                    icon_path=None,
+                    output_dir=output_dir,
+                )
+            )
+
+            self.assertEqual(script.parent, output_dir)
+            content = script.read_text(encoding="utf-8-sig")
+            self.assertIn('#define MyAppVersion "1.3.5"', content)
 
 
 if __name__ == "__main__":

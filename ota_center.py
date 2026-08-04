@@ -55,6 +55,29 @@ class OTARequestHandler(SimpleHTTPRequestHandler):
                 return (cls._bytes_sent, cls._total_size, cls._active_file)
             return None
 
+    @classmethod
+    def is_allowed_path(cls, request_path):
+        """只允许下载当前 OTA 流程明确选中的固件文件。"""
+        requested_path = urllib.parse.unquote(
+            urllib.parse.urlsplit(request_path).path
+        ).lstrip("/")
+        if not requested_path or "/" in requested_path or "\\" in requested_path:
+            return False
+        with cls._lock:
+            return bool(cls._active_file and requested_path == cls._active_file)
+
+    def do_GET(self):
+        if not self.is_allowed_path(self.path):
+            self.send_error(404)
+            return
+        super().do_GET()
+
+    def do_HEAD(self):
+        if not self.is_allowed_path(self.path):
+            self.send_error(404)
+            return
+        super().do_HEAD()
+
     def log_message(self, format, *args):
         """抑制默认 stderr 日志输出。"""
         pass

@@ -15,6 +15,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = PROJECT_ROOT / "packaging" / "linux" / "build_linux.py"
 BUILD_WRAPPER = PROJECT_ROOT / "build_ubuntu.sh"
 GIT_ATTRIBUTES = PROJECT_ROOT / ".gitattributes"
+RELEASE_REQUIREMENTS = (
+    PROJECT_ROOT / "requirements-release-linux.txt",
+    PROJECT_ROOT / "requirements-release-windows.txt",
+)
 
 
 class LinuxPackagingTests(unittest.TestCase):
@@ -284,6 +288,72 @@ class LinuxPackagingTests(unittest.TestCase):
                 hashlib.sha256(first.read_bytes()).digest(),
                 hashlib.sha256(second.read_bytes()).digest(),
             )
+
+    def test发布依赖精确锁定并包含哈希(self):
+        for requirements_file in RELEASE_REQUIREMENTS:
+            with self.subTest(requirements_file=requirements_file.name):
+                self.assertTrue(
+                    requirements_file.is_file(),
+                    f"缺少发布依赖锁定文件：{requirements_file.name}",
+                )
+                content = requirements_file.read_text(encoding="utf-8")
+                requirement_lines = [
+                    line.strip()
+                    for line in content.splitlines()
+                    if line.strip() and not line.startswith(("#", " ", "\\", "--"))
+                ]
+
+                self.assertTrue(requirement_lines)
+                self.assertTrue(all("==" in line for line in requirement_lines))
+                self.assertIn("--hash=sha256:", content)
+
+    def test生成发布包sha256校验文件(self):
+        builder = self._load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            portable = output_dir / "portable.tar.gz"
+            installer = output_dir / "serialtool.deb"
+            portable.write_bytes(b"portable")
+            installer.write_bytes(b"installer")
+
+            checksum_file = builder.write_checksums(
+                [portable, installer],
+                output_dir,
+            )
+            content = checksum_file.read_text(encoding="utf-8")
+
+            self.assertIn(hashlib.sha256(b"portable").hexdigest(), content)
+            self.assertIn("portable.tar.gz", content)
+            self.assertIn(hashlib.sha256(b"installer").hexdigest(), content)
+            self.assertIn("serialtool.deb", content)
+
+    def test_deb布局文件时间可固定(self):
+        builder = self._load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source"
+            source.mkdir()
+            (source / "SerialTool").write_bytes(b"executable")
+            icon = root / "图标.png"
+            icon.write_bytes(b"png")
+            license_file = root / "LICENSE"
+            license_file.write_text("license", encoding="utf-8")
+            package_root = root / "package"
+
+            builder.create_debian_layout(
+                source,
+                package_root,
+                "1.3.5",
+                "amd64",
+                icon,
+                license_file,
+                source_date_epoch=123456789,
+            )
+
+            installed = package_root / "opt" / "SerialTool" / "SerialTool"
+            self.assertEqual(int(installed.stat().st_mtime), 123456789)
 
 
 if __name__ == "__main__":

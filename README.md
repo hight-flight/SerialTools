@@ -45,22 +45,19 @@ git clone https://gitee.com/hight-flight/SerialTools.git
 # 2. 进入目录
 cd SerialTools
 
-# 3. 安装依赖
+# 3. 安装运行依赖
 pip install -r requirements.txt
 
 # 4. 运行程序
 python serial_GUI.py
 ```
 
-### 依赖文件 (requirements.txt)
+### 依赖文件
 
-```
-PyQt5
-pyserial
-pyqtgraph
-numpy
-chardet
-```
+- `requirements.txt`：普通源码运行入口，引用 `requirements-runtime.txt`。
+- `requirements-build.txt`：开发阶段构建依赖，允许兼容版本范围。
+- `requirements-release-windows.txt`：Windows 正式发布锁定依赖及 SHA-256。
+- `requirements-release-linux.txt`：Ubuntu 正式发布锁定依赖及 SHA-256。
 
 ---
 
@@ -116,8 +113,11 @@ SerialTools/
 
 ### Windows
 
-```bash
+```powershell
+python -m pip install --require-hashes -r requirements-release-windows.txt
 python build_app.py
+# 生成 onedir 和 Inno Setup 安装包
+python build_app.py --setup
 ```
 
 ### Ubuntu 22.04+
@@ -129,7 +129,7 @@ chmod +x build_ubuntu.sh
 ./build_ubuntu.sh --install-system-deps
 ```
 
-脚本会自动创建缓存虚拟环境、安装 Python 构建依赖并调用 PyInstaller。构建结果位于 `dist/linux/`，同时生成 `.deb` 安装包和 `.tar.gz` 便携包。完整说明见 [Ubuntu 发布包文档](packaging/linux/README.md)。
+脚本会自动创建缓存虚拟环境、按哈希安装锁定依赖并调用 PyInstaller。构建结果位于 `dist/linux/`，同时生成 `.deb`、便携包和 `SHA256SUMS`。完整说明见 [Ubuntu 发布包文档](packaging/linux/README.md)。
 
 ---
 

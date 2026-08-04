@@ -68,10 +68,18 @@ def find_iscc():
     return None
 
 
-def generate_iss(version, icon_path=None):
+def generate_iss(
+    version,
+    icon_path=None,
+    output_dir=PROJECT_ROOT / 'build' / 'windows-installer',
+):
     """生成 Inno Setup 脚本 SerialTool.iss，返回脚本路径"""
-    iss_path = os.path.abspath(f'{APP_NAME}.iss')
+    output_dir = Path(output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    iss_path = output_dir / f'{APP_NAME}.iss'
     icon_line = f'SetupIconFile={os.path.abspath(icon_path)}' if icon_path else ''
+    source_dir = (PROJECT_ROOT / 'dist' / APP_NAME).resolve()
+    installer_output = (PROJECT_ROOT / 'dist').resolve()
 
     # Inno Setup 模板：把 onedir 产物 dist/SerialTool/ 打成单文件安装包
     iss_content = f"""\
@@ -79,7 +87,7 @@ def generate_iss(version, icon_path=None):
 #define MyAppName "{APP_NAME}"
 #define MyAppVersion "{version}"
 #define MyAppExeName "{APP_NAME}.exe"
-#define MyAppSourceDir "dist\\{APP_NAME}"
+#define MyAppSourceDir "{source_dir}"
 
 [Setup]
 AppName={{#MyAppName}}
@@ -88,7 +96,7 @@ AppPublisher={APP_NAME}
 DefaultDirName={{autopf}}\\{{#MyAppName}}
 DefaultGroupName={{#MyAppName}}
 DisableProgramGroupPage=yes
-OutputDir=dist
+OutputDir={installer_output}
 OutputBaseFilename={APP_NAME}_Setup
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -116,7 +124,7 @@ Name: "{{autodesktop}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}";
 [Run]
 Filename: "{{app}}\\{{#MyAppExeName}}"; Description: "{{cm:LaunchProgram,{{#MyAppName}}}}"; Flags: nowait postinstall skipifsilent
 """
-    with open(iss_path, 'w', encoding='utf-8') as f:
+    with open(iss_path, 'w', encoding='utf-8-sig') as f:
         f.write(iss_content)
     return iss_path
 
@@ -174,18 +182,26 @@ def clear_old_build(project_root=PROJECT_ROOT):
 
     print("[步骤1] 清理旧的构建文件...")
     try:
-        build_dir = root / 'build'
-        dist_dir = root / 'dist'
-        spec_file = root / f'{APP_NAME}.spec'
-        if build_dir.exists():
-            print("  - 删除 build 目录")
-            shutil.rmtree(build_dir)
-        if dist_dir.exists():
-            print("  - 删除 dist 目录")
-            shutil.rmtree(dist_dir)
-        if spec_file.exists():
-            print(f"  - 删除 {APP_NAME}.spec 文件")
-            spec_file.unlink()
+        directory_targets = (
+            root / 'build' / APP_NAME,
+            root / 'build' / 'windows-installer',
+            root / 'dist' / APP_NAME,
+        )
+        file_targets = (
+            root / 'dist' / f'{APP_NAME}.exe',
+            root / 'dist' / f'{APP_NAME}_Setup.exe',
+            root / f'{APP_NAME}.spec',
+        )
+        for target in directory_targets:
+            if target.is_symlink():
+                target.unlink()
+            elif target.is_dir():
+                print(f"  - 删除 Windows 构建目录：{target.relative_to(root)}")
+                shutil.rmtree(target)
+        for target in file_targets:
+            if target.is_file() or target.is_symlink():
+                print(f"  - 删除 Windows 构建文件：{target.relative_to(root)}")
+                target.unlink()
         print("  [OK] 清理完成")
     except Exception as e:
         print(f"  [警告] 清理过程中出现错误: {e}")
@@ -436,7 +452,6 @@ def build_pyinstaller_arguments(
         '--name', APP_NAME,
         '--hidden-import', 'pyqtgraph',
         '--hidden-import', 'numpy',
-        '--collect-submodules', 'pyqtgraph',
         '--hidden-import', 'ota_center',
         '--hidden-import', 'gsm_debugger',
         '--hidden-import', 'auto_reply',
@@ -445,9 +460,7 @@ def build_pyinstaller_arguments(
         '--hidden-import', 'socketserver',
         '--hidden-import', 'serial.tools.list_ports',
         '--hidden-import', 'serial.tools.list_ports_common',
-        '--hidden-import', 'serial.tools.list_ports_linux',
         '--hidden-import', 'serial.tools.list_ports_windows',
-        '--hidden-import', 'serial.tools.list_ports_osx',
         '--exclude-module', 'PyQt5.QtWebEngine',
         '--exclude-module', 'PyQt5.QtWebEngineWidgets',
         '--exclude-module', 'PyQt5.QtWebChannel',

@@ -1,0 +1,54 @@
+name: 跨平台构建验证
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    name: Windows 构建与启动
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-release-windows.txt
+      - name: 安装锁定依赖
+        run: python -m pip install --require-hashes -r requirements-release-windows.txt
+      - name: 运行测试
+        run: python -m unittest discover -s tests -v
+      - name: 构建 Windows 目录包
+        run: python build_app.py --onedir
+      - name: 验证 Windows 入口
+        shell: pwsh
+        run: |
+          $process = Start-Process .\dist\SerialTool\SerialTool.exe -PassThru
+          Start-Sleep -Seconds 5
+          if ($process.HasExited) {
+            throw "SerialTool Windows 发布包启动后提前退出。"
+          }
+          Stop-Process -Id $process.Id -Force
+
+  ubuntu:
+    name: Ubuntu 22.04 构建
+    runs-on: ubuntu-22.04
+    env:
+      SERIALTOOL_BUILD_VENV: /tmp/serialtool-build-venv
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 构建 Ubuntu 发布包
+        run: ./build_ubuntu.sh --install-system-deps
+      - name: 运行测试
+        run: /tmp/serialtool-build-venv/bin/python -m unittest discover -s tests -v
+      - name: 检查发布产物
+        run: |
+          test -f dist/linux/SerialTool-*-ubuntu22.04-*.tar.gz
+          test -f dist/linux/SerialTool-*-ubuntu22.04-*.deb
+          test -f dist/linux/SHA256SUMS
+          cd dist/linux
+          sha256sum --check SHA256SUMS

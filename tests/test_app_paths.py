@@ -103,12 +103,23 @@ class AppPathsTests(unittest.TestCase):
                 "layout=old",
                 encoding="utf-8",
             )
-            paths = app_paths.resolve_app_paths(
-                platform_name="win32",
-                environ={
+            if os.name == "nt":
+                platform_name = "win32"
+                environ = {
                     "APPDATA": str(root / "roaming"),
                     "LOCALAPPDATA": str(root / "local"),
-                },
+                }
+            else:
+                platform_name = "linux"
+                environ = {
+                    "HOME": str(root),
+                    "XDG_CONFIG_HOME": str(root / "config"),
+                    "XDG_DATA_HOME": str(root / "data"),
+                    "XDG_CACHE_HOME": str(root / "cache"),
+                }
+            paths = app_paths.resolve_app_paths(
+                platform_name=platform_name,
+                environ=environ,
                 cwd=legacy_dir,
             )
 

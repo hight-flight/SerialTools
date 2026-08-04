@@ -2,8 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-BUILD_VENV="${SERIALTOOL_BUILD_VENV:-${XDG_CACHE_HOME:-${HOME}/.cache}/serialtool/build-venv}"
 OS_RELEASE_FILE="${SERIALTOOL_OS_RELEASE_FILE:-/etc/os-release}"
+LOCK_FILE="$SCRIPT_DIR/requirements-release-linux.txt"
+LOCK_HASH="$(sha256sum "$LOCK_FILE" | awk '{print $1}')"
+DEFAULT_BUILD_VENV="${XDG_CACHE_HOME:-${HOME}/.cache}/serialtool/build-venv-${LOCK_HASH:0:12}"
+BUILD_VENV="${SERIALTOOL_BUILD_VENV:-$DEFAULT_BUILD_VENV}"
 
 SYSTEM_PACKAGES=(
   python3-venv
@@ -104,7 +107,9 @@ fi
 
 echo "正在安装 Python 构建依赖……"
 PIP_DISABLE_PIP_VERSION_CHECK=1 \
-  "$BUILD_VENV/bin/python" -m pip install -r "$SCRIPT_DIR/requirements-build.txt"
+  "$BUILD_VENV/bin/python" -m pip install \
+    --require-hashes \
+    -r "$SCRIPT_DIR/requirements-release-linux.txt"
 
 echo "开始生成 Ubuntu 发布包……"
 cd "$SCRIPT_DIR"

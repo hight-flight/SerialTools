@@ -1,6 +1,6 @@
 # Ubuntu 发布包
 
-Linux 产物必须在目标架构的 Ubuntu 22.04 环境中构建。以最低支持版本构建，可以避免在较新系统构建后因 glibc 版本过高而无法运行。
+Linux 产物必须在目标架构的 Ubuntu 22.04 环境中构建。脚本会拒绝 Ubuntu 24.04 等其他构建系统，防止生成依赖更高版本 glibc 却被错误标记为兼容 22.04 的发布包。
 
 ## 构建环境
 
@@ -13,7 +13,7 @@ sudo apt install -y python3-venv python3-pip dpkg-dev \
 python3 -m venv .venv-linux
 source .venv-linux/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements-build.txt
+python -m pip install --require-hashes -r requirements-release-linux.txt
 ```
 
 ## 生成发布包
@@ -41,8 +41,18 @@ python packaging/linux/build_linux.py
 
 - `SerialTool-<版本>-ubuntu22.04-<架构>.deb`：Ubuntu 安装包。
 - `SerialTool-<版本>-ubuntu22.04-<架构>.tar.gz`：无需安装的便携目录包。
+- `SHA256SUMS`：以上发布包的 SHA-256 校验文件。
 
 构建机架构为 `x86_64` 时生成 `amd64` 安装包；在 `aarch64` 构建机上生成 `arm64` 安装包。PyInstaller 不支持跨架构生成原生程序。
+
+校验下载或复制后的发布包：
+
+```bash
+cd dist/linux
+sha256sum --check SHA256SUMS
+```
+
+构建时间默认取当前 Git 提交时间，也可以通过 `SOURCE_DATE_EPOCH` 显式指定，以获得稳定的归档元数据。
 
 ## 安装和串口权限
 

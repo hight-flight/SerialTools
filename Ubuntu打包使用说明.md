@@ -1,42 +1,31 @@
 # Ubuntu 22.04+ 打包使用说明
 
-本文说明如何将 SerialTool 打包为可在 Ubuntu 22.04 及以上系统运行的发布包。
+本文说明如何在项目根目录生成可运行于 Ubuntu 22.04 及以上系统的 SerialTool 发布包。
 
-## 当前版本与分支
+## 构建要求
 
-- 软件版本：`1.3.5`
-- 开发分支：`feat/ubuntu-packaging`
-- 工作目录：`D:\script\code_project\serial_GUI\.worktrees\ubuntu-packaging`
-- Ubuntu/WSL 路径：`/mnt/d/script/code_project/serial_GUI/.worktrees/ubuntu-packaging`
+- 正式兼容包必须在 Ubuntu 22.04 中构建，不能在 Ubuntu 24.04 上构建后标记为 22.04 包。
+- `x86_64` 和 `arm64` 必须分别在对应架构的原生系统中构建。
+- Windows 用户可以使用安装了 Ubuntu 22.04 的 WSL2。
 
-## 打包脚本位置
+## 脚本位置
 
-一键打包脚本：
+- 一键脚本：`build_ubuntu.sh`
+- 底层构建器：`packaging/linux/build_linux.py`
+- Linux 发布锁：`requirements-release-linux.txt`
 
-```text
-D:\script\code_project\serial_GUI\.worktrees\ubuntu-packaging\build_ubuntu.sh
-```
+## 首次打包
 
-底层 Python 构建程序：
-
-```text
-D:\script\code_project\serial_GUI\.worktrees\ubuntu-packaging\packaging\linux\build_linux.py
-```
-
-脚本必须在 Ubuntu 22.04 或更高版本的 Linux 环境中运行，不能直接在 Windows PowerShell 中执行。Windows 用户可以使用 WSL2 Ubuntu 22.04。
-
-## 如何打包
-
-首次打包时，进入 Ubuntu 或 WSL 终端：
+在 Ubuntu 22.04 终端进入项目根目录：
 
 ```bash
-cd /mnt/d/script/code_project/serial_GUI/.worktrees/ubuntu-packaging
+chmod +x build_ubuntu.sh
 ./build_ubuntu.sh --install-system-deps
 ```
 
-该命令会安装系统依赖、创建 Python 虚拟环境并生成便携版和 `.deb` 安装包。
+脚本会安装系统依赖、创建缓存虚拟环境、按 SHA-256 验证并安装锁定的 Python 依赖，然后生成便携版和 `.deb` 安装包。
 
-后续打包直接运行：
+## 后续打包
 
 ```bash
 ./build_ubuntu.sh
@@ -45,98 +34,61 @@ cd /mnt/d/script/code_project/serial_GUI/.worktrees/ubuntu-packaging
 常用参数：
 
 ```bash
-# 只生成便携版，不生成 .deb 安装包
+# 只生成便携包
 ./build_ubuntu.sh --skip-deb
 
-# 指定发布包输出目录
+# 指定发布目录，不能放在 build/linux 内
 ./build_ubuntu.sh --output-dir /path/to/output
 
-# 查看完整帮助
 ./build_ubuntu.sh --help
 ```
 
-如果脚本没有执行权限：
+## 输出位置
 
-```bash
-chmod +x build_ubuntu.sh
-```
-
-## 构建结果位置
-
-### PyInstaller 构建文件夹
-
-Windows 路径：
+PyInstaller 中间产物：
 
 ```text
-D:\script\code_project\serial_GUI\.worktrees\ubuntu-packaging\build\linux\pyinstaller-dist\SerialTool
+build/linux/pyinstaller-dist/SerialTool/
 ```
 
-Linux 主程序：
-
-```text
-D:\script\code_project\serial_GUI\.worktrees\ubuntu-packaging\build\linux\pyinstaller-dist\SerialTool\SerialTool
-```
-
-### 便携版
-
-```text
-D:\script\code_project\serial_GUI\.worktrees\ubuntu-packaging\dist\linux\SerialTool-1.3.5-ubuntu22.04-x86_64.tar.gz
-```
-
-### Ubuntu 安装包
-
-```text
-D:\script\code_project\serial_GUI\.worktrees\ubuntu-packaging\dist\linux\SerialTool-1.3.5-ubuntu22.04-x86_64.deb
-```
-
-默认文件名格式：
+默认发布产物：
 
 ```text
 dist/linux/SerialTool-<版本>-ubuntu22.04-<架构>.tar.gz
 dist/linux/SerialTool-<版本>-ubuntu22.04-<架构>.deb
+dist/linux/SHA256SUMS
+```
+
+校验发布包：
+
+```bash
+cd dist/linux
+sha256sum --check SHA256SUMS
 ```
 
 ## 使用便携版
 
-在 Ubuntu 中执行：
-
 ```bash
-tar -xzf dist/linux/SerialTool-1.3.5-ubuntu22.04-x86_64.tar.gz
-cd SerialTool-1.3.5-ubuntu22.04-x86_64
+tar -xzf SerialTool-<版本>-ubuntu22.04-<架构>.tar.gz
+cd SerialTool-<版本>-ubuntu22.04-<架构>
 ./SerialTool
 ```
 
-便携版无需安装，但目标系统仍需具备桌面图形环境以及程序运行所需的基础系统库。
-
-## 安装和卸载 `.deb` 包
-
-安装：
+## 安装和卸载
 
 ```bash
-sudo apt install ./dist/linux/SerialTool-1.3.5-ubuntu22.04-x86_64.deb
-```
-
-安装完成后运行：
-
-```bash
+sudo apt install ./SerialTool-<版本>-ubuntu22.04-<架构>.deb
 serialtool
-```
-
-卸载：
-
-```bash
 sudo apt remove serialtool
 ```
 
 ## 串口权限
 
-如果程序无法打开 `/dev/ttyUSB*` 或 `/dev/ttyACM*` 串口，将当前用户加入 `dialout` 用户组：
-
 ```bash
 sudo usermod -aG dialout "$USER"
 ```
 
-执行后注销并重新登录，使权限生效。
+执行后注销并重新登录。
 
 ## 用户数据位置
 
@@ -144,14 +96,6 @@ sudo usermod -aG dialout "$USER"
 - 日志和 OTA 数据：`~/.local/share/SerialTool/`
 - 缓存：`~/.cache/SerialTool/`
 
-## 架构说明
+OTA HTTP 服务只允许访问当前选中的固件文件，但服务启动期间仍会监听局域网接口；只应在可信网络中启用。
 
-当前已有构建产物为 `x86_64`。项目也支持生成 `arm64` 包，但应在对应架构的 Ubuntu 22.04+ 环境中原生构建；不要直接将 `x86_64` 包复制到 ARM 设备运行。
-
-## 验证状态
-
-- 一键打包脚本已在 Ubuntu 22.04 WSL 环境实际执行成功。
-- 当前目录已生成 `x86_64` 便携版和 `.deb` 安装包。
-- Linux 自动化测试已通过。
-
-更详细的构建原理和排错说明见：`packaging/linux/README.md`。
+更多构建细节见 `packaging/linux/README.md`。
