@@ -130,10 +130,19 @@ class TransportWrapper:
             if self._socket is None:
                 return b''
             try:
-                return self._socket.recv(size)
+                data = self._socket.recv(size)
+                if data:
+                    return data
+                self._socket.close()
+                self._socket = None
+                return b''
             except BlockingIOError:
                 return b''
             except (ConnectionResetError, ConnectionAbortedError, OSError):
+                try:
+                    self._socket.close()
+                finally:
+                    self._socket = None
                 return b''
         elif self.mode == 'tcp_server':
             if self._socket is None:
@@ -164,6 +173,10 @@ class TransportWrapper:
                 except BlockingIOError:
                     pass
                 except (ConnectionResetError, ConnectionAbortedError, OSError):
+                    try:
+                        self._client_conn.close()
+                    except OSError:
+                        pass
                     self._client_conn = None
                     self._client_addr = None
             return b''
@@ -175,12 +188,27 @@ class TransportWrapper:
         elif self.mode == 'udp':
             return self._socket.sendto(data, self._remote_addr) if self._socket else 0
         elif self.mode == 'tcp_client':
-            return self._socket.send(data) if self._socket else 0
+            if self._socket is None:
+                return 0
+            try:
+                self._socket.sendall(data)
+                return len(data)
+            except (ConnectionResetError, ConnectionAbortedError, OSError):
+                try:
+                    self._socket.close()
+                finally:
+                    self._socket = None
+                return 0
         elif self.mode == 'tcp_server':
             if self._client_conn is not None:
                 try:
-                    return self._client_conn.send(data)
+                    self._client_conn.sendall(data)
+                    return len(data)
                 except (ConnectionResetError, ConnectionAbortedError, OSError):
+                    try:
+                        self._client_conn.close()
+                    except OSError:
+                        pass
                     self._client_conn = None
                     self._client_addr = None
             return 0
