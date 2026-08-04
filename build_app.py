@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 串口调试助手 - 打包脚本
-默认生成 Windows 便携目录和 Inno Setup 安装包。
+默认生成 Windows 单文件版、便携目录和 Inno Setup 安装包。
 """
 
 import os
@@ -206,6 +206,36 @@ def clear_old_build(project_root=PROJECT_ROOT):
     except Exception as e:
         print(f"  [警告] 清理过程中出现错误: {e}")
     print("")
+
+
+def clear_pyinstaller_work(project_root=PROJECT_ROOT):
+    """切换 PyInstaller 模式前清理中间文件，保留已生成的发布产品。"""
+    root = Path(project_root).resolve()
+    if not (root / MAIN_SCRIPT).is_file():
+        raise RuntimeError(f"拒绝清理：目录不是有效的 SerialTool 项目：{root}")
+
+    work_dir = root / 'build' / APP_NAME
+    spec_file = root / f'{APP_NAME}.spec'
+    if work_dir.is_symlink():
+        work_dir.unlink()
+    elif work_dir.is_dir():
+        shutil.rmtree(work_dir)
+    if spec_file.is_file() or spec_file.is_symlink():
+        spec_file.unlink()
+
+
+def remove_portable_output(project_root=PROJECT_ROOT):
+    """只生成安装包时删除作为构建输入的临时便携目录。"""
+    root = Path(project_root).resolve()
+    if not (root / MAIN_SCRIPT).is_file():
+        raise RuntimeError(f"拒绝清理：目录不是有效的 SerialTool 项目：{root}")
+
+    portable_dir = root / 'dist' / APP_NAME
+    if portable_dir.is_symlink():
+        portable_dir.unlink()
+    elif portable_dir.is_dir():
+        shutil.rmtree(portable_dir)
+
 
 def check_dependencies():
     """检查依赖是否安装"""
@@ -529,7 +559,7 @@ def build_application(icon_path=None, onedir=False):
     if onedir:
         print("  [模式] --onedir 目录模式（已启用 --noupx，启动更快）")
     else:
-        print("  [模式] --onefile 单文件模式（默认）")
+        print("  [模式] --onefile 单文件模式")
 
     # 单文件模式下查找 UPX 压缩工具（可减少 30-50% 体积）
     upx_ok = False
@@ -673,7 +703,7 @@ def verify_build(onedir=False):
 
 
 def parse_cli_args(argv=None):
-    """解析 Windows 构建模式；默认生成便携目录和安装包。"""
+    """解析 Windows 构建模式；默认生成三种 Windows 产品。"""
     parser = argparse.ArgumentParser(description='串口调试助手 - 打包脚本')
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument(
@@ -681,7 +711,7 @@ def parse_cli_args(argv=None):
         dest='mode',
         action='store_const',
         const='onefile',
-        help='仅生成旧版单文件可执行程序 dist/SerialTool.exe',
+        help='仅生成单文件可执行程序 dist/SerialTool.exe',
     )
     modes.add_argument(
         '--onedir',
@@ -694,13 +724,14 @@ def parse_cli_args(argv=None):
         '--setup',
         dest='mode',
         action='store_const',
-        const='release',
-        help='生成 Windows 便携目录和 Inno Setup 安装包（默认模式）',
+        const='setup',
+        help='仅保留 Inno Setup 安装包',
     )
-    parser.set_defaults(mode='release')
+    parser.set_defaults(mode='all')
     args = parser.parse_args(argv)
-    args.onedir = args.mode != 'onefile'
-    args.setup = args.mode == 'release'
+    args.onefile = args.mode in ('all', 'onefile')
+    args.portable = args.mode in ('all', 'portable')
+    args.setup = args.mode in ('all', 'setup')
     return args
 
 
@@ -709,8 +740,7 @@ def main():
     args_cli = parse_cli_args()
     os.chdir(PROJECT_ROOT)
 
-    onedir_mode = args_cli.onedir
-    setup_mode = args_cli.setup
+    needs_onedir = args_cli.portable or args_cli.setup
 
     print("========================================")
     print("  串口调试助手 - 打包脚本")
@@ -737,36 +767,42 @@ def main():
             return 1
         print("")
         
-        # 步骤3: 构建应用
-        if not build_application(icon_path, onedir=onedir_mode):
-            print("\n[ERROR] 打包终止")
-            return 1
-        print("")
+        if args_cli.onefile:
+            if not build_application(icon_path, onedir=False):
+                print("\n[ERROR] 单文件可执行版构建失败")
+                return 1
+            if not verify_build(onedir=False):
+                print("\n[ERROR] 单文件可执行版验证失败")
+                return 1
+            print("")
 
-        # 步骤4: 验证构建
-        if not verify_build(onedir=onedir_mode):
-            print("\n❌ 打包失败")
-            return 1
-        print("")
+        if needs_onedir:
+            if args_cli.onefile:
+                clear_pyinstaller_work(PROJECT_ROOT)
+            if not build_application(icon_path, onedir=True):
+                print("\n[ERROR] 目录版构建失败")
+                return 1
+            if not verify_build(onedir=True):
+                print("\n[ERROR] 目录版验证失败")
+                return 1
+            print("")
 
-        # 步骤5: 默认生成安装包（安装包基于 onedir 便携目录）
-        if setup_mode:
+        if args_cli.setup:
             if not build_setup(icon_path):
                 print("\n[ERROR] 默认发布不完整：Windows 安装包生成失败")
                 return 1
+            if not args_cli.portable:
+                remove_portable_output()
             print("")
 
         print("========================================")
         print("  [SUCCESS] 打包成功！")
-        if setup_mode and os.path.exists(os.path.join('dist', f'{APP_NAME}_Setup.exe')):
+        if args_cli.onefile:
+            print(f"  Windows 单文件版: dist\\{APP_NAME}.exe")
+        if args_cli.portable:
             print(f"  Windows 便携版: dist\\{APP_NAME}\\")
+        if args_cli.setup:
             print(f"  Windows 安装包: dist\\{APP_NAME}_Setup.exe")
-        elif onedir_mode:
-            print(f"  输出目录: dist\\{APP_NAME}\\")
-            print(f"  入口文件: dist\\{APP_NAME}\\{APP_NAME}.exe")
-            print("  分发时需拷贝整个目录")
-        else:
-            print(f"  输出文件: dist\\{APP_NAME}.exe")
         print("  可以直接运行此文件，无需Python环境")
         print("========================================")
 

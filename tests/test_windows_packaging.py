@@ -7,28 +7,78 @@ import build_app
 
 
 class WindowsPackagingTests(unittest.TestCase):
-    def test默认模式生成windows便携版和安装包(self):
+    def test默认模式生成三种windows产品(self):
         options = build_app.parse_cli_args([])
 
-        self.assertTrue(options.onedir)
+        self.assertTrue(options.onefile)
+        self.assertTrue(options.portable)
         self.assertTrue(options.setup)
 
-    def test可显式选择旧版单文件模式(self):
+    def test可显式选择单文件模式(self):
         options = build_app.parse_cli_args(["--onefile"])
 
-        self.assertFalse(options.onedir)
+        self.assertTrue(options.onefile)
+        self.assertFalse(options.portable)
         self.assertFalse(options.setup)
 
     def test可只生成windows便携版(self):
         options = build_app.parse_cli_args(["--onedir"])
 
-        self.assertTrue(options.onedir)
+        self.assertFalse(options.onefile)
+        self.assertTrue(options.portable)
         self.assertFalse(options.setup)
 
-    def test默认模式缺少安装包时返回失败(self):
-        options = mock.Mock(onedir=True, setup=True)
+    def test可只生成windows安装包(self):
+        options = build_app.parse_cli_args(["--setup"])
+
+        self.assertFalse(options.onefile)
+        self.assertFalse(options.portable)
+        self.assertTrue(options.setup)
+
+    def test默认模式依次构建单文件和目录版(self):
+        options = mock.Mock(onefile=True, portable=True, setup=True)
         with mock.patch.object(build_app, "parse_cli_args", return_value=options), \
                 mock.patch.object(build_app, "clear_old_build"), \
+                mock.patch.object(build_app, "clear_pyinstaller_work"), \
+                mock.patch.object(build_app, "remove_portable_output") as remove_portable, \
+                mock.patch.object(build_app, "check_dependencies", return_value=True), \
+                mock.patch.object(build_app, "find_icon", return_value=None), \
+                mock.patch.object(build_app, "verify_main_script", return_value=True), \
+                mock.patch.object(build_app, "build_application", return_value=True) as build, \
+                mock.patch.object(build_app, "verify_build", return_value=True), \
+                mock.patch.object(build_app, "build_setup", return_value=True):
+            result = build_app.main()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            build.call_args_list,
+            [mock.call(None, onedir=False), mock.call(None, onedir=True)],
+        )
+        remove_portable.assert_not_called()
+
+    def test只生成安装包时删除临时目录版(self):
+        options = mock.Mock(onefile=False, portable=False, setup=True)
+        with mock.patch.object(build_app, "parse_cli_args", return_value=options), \
+                mock.patch.object(build_app, "clear_old_build"), \
+                mock.patch.object(build_app, "clear_pyinstaller_work"), \
+                mock.patch.object(build_app, "remove_portable_output") as remove_portable, \
+                mock.patch.object(build_app, "check_dependencies", return_value=True), \
+                mock.patch.object(build_app, "find_icon", return_value=None), \
+                mock.patch.object(build_app, "verify_main_script", return_value=True), \
+                mock.patch.object(build_app, "build_application", return_value=True), \
+                mock.patch.object(build_app, "verify_build", return_value=True), \
+                mock.patch.object(build_app, "build_setup", return_value=True):
+            result = build_app.main()
+
+        self.assertEqual(result, 0)
+        remove_portable.assert_called_once_with()
+
+    def test默认模式缺少安装包时返回失败(self):
+        options = mock.Mock(onefile=True, portable=True, setup=True)
+        with mock.patch.object(build_app, "parse_cli_args", return_value=options), \
+                mock.patch.object(build_app, "clear_old_build"), \
+                mock.patch.object(build_app, "clear_pyinstaller_work"), \
+                mock.patch.object(build_app, "remove_portable_output"), \
                 mock.patch.object(build_app, "check_dependencies", return_value=True), \
                 mock.patch.object(build_app, "find_icon", return_value=None), \
                 mock.patch.object(build_app, "verify_main_script", return_value=True), \
