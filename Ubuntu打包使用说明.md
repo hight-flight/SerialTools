@@ -25,6 +25,8 @@ chmod +x build_ubuntu.sh
 
 脚本会安装系统依赖、创建缓存虚拟环境、按 SHA-256 验证并安装锁定的 Python 依赖，然后生成便携版和 `.deb` 安装包。
 
+项目的默认正式发布产品为：Windows 便携版、Windows 安装包、Ubuntu 便携版和 Ubuntu 安装包。Windows 产品使用 `python build_app.py` 在 Windows 中构建；本脚本默认生成两种 Ubuntu 产品。
+
 ## 后续打包
 
 ```bash

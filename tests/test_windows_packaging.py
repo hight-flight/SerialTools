@@ -7,6 +7,38 @@ import build_app
 
 
 class WindowsPackagingTests(unittest.TestCase):
+    def test默认模式生成windows便携版和安装包(self):
+        options = build_app.parse_cli_args([])
+
+        self.assertTrue(options.onedir)
+        self.assertTrue(options.setup)
+
+    def test可显式选择旧版单文件模式(self):
+        options = build_app.parse_cli_args(["--onefile"])
+
+        self.assertFalse(options.onedir)
+        self.assertFalse(options.setup)
+
+    def test可只生成windows便携版(self):
+        options = build_app.parse_cli_args(["--onedir"])
+
+        self.assertTrue(options.onedir)
+        self.assertFalse(options.setup)
+
+    def test默认模式缺少安装包时返回失败(self):
+        options = mock.Mock(onedir=True, setup=True)
+        with mock.patch.object(build_app, "parse_cli_args", return_value=options), \
+                mock.patch.object(build_app, "clear_old_build"), \
+                mock.patch.object(build_app, "check_dependencies", return_value=True), \
+                mock.patch.object(build_app, "find_icon", return_value=None), \
+                mock.patch.object(build_app, "verify_main_script", return_value=True), \
+                mock.patch.object(build_app, "build_application", return_value=True), \
+                mock.patch.object(build_app, "verify_build", return_value=True), \
+                mock.patch.object(build_app, "build_setup", return_value=False):
+            result = build_app.main()
+
+        self.assertEqual(result, 1)
+
     def test清理只删除已验证项目内的构建目录(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir) / "project"

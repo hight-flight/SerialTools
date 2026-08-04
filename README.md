@@ -111,13 +111,31 @@ SerialTools/
 
 ## 🛠️ 打包发布
 
+默认正式发布包含以下四种产品：
+
+| 平台 | 便携版 | 安装包 |
+|------|--------|--------|
+| Windows | `dist/SerialTool/` | `dist/SerialTool_Setup.exe` |
+| Ubuntu 22.04+ | `dist/linux/SerialTool-<版本>-ubuntu22.04-<架构>.tar.gz` | `dist/linux/SerialTool-<版本>-ubuntu22.04-<架构>.deb` |
+
+Windows 和 Ubuntu 二进制文件必须分别在对应系统中构建，不能跨平台生成。
+
 ### Windows
 
 ```powershell
 python -m pip install --require-hashes -r requirements-release-windows.txt
+# 默认同时生成 Windows 便携版和安装包
 python build_app.py
-# 生成 onedir 和 Inno Setup 安装包
-python build_app.py --setup
+```
+
+默认模式需要预先安装 Inno Setup 6。按需模式：
+
+```powershell
+# 仅生成 Windows 便携版
+python build_app.py --onedir
+
+# 仅生成旧版单文件程序
+python build_app.py --onefile
 ```
 
 ### Ubuntu 22.04+
@@ -126,6 +144,7 @@ Linux 发布包必须在 Ubuntu 22.04 环境中构建：
 
 ```bash
 chmod +x build_ubuntu.sh
+# 默认同时生成 Ubuntu 便携版和 .deb 安装包
 ./build_ubuntu.sh --install-system-deps
 ```
 

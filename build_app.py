@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 串口调试助手 - 打包脚本
-使用PyInstaller API进行打包
+默认生成 Windows 便携目录和 Inno Setup 安装包。
 """
 
 import os
@@ -671,21 +671,46 @@ def verify_build(onedir=False):
         print("  [ERROR] 构建失败，可执行文件未生成")
         return False
 
+
+def parse_cli_args(argv=None):
+    """解析 Windows 构建模式；默认生成便携目录和安装包。"""
+    parser = argparse.ArgumentParser(description='串口调试助手 - 打包脚本')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
+        '--onefile',
+        dest='mode',
+        action='store_const',
+        const='onefile',
+        help='仅生成旧版单文件可执行程序 dist/SerialTool.exe',
+    )
+    modes.add_argument(
+        '--onedir',
+        dest='mode',
+        action='store_const',
+        const='portable',
+        help='仅生成 Windows 便携目录 dist/SerialTool/',
+    )
+    modes.add_argument(
+        '--setup',
+        dest='mode',
+        action='store_const',
+        const='release',
+        help='生成 Windows 便携目录和 Inno Setup 安装包（默认模式）',
+    )
+    parser.set_defaults(mode='release')
+    args = parser.parse_args(argv)
+    args.onedir = args.mode != 'onefile'
+    args.setup = args.mode == 'release'
+    return args
+
+
 def main():
     """主函数"""
-    # 命令行参数：--onedir 切换为目录模式（默认仍为 onefile 单文件模式）
-    parser = argparse.ArgumentParser(description='串口调试助手 - 打包脚本')
-    parser.add_argument('--onedir', action='store_true',
-                        help='使用 --onedir 目录模式打包（启动更快，产物为文件夹）；'
-                             '默认为 --onefile 单文件模式')
-    parser.add_argument('--setup', action='store_true',
-                        help='生成 Inno Setup 安装包（自动启用 --onedir，'
-                             '产物为 dist/SerialTool_Setup.exe，需先安装 Inno Setup 6）')
-    args_cli = parser.parse_args()
+    args_cli = parse_cli_args()
     os.chdir(PROJECT_ROOT)
 
-    # --setup 隐含 onedir（安装包基于 onedir 产物）
-    onedir_mode = args_cli.onedir or args_cli.setup
+    onedir_mode = args_cli.onedir
+    setup_mode = args_cli.setup
 
     print("========================================")
     print("  串口调试助手 - 打包脚本")
@@ -699,8 +724,7 @@ def main():
         # 步骤2: 检查依赖
         if not check_dependencies():
             print("\n[ERROR] 打包终止")
-            input("按Enter键退出...")
-            return
+            return 1
         print("")
         
         # 步骤2.5: 查找图标文件
@@ -710,33 +734,33 @@ def main():
         # 步骤2.6: 验证主脚本
         if not verify_main_script():
             print("\n[ERROR] 打包终止")
-            input("按Enter键退出...")
-            return
+            return 1
         print("")
         
         # 步骤3: 构建应用
         if not build_application(icon_path, onedir=onedir_mode):
             print("\n[ERROR] 打包终止")
-            input("按Enter键退出...")
-            return
+            return 1
         print("")
 
         # 步骤4: 验证构建
         if not verify_build(onedir=onedir_mode):
             print("\n❌ 打包失败")
-            return
+            return 1
         print("")
 
-        # 步骤5: 生成安装包（仅 --setup）
-        if args_cli.setup:
+        # 步骤5: 默认生成安装包（安装包基于 onedir 便携目录）
+        if setup_mode:
             if not build_setup(icon_path):
-                print("\n[警告] 安装包生成未完成（onedir 产物已可用）")
+                print("\n[ERROR] 默认发布不完整：Windows 安装包生成失败")
+                return 1
             print("")
 
         print("========================================")
         print("  [SUCCESS] 打包成功！")
-        if args_cli.setup and os.path.exists(os.path.join('dist', f'{APP_NAME}_Setup.exe')):
-            print(f"  安装包: dist\\{APP_NAME}_Setup.exe（单文件，可直接分发安装）")
+        if setup_mode and os.path.exists(os.path.join('dist', f'{APP_NAME}_Setup.exe')):
+            print(f"  Windows 便携版: dist\\{APP_NAME}\\")
+            print(f"  Windows 安装包: dist\\{APP_NAME}_Setup.exe")
         elif onedir_mode:
             print(f"  输出目录: dist\\{APP_NAME}\\")
             print(f"  入口文件: dist\\{APP_NAME}\\{APP_NAME}.exe")
@@ -747,10 +771,10 @@ def main():
         print("========================================")
 
         print("")
-        #input("按Enter键退出...")
+        return 0
     except KeyboardInterrupt:
         print("\n\n[中断] 打包过程已被用户取消")
-        sys.exit(1)
+        return 130
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
