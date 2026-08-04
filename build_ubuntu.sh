@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 BUILD_VENV="${SERIALTOOL_BUILD_VENV:-${XDG_CACHE_HOME:-${HOME}/.cache}/serialtool/build-venv}"
+OS_RELEASE_FILE="${SERIALTOOL_OS_RELEASE_FILE:-/etc/os-release}"
 
 SYSTEM_PACKAGES=(
   python3-venv
@@ -20,7 +21,7 @@ SYSTEM_PACKAGES=(
 
 show_help() {
   cat <<'EOF'
-在 Ubuntu 22.04+ 中构建 SerialTool 发布包。
+在 Ubuntu 22.04 中构建可用于 Ubuntu 22.04+ 的 SerialTool 发布包。
 
 用法：
   ./build_ubuntu.sh [脚本选项] [build_linux.py 参数]
@@ -65,16 +66,15 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   exit 1
 fi
 
-if [[ ! -r /etc/os-release ]]; then
+if [[ ! -r "$OS_RELEASE_FILE" ]]; then
   echo "错误：无法识别当前 Linux 发行版。" >&2
   exit 1
 fi
 
 # shellcheck disable=SC1091
-source /etc/os-release
-ubuntu_major="${VERSION_ID%%.*}"
-if [[ "${ID:-}" != "ubuntu" || ! "$ubuntu_major" =~ ^[0-9]+$ || "$ubuntu_major" -lt 22 ]]; then
-  echo "错误：当前系统不是 Ubuntu 22.04 或更高版本。" >&2
+source "$OS_RELEASE_FILE"
+if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "22.04" ]]; then
+  echo "错误：兼容 Ubuntu 22.04+ 的正式发布包必须在 Ubuntu 22.04 中构建。" >&2
   exit 1
 fi
 

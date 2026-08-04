@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import os
 import platform
 import re
@@ -175,6 +176,15 @@ def _reset_build_directory(path: Path, allowed_parent: Path) -> None:
     resolved.mkdir(parents=True)
 
 
+def validate_output_directory(output_dir: Path, build_root: Path) -> Path:
+    """拒绝把发布目录放入即将清理的构建目录。"""
+    resolved_output = Path(output_dir).resolve()
+    resolved_build = Path(build_root).resolve()
+    if resolved_output == resolved_build or resolved_build in resolved_output.parents:
+        raise ValueError(f"输出目录不能位于待清理构建目录中：{resolved_output}")
+    return resolved_output
+
+
 def build_python_bundle(project_root: Path, build_root: Path) -> Path:
     """调用当前 Linux Python 环境中的 PyInstaller。"""
     dist_dir = build_root / "pyinstaller-dist"
@@ -203,6 +213,7 @@ def build_portable_archive(
     output_dir: Path,
     version: str,
     release_arch: str,
+    source_date_epoch: int = 0,
 ) -> Path:
     """生成无需安装的 onedir 压缩包。"""
     release_name = f"{APP_NAME}-{version}-ubuntu22.04-{release_arch}"
@@ -213,6 +224,7 @@ def build_portable_archive(
         member.gid = 0
         member.uname = "root"
         member.gname = "root"
+        member.mtime = source_date_epoch
         if member.isdir():
             member.mode = 0o755
         elif member.issym() or member.islnk():
@@ -223,14 +235,42 @@ def build_portable_archive(
             member.mode = 0o644
         return member
 
-    with tarfile.open(archive_path, "w:gz") as archive:
-        archive.add(
-            bundle_dir,
-            arcname=release_name,
-            recursive=True,
-            filter=normalize_tar_entry,
-        )
+    with archive_path.open("wb") as archive_file:
+        with gzip.GzipFile(
+            filename="",
+            mode="wb",
+            fileobj=archive_file,
+            mtime=source_date_epoch,
+        ) as compressed:
+            with tarfile.open(fileobj=compressed, mode="w") as archive:
+                archive.add(
+                    bundle_dir,
+                    arcname=release_name,
+                    recursive=True,
+                    filter=normalize_tar_entry,
+                )
     return archive_path
+
+
+def source_date_epoch(project_root: Path = PROJECT_ROOT) -> int:
+    """优先使用 SOURCE_DATE_EPOCH，否则使用当前 Git 提交时间。"""
+    configured = os.environ.get("SOURCE_DATE_EPOCH")
+    if configured is not None:
+        try:
+            return max(0, int(configured))
+        except ValueError as exc:
+            raise ValueError("SOURCE_DATE_EPOCH 必须是非负整数") from exc
+    try:
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%ct"],
+            cwd=project_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return max(0, int(result.stdout.strip()))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0
 
 
 def build_deb_package(
@@ -278,17 +318,21 @@ def main() -> int:
 
     release_arch, deb_arch = normalize_architecture(platform.machine())
     version = read_version(PROJECT_ROOT)
-    output_dir = args.output_dir.resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
     build_parent = PROJECT_ROOT / "build"
     build_parent.mkdir(parents=True, exist_ok=True)
     build_root = build_parent / "linux"
+    output_dir = validate_output_directory(args.output_dir, build_root)
     _reset_build_directory(build_root, build_parent)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"构建 SerialTool {version}，目标架构：{release_arch}")
     bundle_dir = build_python_bundle(PROJECT_ROOT, build_root)
     portable = build_portable_archive(
-        bundle_dir, output_dir, version, release_arch
+        bundle_dir,
+        output_dir,
+        version,
+        release_arch,
+        source_date_epoch=source_date_epoch(PROJECT_ROOT),
     )
     print(f"便携包：{portable}")
 

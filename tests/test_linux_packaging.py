@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import os
 import stat
 import tarfile
@@ -58,6 +59,29 @@ class LinuxPackagingTests(unittest.TestCase):
 
         if os.name != "nt":
             self.assertTrue(BUILD_WRAPPER.stat().st_mode & stat.S_IXUSR)
+
+    @unittest.skipIf(os.name == "nt", "Shell 行为在 Linux 环境验证")
+    @unittest.skipUnless(shutil.which("bash"), "当前环境没有 Bash")
+    def test一键脚本拒绝非ubuntu2204构建兼容包(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            release_file = Path(temp_dir) / "os-release"
+            release_file.write_text(
+                'ID=ubuntu\nVERSION_ID="24.04"\n',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["bash", os.fspath(BUILD_WRAPPER)],
+                env={
+                    **os.environ,
+                    "SERIALTOOL_OS_RELEASE_FILE": os.fspath(release_file),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Ubuntu 22.04", result.stderr)
 
     def test_shell脚本在windows检出时保持lf换行(self):
         self.assertTrue(GIT_ATTRIBUTES.is_file(), "缺少 .gitattributes")
@@ -214,6 +238,52 @@ class LinuxPackagingTests(unittest.TestCase):
                     package.getmember(f"{prefix}/_internal/library.dat").mode,
                     0o644,
                 )
+
+    def test拒绝把发布目录放在待清理构建目录中(self):
+        builder = self._load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            build_root = Path(temp_dir) / "build" / "linux"
+            with self.assertRaisesRegex(ValueError, "输出目录"):
+                builder.validate_output_directory(
+                    build_root / "release",
+                    build_root,
+                )
+
+    def test相同输入生成相同便携包(self):
+        builder = self._load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            executable = bundle / "SerialTool"
+            executable.write_bytes(b"executable")
+            first_output = root / "first"
+            second_output = root / "second"
+            first_output.mkdir()
+            second_output.mkdir()
+
+            first = builder.build_portable_archive(
+                bundle,
+                first_output,
+                "1.3.5",
+                "x86_64",
+                source_date_epoch=123456789,
+            )
+            executable.touch()
+            second = builder.build_portable_archive(
+                bundle,
+                second_output,
+                "1.3.5",
+                "x86_64",
+                source_date_epoch=123456789,
+            )
+
+            self.assertEqual(
+                hashlib.sha256(first.read_bytes()).digest(),
+                hashlib.sha256(second.read_bytes()).digest(),
+            )
 
 
 if __name__ == "__main__":
