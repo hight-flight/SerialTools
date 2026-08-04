@@ -11,13 +11,14 @@ import time
 import subprocess
 import argparse
 import warnings
+from pathlib import Path
 
 # 抑制 PyInstaller 钩子中第三方库的 DeprecationWarning（不影响打包）
 warnings.filterwarnings('ignore', category=DeprecationWarning, module=r'PyInstaller.*')
 
 # 配置常量
+PROJECT_ROOT = Path(__file__).resolve().parent
 MAIN_SCRIPT = 'serial_GUI.py'
-CONFIG_FILE = 'serial_config.json'
 APP_NAME = 'SerialTool'
 BUILD_TIMEOUT = 600  # 打包超时时间（秒），10分钟
 
@@ -165,19 +166,26 @@ def build_setup(icon_path=None):
         return False
 
 
-def clear_old_build():
-    """清理旧的构建文件"""
+def clear_old_build(project_root=PROJECT_ROOT):
+    """只清理已验证项目根目录内的构建产物。"""
+    root = Path(project_root).resolve()
+    if not (root / MAIN_SCRIPT).is_file():
+        raise RuntimeError(f"拒绝清理：目录不是有效的 SerialTool 项目：{root}")
+
     print("[步骤1] 清理旧的构建文件...")
     try:
-        if os.path.exists('build'):
+        build_dir = root / 'build'
+        dist_dir = root / 'dist'
+        spec_file = root / f'{APP_NAME}.spec'
+        if build_dir.exists():
             print("  - 删除 build 目录")
-            shutil.rmtree('build', ignore_errors=True)
-        if os.path.exists('dist'):
+            shutil.rmtree(build_dir)
+        if dist_dir.exists():
             print("  - 删除 dist 目录")
-            shutil.rmtree('dist', ignore_errors=True)
-        if os.path.exists(f'{APP_NAME}.spec'):
+            shutil.rmtree(dist_dir)
+        if spec_file.exists():
             print(f"  - 删除 {APP_NAME}.spec 文件")
-            os.remove(f'{APP_NAME}.spec')
+            spec_file.unlink()
         print("  [OK] 清理完成")
     except Exception as e:
         print(f"  [警告] 清理过程中出现错误: {e}")
@@ -388,18 +396,10 @@ def verify_main_script():
         print(f"  请确保 {MAIN_SCRIPT} 在当前目录中")
         return False
     print(f"  - 主脚本: {MAIN_SCRIPT} (存在)")
-    
-    # 验证配置文件
-    if os.path.exists(CONFIG_FILE):
-        print(f"  - 配置文件: {CONFIG_FILE} (存在)")
-    else:
-        print(f"  [警告] 配置文件不存在: {CONFIG_FILE}")
-        print(f"  打包后可能需要手动添加此文件")
-    
     print("  [OK] 主脚本验证通过")
     return True
 
-def find_upx():
+def find_upx(project_root=PROJECT_ROOT):
     """查找 UPX 压缩工具，返回 (已安装, 目录路径)
 
     Returns:
@@ -407,50 +407,101 @@ def find_upx():
         (True, upx_dir)  - UPX 在本地 upx/ 目录，需 --upx-dir <upx_dir>
         (False, None)   - 未找到
     """
-    from shutil import which
-
     # 1) PATH 中查找（PyInstaller 会自动搜索 PATH，无需 --upx-dir）
-    if which('upx') or which('upx.exe'):
+    if shutil.which('upx') or shutil.which('upx.exe'):
         print("  - UPX: 已安装（系统 PATH 中）")
         return (True, None)
 
     # 2) 检查 upx 子目录
-    upx_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'upx')
+    upx_dir = os.path.join(os.fspath(Path(project_root).resolve()), 'upx')
     upx_exe = os.path.join(upx_dir, 'upx.exe')
     if os.path.exists(upx_exe):
         print(f"  - UPX: 已安装（本地目录: {upx_dir}）")
         return (True, upx_dir)
 
-    # 3) 尝试自动下载
-    print("  - UPX: 未安装，尝试自动下载...")
-    try:
-        import urllib.request
-        import zipfile
-
-        upx_url = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
-        zip_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'upx.zip')
-
-        print(f"    正在从 {upx_url} 下载...")
-        urllib.request.urlretrieve(upx_url, zip_path)
-
-        print("    正在解压...")
-        os.makedirs(upx_dir, exist_ok=True)
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            for info in zf.infolist():
-                if info.filename.endswith('upx.exe'):
-                    info.filename = os.path.basename(info.filename)
-                    zf.extract(info, upx_dir)
-                    break
-        os.remove(zip_path)
-
-        if os.path.exists(upx_exe):
-            print(f"  - UPX: 下载成功（{upx_dir}）")
-            return (True, upx_dir)
-    except Exception as e:
-        print(f"  - UPX 自动下载失败: {e}")
-
-    print("    手动安装: https://github.com/upx/upx/releases")
+    print("  - UPX: 未安装，将继续构建且不启用压缩")
+    print("    如需压缩，请从 UPX 官方发布页安装并自行验证文件校验值。")
     return (False, None)
+
+
+def build_pyinstaller_arguments(
+    icon_path=None,
+    onedir=False,
+    upx_dir=None,
+):
+    """生成 Windows PyInstaller 参数，不包含任何本地用户配置。"""
+    args = [
+        '--onedir' if onedir else '--onefile',
+        '--windowed',
+        '--name', APP_NAME,
+        '--hidden-import', 'pyqtgraph',
+        '--hidden-import', 'numpy',
+        '--collect-submodules', 'pyqtgraph',
+        '--hidden-import', 'ota_center',
+        '--hidden-import', 'gsm_debugger',
+        '--hidden-import', 'auto_reply',
+        '--hidden-import', 'data_viewer',
+        '--hidden-import', 'http.server',
+        '--hidden-import', 'socketserver',
+        '--hidden-import', 'serial.tools.list_ports',
+        '--hidden-import', 'serial.tools.list_ports_common',
+        '--hidden-import', 'serial.tools.list_ports_linux',
+        '--hidden-import', 'serial.tools.list_ports_windows',
+        '--hidden-import', 'serial.tools.list_ports_osx',
+        '--exclude-module', 'PyQt5.QtWebEngine',
+        '--exclude-module', 'PyQt5.QtWebEngineWidgets',
+        '--exclude-module', 'PyQt5.QtWebChannel',
+        '--exclude-module', 'PyQt5.QtBluetooth',
+        '--exclude-module', 'PyQt5.QtMultimedia',
+        '--exclude-module', 'PyQt5.QtMultimediaWidgets',
+        '--exclude-module', 'PyQt5.QtSql',
+        '--exclude-module', 'PyQt5.QtTest',
+        '--exclude-module', 'PyQt5.QtHelp',
+        '--exclude-module', 'PyQt5.QtDesigner',
+        '--exclude-module', 'PyQt5.QtSensors',
+        '--exclude-module', 'PyQt5.QtPositioning',
+        '--exclude-module', 'PyQt5.QtQml',
+        '--exclude-module', 'PyQt5.QtQuick',
+        '--exclude-module', 'PyQt5.QtQuickWidgets',
+        '--exclude-module', 'PyQt5.QtDBus',
+        '--exclude-module', 'PyQt5.QtXmlPatterns',
+        '--exclude-module', 'torch',
+        '--exclude-module', 'tensorflow',
+        '--exclude-module', 'tkinter',
+        '--exclude-module', 'matplotlib',
+        '--exclude-module', 'PIL',
+        '--exclude-module', 'cv2',
+        '--exclude-module', 'scipy',
+        '--exclude-module', 'pandas',
+        '--exclude-module', 'notebook',
+        '--exclude-module', 'jupyter',
+        '--exclude-module', 'cryptography',
+        '--exclude-module', 'lxml',
+        '--exclude-module', 'h5py',
+        '--exclude-module', 'bs4',
+        '--exclude-module', 'zmq',
+        '--exclude-module', 'IPython',
+        '--exclude-module', 'bokeh',
+        '--exclude-module', 'sympy',
+        '--exclude-module', 'dateutil',
+        '--exclude-module', 'unittest',
+        '--exclude-module', 'doctest',
+        '--exclude-module', 'pdb',
+        '--exclude-module', 'lib2to3',
+        '--exclude-module', 'turtledemo',
+        '--exclude-module', 'distutils',
+        '--exclude-module', 'setuptools',
+        '--exclude-module', 'pkg_resources',
+        '--exclude-module', 'curses',
+    ]
+    if onedir:
+        args.append('--noupx')
+    if upx_dir:
+        args.extend(['--upx-dir', os.fspath(upx_dir)])
+    if icon_path:
+        args.extend(['--icon', os.fspath(icon_path)])
+    args.append(MAIN_SCRIPT)
+    return args
 
 
 def build_application(icon_path=None, onedir=False):
@@ -476,104 +527,11 @@ def build_application(icon_path=None, onedir=False):
             print("  [优化] UPX 压缩已启用（可减少 EXE 体积 30-50%）")
     print("")
 
-    # 获取跨平台路径分隔符
-    path_sep = get_path_separator()
-
-    # 打包参数
-    args = [
-        '--onedir' if onedir else '--onefile',  # 目录模式 / 单文件模式
-        '--windowed',         # 无命令行窗口（GUI应用）
-        '--name', APP_NAME,   # 可执行文件名
-    ]
-    
-    # 仅当配置文件存在时才添加（避免打包失败）
-    if os.path.exists(CONFIG_FILE):
-        args.extend(['--add-data', f'{CONFIG_FILE}{path_sep}.'])
-    
-    # 懒加载依赖（示波器 + 数据分析）
-    args.extend([
-        '--hidden-import', 'pyqtgraph',
-        '--hidden-import', 'numpy',
-        '--collect-submodules', 'pyqtgraph',  # pyqtgraph 需全部子模块
-        # 懒加载模块（函数体内 import，PyInstaller 静态分析无法检测）
-        '--hidden-import', 'ota_center',
-        '--hidden-import', 'gsm_debugger',
-        '--hidden-import', 'auto_reply',
-        '--hidden-import', 'data_viewer',
-        # OTA 升级功能依赖
-        '--hidden-import', 'http.server',
-        '--hidden-import', 'socketserver',
-        # 串口枚举（lazy import 场景）
-        '--hidden-import', 'serial.tools.list_ports',
-        '--hidden-import', 'serial.tools.list_ports_common',
-        '--hidden-import', 'serial.tools.list_ports_linux',
-        '--hidden-import', 'serial.tools.list_ports_windows',
-        '--hidden-import', 'serial.tools.list_ports_osx',
-        # === 排除未使用的重型 PyQt5 子模块（QtWebEngine 约 50-100MB）===
-        '--exclude-module', 'PyQt5.QtWebEngine',
-        '--exclude-module', 'PyQt5.QtWebEngineWidgets',
-        '--exclude-module', 'PyQt5.QtWebChannel',
-        '--exclude-module', 'PyQt5.QtBluetooth',
-        '--exclude-module', 'PyQt5.QtMultimedia',
-        '--exclude-module', 'PyQt5.QtMultimediaWidgets',
-        '--exclude-module', 'PyQt5.QtSql',
-        '--exclude-module', 'PyQt5.QtTest',
-        '--exclude-module', 'PyQt5.QtHelp',
-        '--exclude-module', 'PyQt5.QtDesigner',
-        '--exclude-module', 'PyQt5.QtSensors',
-        '--exclude-module', 'PyQt5.QtPositioning',
-        '--exclude-module', 'PyQt5.QtQml',
-        '--exclude-module', 'PyQt5.QtQuick',
-        '--exclude-module', 'PyQt5.QtQuickWidgets',
-        '--exclude-module', 'PyQt5.QtDBus',
-        '--exclude-module', 'PyQt5.QtXmlPatterns',
-        # === 排除未使用的大型 Python 包 ===
-        '--exclude-module', 'torch',
-        '--exclude-module', 'tensorflow',
-        '--exclude-module', 'tkinter',
-        '--exclude-module', 'matplotlib',
-        '--exclude-module', 'PIL',
-        '--exclude-module', 'cv2',
-        '--exclude-module', 'scipy',
-        '--exclude-module', 'pandas',
-        '--exclude-module', 'notebook',
-        '--exclude-module', 'jupyter',
-        '--exclude-module', 'cryptography',
-        '--exclude-module', 'lxml',
-        '--exclude-module', 'h5py',
-        '--exclude-module', 'bs4',
-        '--exclude-module', 'zmq',
-        '--exclude-module', 'IPython',
-        '--exclude-module', 'bokeh',
-        '--exclude-module', 'sympy',
-        '--exclude-module', 'dateutil',
-        # === 排除未使用的标准库（减少体积约 5-10MB）===
-        '--exclude-module', 'unittest',
-        '--exclude-module', 'doctest',
-        '--exclude-module', 'pdb',
-        '--exclude-module', 'lib2to3',
-        '--exclude-module', 'turtledemo',
-        '--exclude-module', 'distutils',
-        '--exclude-module', 'setuptools',
-        '--exclude-module', 'pkg_resources',
-        '--exclude-module', 'curses',
-    ])
-
-    # onedir 模式：禁用 UPX，避免启动时解压与杀软扫描开销（方案②）
-    if onedir:
-        args.append('--noupx')
-
-    # 单文件模式：UPX 在本地目录时传入 --upx-dir（在 PATH 上则不需要）
-    if upx_ok and upx_dir:
-        args.append('--upx-dir')
-        args.append(upx_dir)
-
-    args.append(MAIN_SCRIPT)  # 主脚本
-    
-    # 添加图标参数 (插入到脚本名称之前)
-    if icon_path:
-        args.insert(-1, '--icon')
-        args.insert(-1, icon_path)
+    args = build_pyinstaller_arguments(
+        icon_path=icon_path,
+        onedir=onedir,
+        upx_dir=upx_dir if upx_ok else None,
+    )
     
     print(f"  打包参数: {' '.join(args)}")
     print("  正在构建...")
@@ -711,6 +669,7 @@ def main():
                         help='生成 Inno Setup 安装包（自动启用 --onedir，'
                              '产物为 dist/SerialTool_Setup.exe，需先安装 Inno Setup 6）')
     args_cli = parser.parse_args()
+    os.chdir(PROJECT_ROOT)
 
     # --setup 隐含 onedir（安装包基于 onedir 产物）
     onedir_mode = args_cli.onedir or args_cli.setup
@@ -722,7 +681,7 @@ def main():
 
     try:
         # 步骤1: 清理旧文件
-        clear_old_build()
+        clear_old_build(PROJECT_ROOT)
         
         # 步骤2: 检查依赖
         if not check_dependencies():
