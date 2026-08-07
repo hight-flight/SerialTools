@@ -4,6 +4,7 @@ TransportReadThread 在独立线程中轮询接收数据。
 """
 
 import socket
+import select
 
 from PyQt5.QtCore import QThread, pyqtSignal, QMutex, QMutexLocker
 
@@ -191,8 +192,9 @@ class TransportWrapper:
             if self._socket is None:
                 return 0
             try:
-                self._socket.sendall(data)
-                return len(data)
+                return self._send_socket_data(self._socket, data)
+            except TimeoutError:
+                raise
             except (ConnectionResetError, ConnectionAbortedError, OSError):
                 try:
                     self._socket.close()
@@ -202,8 +204,9 @@ class TransportWrapper:
         elif self.mode == 'tcp_server':
             if self._client_conn is not None:
                 try:
-                    self._client_conn.sendall(data)
-                    return len(data)
+                    return self._send_socket_data(self._client_conn, data)
+                except TimeoutError:
+                    raise
                 except (ConnectionResetError, ConnectionAbortedError, OSError):
                     try:
                         self._client_conn.close()
@@ -213,6 +216,24 @@ class TransportWrapper:
                     self._client_addr = None
             return 0
         return 0
+
+    @staticmethod
+    def _send_socket_data(sock, data, writable_timeout=1.0):
+        """在 non-blocking TCP socket 上处理背压和部分写入。"""
+        view = memoryview(data)
+        total = 0
+        while total < len(view):
+            try:
+                sent = sock.send(view[total:])
+            except BlockingIOError:
+                _, writable, _ = select.select([], [sock], [], writable_timeout)
+                if not writable:
+                    raise TimeoutError("TCP 发送等待可写超时")
+                continue
+            if sent <= 0:
+                raise ConnectionResetError("TCP 连接已关闭")
+            total += sent
+        return total
 
     @property
     def rts(self):

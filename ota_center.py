@@ -22,7 +22,8 @@ from app_paths import ensure_user_dirs, open_directory, resolve_app_paths
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QComboBox, QPushButton, QTextEdit, QCheckBox,
                              QMessageBox, QSpinBox, QLineEdit, QProgressBar,
-                             QGroupBox, QFileDialog, QApplication)
+                             QGroupBox, QFileDialog, QApplication, QScrollArea,
+                             QWidget, QFrame)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QMutexLocker
 from PyQt5.QtGui import QFont, QPainter, QPixmap, QColor
 
@@ -97,14 +98,19 @@ class OTARequestHandler(SimpleHTTPRequestHandler):
         with OTARequestHandler._lock:
             track = bool(OTARequestHandler._active_file
                          and current_file == OTARequestHandler._active_file)
+        request_bytes_sent = 0
         while True:
             buf = source.read(buf_size)
             if not buf:
                 break
             outputfile.write(buf)
             if track:
+                request_bytes_sent += len(buf)
                 with OTARequestHandler._lock:
-                    OTARequestHandler._bytes_sent += len(buf)
+                    # 重试或并发 GET 不能相互累加，否则会虚构 100% 进度。
+                    OTARequestHandler._bytes_sent = max(
+                        OTARequestHandler._bytes_sent, request_bytes_sent
+                    )
 
 
 class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
@@ -176,6 +182,7 @@ class OTAControlCenter(QDialog):
     STATE_SENDING = 'sending_cmd'
     STATE_DOWNLOADING = 'downloading'
     STATE_SUCCESS = 'success'
+    STATE_UNCONFIRMED = 'unconfirmed'
     STATE_FAILED = 'failed'
     STATE_CANCELLED = 'cancelled'
 
@@ -214,6 +221,11 @@ class OTAControlCenter(QDialog):
 
         self.init_ui()
         self._load_settings()
+        self._precondition_timer = QTimer(self)
+        self._precondition_timer.setInterval(500)
+        self._precondition_timer.timeout.connect(self._update_start_button_state)
+        self._precondition_timer.start()
+        self._update_start_button_state()
 
     # ─────────────────────────────────────────────────────────────
     #  UI 构建
@@ -221,12 +233,22 @@ class OTAControlCenter(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("OTA 升级控制中心")
-        self.setMinimumSize(620, 660)  # 660px 在 1366×768 笔记本上不被任务栏遮挡
+        self.resize(620, 800)
+        self.setMinimumSize(520, 460)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setAcceptDrops(True)
 
-        layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(4, 4, 4, 4)
+        self._scroll_area = QScrollArea()
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setFrameShape(QFrame.NoFrame)
+        self._scroll_area.setAccessibleName("OTA 升级设置")
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setSpacing(8)
+        self._scroll_area.setWidget(content)
+        outer_layout.addWidget(self._scroll_area)
 
         # ── 1. HTTP 服务管理 ──
         http_group = QGroupBox("HTTP 服务管理")
@@ -237,6 +259,7 @@ class OTAControlCenter(QDialog):
         status_row = QHBoxLayout()
         self._indicator_label = QLabel()
         self._indicator_label.setFixedSize(18, 18)
+        self._indicator_label.setAccessibleName("HTTP 服务状态")
         self._draw_indicator(False)
         status_row.addWidget(self._indicator_label)
         self._http_status_label = QLabel("已停止")
@@ -246,7 +269,7 @@ class OTAControlCenter(QDialog):
 
         # 端口行
         port_row = QHBoxLayout()
-        port_row.addWidget(QLabel("端口:"))
+        port_row.addWidget(QLabel("端口："))
         self._port_spin = QSpinBox()
         self._port_spin.setRange(1024, 65535)
         self._port_spin.setValue(8080)
@@ -257,7 +280,7 @@ class OTAControlCenter(QDialog):
 
         # IP 行
         ip_row = QHBoxLayout()
-        ip_row.addWidget(QLabel("本机 IP:"))
+        ip_row.addWidget(QLabel("本机 IP："))
         self._ip_combo = QComboBox()
         self._ip_combo.setMinimumWidth(180)
         self._ip_combo.setToolTip("选择用于 OTA 下载的本机局域网 IP 地址")
@@ -304,7 +327,7 @@ class OTAControlCenter(QDialog):
         btn_open_dir = QPushButton("打开服务目录")
         btn_open_dir.clicked.connect(self._open_serve_dir)
         extra_row.addWidget(btn_open_dir)
-        extra_row.addWidget(QLabel("历史:"))
+        extra_row.addWidget(QLabel("历史："))
         self._history_combo = QComboBox()
         self._history_combo.setMinimumWidth(200)
         self._history_combo.setToolTip("最近使用的固件路径")
@@ -336,6 +359,7 @@ class OTAControlCenter(QDialog):
         # 按钮行（等宽）
         ota_btn_row = QHBoxLayout()
         self._btn_start_ota = QPushButton("▶ 开始升级")
+        self._btn_start_ota.setAccessibleName("开始 OTA 升级")
         self._btn_start_ota.setMinimumHeight(36)
         self._btn_start_ota.setMinimumWidth(160)
         self._btn_start_ota.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
@@ -362,6 +386,12 @@ class OTAControlCenter(QDialog):
         ota_btn_row.addWidget(self._btn_stop_ota)
         ota_layout.addLayout(ota_btn_row)
 
+        self._precondition_label = QLabel()
+        self._precondition_label.setAlignment(Qt.AlignCenter)
+        self._precondition_label.setWordWrap(True)
+        self._precondition_label.setAccessibleName("升级前置条件")
+        ota_layout.addWidget(self._precondition_label)
+
         # 选项行
         opt_row = QHBoxLayout()
         self._check_auto_stop = QCheckBox("升级后自动停止服务")
@@ -369,7 +399,7 @@ class OTAControlCenter(QDialog):
         self._check_auto_stop.setToolTip("升级成功或失败后自动关闭 HTTP 服务")
         opt_row.addWidget(self._check_auto_stop)
 
-        opt_row.addWidget(QLabel("  超时(s):"))
+        opt_row.addWidget(QLabel("超时（秒）："))
         self._timeout_spin = QSpinBox()
         self._timeout_spin.setRange(10, 3600)
         self._timeout_spin.setValue(120)
@@ -381,7 +411,7 @@ class OTAControlCenter(QDialog):
 
         # 指令格式行
         cmd_row = QHBoxLayout()
-        cmd_row.addWidget(QLabel("OTA指令:"))
+        cmd_row.addWidget(QLabel("OTA 指令："))
         self._cmd_format_edit = QLineEdit()
         self._cmd_format_edit.setText("ota {url}\\r\\n")
         self._cmd_format_edit.setToolTip(
@@ -523,6 +553,7 @@ class OTAControlCenter(QDialog):
                 self.firmware_path = last_path
                 self._fw_path_edit.setText(last_path)
                 self._history_combo.setCurrentIndex(0)
+        self._update_start_button_state()
         super().showEvent(event)
 
     @property
@@ -769,6 +800,7 @@ class OTAControlCenter(QDialog):
         self._history_combo.setCurrentIndex(0)
 
         self._save_settings()
+        self._update_start_button_state()
 
     def _on_history_selected(self, index):
         """历史下拉框用户选择回调（activated 信号传索引）：同步选中对应固件。"""
@@ -780,6 +812,7 @@ class OTAControlCenter(QDialog):
             self._fw_path_edit.setText(path)
             self._log(f"已从历史选择固件: {path}")
             self._save_settings()
+            self._update_start_button_state()
         else:
             # 文件已不存在，提示并从历史中移除
             QMessageBox.information(self, "提示",
@@ -790,6 +823,7 @@ class OTAControlCenter(QDialog):
             self._fw_path_edit.clear()
             self.firmware_path = ''
             self._save_settings()
+            self._update_start_button_state()
 
     def _open_serve_dir(self):
         """在文件管理器中打开 ota_serve 目录。"""
@@ -827,6 +861,9 @@ class OTAControlCenter(QDialog):
         elif state in (self.STATE_FAILED, self.STATE_CANCELLED):
             self._progress_bar.setStyleSheet(
                 "QProgressBar::chunk { background-color: #E06C75; }")
+        elif state == self.STATE_UNCONFIRMED:
+            self._progress_bar.setStyleSheet(
+                "QProgressBar::chunk { background-color: #E5C07B; }")
         elif is_running:
             self._progress_bar.setStyleSheet(
                 "QProgressBar::chunk { background-color: #528BFF; }")
@@ -839,10 +876,37 @@ class OTAControlCenter(QDialog):
             self._state_label.setStyleSheet("color: #4EC972; font-weight: bold;")
         elif state in (self.STATE_FAILED, self.STATE_CANCELLED):
             self._state_label.setStyleSheet("color: #E06C75; font-weight: bold;")
+        elif state == self.STATE_UNCONFIRMED:
+            self._state_label.setStyleSheet("color: #E5C07B; font-weight: bold;")
         elif is_running:
             self._state_label.setStyleSheet("color: #528BFF; font-weight: bold;")
         else:
             self._state_label.setStyleSheet("")
+        self._update_start_button_state()
+
+    def _start_button_block_reason(self):
+        """返回不能开始 OTA 的首个前置条件，空字符串表示可以开始。"""
+        if self._ota_in_progress:
+            return "升级正在进行中"
+        if not self.firmware_path or not os.path.isfile(self.firmware_path):
+            return "请先选择固件文件"
+        transport = getattr(self.main_window, 'transport', None)
+        if not transport or not transport.is_open:
+            return "请先打开串口或网络连接"
+        ip = self._ip_combo.currentText().strip()
+        if not ip or '.' not in ip or ip == "无法获取 IP":
+            return "请选择有效的本机 IP 地址"
+        return ""
+
+    def _update_start_button_state(self):
+        """根据实时前置条件更新主操作按钮和说明。"""
+        if not hasattr(self, '_btn_start_ota'):
+            return
+        reason = self._start_button_block_reason()
+        self._btn_start_ota.setEnabled(not reason)
+        self._btn_start_ota.setToolTip(reason or "开始 OTA 升级")
+        self._precondition_label.setText(reason)
+        self._precondition_label.setVisible(bool(reason))
 
     def _copy_firmware_safely(self, src_path, dest_dir):
         """安全地把固件复制到 HTTP 服务目录，规避 Windows 文件占用问题。
@@ -1017,12 +1081,21 @@ class OTAControlCenter(QDialog):
                 cmd = cmd.rstrip('\r\n') + '\r\n'
             cmd_bytes = cmd.encode('utf-8')
 
-            # 通过串口发送（清空输入缓冲，防止残留数据干扰）
+            # 设备可能在收到命令后立即发起 GET 或返回结果，因此必须先启用追踪。
+            self._start_http_tracking(fw_filename, dst_size)
+            self._start_serial_tracking()
+            self._suppress_serial_errors(True)
+            self._set_state(self.STATE_DOWNLOADING, "等待设备下载（可能重启）...")
+            self._log("等待设备下载固件（设备可能重启，串口暂时断开属正常现象）...")
+
+            # 通过连接发送（清空串口缓冲；网络模式下为空操作）
             try:
                 with QMutexLocker(self.main_window.serial_mutex):
                     self.main_window.transport.reset_input_buffer()
                     self.main_window.transport.reset_output_buffer()
                     n = self.main_window.transport.write(cmd_bytes)
+                    if n != len(cmd_bytes):
+                        raise IOError(f"OTA 指令部分写入: {n}/{len(cmd_bytes)} 字节")
                     self.main_window.transport.flush()
                     self.main_window.tx_bytes += n
                     self.main_window.label_tx_bytes.setText(
@@ -1034,17 +1107,6 @@ class OTAControlCenter(QDialog):
                 raise IOError(f"串口发送失败: {e}")
 
             self._log(f"已发送 OTA 指令 ({n} 字节)")
-
-            # Step 4: 设备可能重启，暂时屏蔽串口错误弹窗
-            self._suppress_serial_errors(True)
-
-            # Step 5: 启动进度跟踪
-            self._set_state(self.STATE_DOWNLOADING, "等待设备下载（可能重启）...")
-            self._log("等待设备下载固件（设备可能重启，串口暂时断开属正常现象）...")
-
-            # 同时启动 HTTP 进度轮询和串口上报监听
-            self._start_http_tracking(fw_filename, dst_size)
-            self._start_serial_tracking()
 
         except Exception as e:
             self._log(f"OTA 流程错误: {e}")
@@ -1207,11 +1269,20 @@ class OTAControlCenter(QDialog):
                 self._log("固件已全部发送，但设备未确认（超时）")
                 self._progress_poll_timer.stop()
                 # device 模式：保留设备最后上报的进度，不强制 100%
-                # waiting/http 模式：设备不上报完成，传输已完成，视为成功并置 100%
+                # HTTP 传输完成不能证明设备已经校验、写入并成功切换固件。
                 if self._progress_mode != 'device':
                     self._progress_bar.setValue(100)
-                self._set_state(self.STATE_SUCCESS, "✅ 升级完成（未收到确认）")
+                self._set_state(
+                    self.STATE_UNCONFIRMED,
+                    "⚠ 固件传输完成，但设备未确认升级结果",
+                )
                 self._on_ota_finished()
+                QMessageBox.warning(
+                    self,
+                    "OTA 结果未确认",
+                    "固件已通过 HTTP 发送完成，但没有收到设备升级成功确认。\n"
+                    "请检查设备日志、版本号或重启状态后再判断升级结果。",
+                )
                 return
 
         # 无 HTTP 进度数据，判定超时
@@ -1240,6 +1311,7 @@ class OTAControlCenter(QDialog):
         if self._check_auto_stop.isChecked() and self.http_running:
             self._log("正在自动停止 HTTP 服务...")
             self._stop_http_service()
+        self._update_start_button_state()
 
     def _stop_ota(self):
         """紧急中断 OTA 流程。"""

@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTextEdit, QCheckBox, QMessageBox, QSplitter, QSpinBox, QLineEdit, QGroupBox, QDialog, QFormLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog, QSizePolicy,
                              QAction, QTabWidget, QRadioButton, QButtonGroup, QStackedWidget)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint, QEvent
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint, QEvent, QByteArray
 from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon
 
 from dialogs import (show_crc_calculator, show_hex_converter,
@@ -301,7 +301,7 @@ class SerialTool(QMainWindow):
         self.act_dark_mode.setChecked(self.current_theme == 'dark')
         self.act_dark_mode.triggered.connect(self.toggle_theme)
         view_menu.addAction(self.act_dark_mode)
-        self.act_multi_send = QAction("多字符发送(&M)", self)
+        self.act_multi_send = QAction("多字符串发送(&M)", self)
         self.act_multi_send.setCheckable(True)
         self.act_multi_send.triggered.connect(self.toggle_multi_send)
         view_menu.addAction(self.act_multi_send)
@@ -584,7 +584,7 @@ class SerialTool(QMainWindow):
         display_save_layout = QHBoxLayout()
         display_save_layout.setSpacing(4)
 
-        self.check_hex_recv = QCheckBox("HEX显示")
+        self.check_hex_recv = QCheckBox("HEX 显示")
         self.check_hex_recv.setFont(QFont("Microsoft YaHei", 9))
         display_save_layout.addWidget(self.check_hex_recv)
 
@@ -620,7 +620,7 @@ class SerialTool(QMainWindow):
         self.combo_encoding.setMinimumWidth(80)
         display_save_layout.addWidget(self.combo_encoding)
 
-        self.check_timestamp = QCheckBox("显示时间")
+        self.check_timestamp = QCheckBox("显示时间戳")
         self.check_timestamp.setChecked(True)
         self.check_timestamp.setFont(QFont("Microsoft YaHei", 9))
         self.check_timestamp.stateChanged.connect(
@@ -640,7 +640,7 @@ class SerialTool(QMainWindow):
         main_layout.addWidget(serial_group)
 
         # --- 中间接收和发送区域（使用分割器）---
-        splitter = QSplitter(Qt.Vertical)
+        self.io_splitter = QSplitter(Qt.Vertical)
         
         # 接收区
         recv_group = QGroupBox("接收区")
@@ -698,7 +698,7 @@ class SerialTool(QMainWindow):
         stats_layout.addStretch()
 
         recv_layout.addLayout(stats_layout)
-        splitter.addWidget(recv_group)
+        self.io_splitter.addWidget(recv_group)
         
         # 发送区
         send_group = QGroupBox("发送区")
@@ -712,7 +712,7 @@ class SerialTool(QMainWindow):
         send_settings_layout.setSpacing(4)
 
         # 发送区设置：HEX发送
-        self.check_hex_send = QCheckBox("HEX发送")
+        self.check_hex_send = QCheckBox("HEX 发送")
         self.check_hex_send.setFont(QFont("Microsoft YaHei", 9))
         self.check_hex_send.stateChanged.connect(self._on_hex_send_toggled)
         send_settings_layout.addWidget(self.check_hex_send)
@@ -777,6 +777,8 @@ class SerialTool(QMainWindow):
         head_field_layout = QHBoxLayout()
         head_field_layout.setSpacing(4)
         self.check_head_field = QCheckBox()
+        self.check_head_field.setAccessibleName("启用发送首字段")
+        self.check_head_field.setToolTip("启用后在发送内容前附加首字段")
         head_field_layout.addWidget(self.check_head_field)
         head_label = QLabel("首字段:")
         head_label.setFont(QFont("Microsoft YaHei", 9))
@@ -792,6 +794,8 @@ class SerialTool(QMainWindow):
         tail_field_layout = QHBoxLayout()
         tail_field_layout.setSpacing(4)
         self.check_tail_field = QCheckBox()
+        self.check_tail_field.setAccessibleName("启用发送尾字段")
+        self.check_tail_field.setToolTip("启用后在发送内容后附加尾字段")
         tail_field_layout.addWidget(self.check_tail_field)
         tail_label = QLabel("尾字段:")
         tail_label.setFont(QFont("Microsoft YaHei", 9))
@@ -832,7 +836,6 @@ class SerialTool(QMainWindow):
         # 发送输入框
         self.text_send = QTextEdit()
         self.text_send.setMinimumHeight(40)
-        self.text_send.setMaximumHeight(100)  # 放宽上限，允许显示约 4 行
         self.text_send.setFont(QFont("Consolas", 11, QFont.Normal))
         self.text_send.setPlaceholderText("在此输入要发送的内容...")
         self.text_send.textChanged.connect(self._validate_hex_input)
@@ -877,25 +880,25 @@ class SerialTool(QMainWindow):
         self.btn_save_params.clicked.connect(self.save_config)
         send_buttons_layout.addWidget(self.btn_save_params)
 
-        self.btn_toggle_multi_send = QPushButton("显示多字符发送")
+        self.btn_toggle_multi_send = QPushButton("显示多字符串发送")
         self.btn_toggle_multi_send.setFont(QFont("Microsoft YaHei", 9))
         self.btn_toggle_multi_send.setMinimumWidth(110)
         self.btn_toggle_multi_send.clicked.connect(self.toggle_multi_send)
         send_buttons_layout.addWidget(self.btn_toggle_multi_send)
 
         send_layout.addLayout(send_buttons_layout)
-        splitter.addWidget(send_group)
+        self.io_splitter.addWidget(send_group)
         
         # 设置分割器的初始大小比例（接收区约 78%，发送区约 22%）
-        splitter.setSizes([700, 200])
+        self.io_splitter.setSizes([650, 250])
         
-        # 添加多字符发送区域（默认隐藏）
+        # 添加多字符串发送区域（默认隐藏）
         self.multi_send_widget = QWidget()
         self.multi_send_layout = QVBoxLayout(self.multi_send_widget)
         self.multi_send_layout.setContentsMargins(0, 0, 0, 0)
         self.multi_send_layout.setSpacing(8)
         
-        # 多字符发送组
+        # 多字符串发送组
         multi_send_group = QGroupBox("多字符串发送")
         multi_send_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         multi_send_group_layout = QVBoxLayout(multi_send_group)
@@ -1089,7 +1092,7 @@ class SerialTool(QMainWindow):
         
         self.multi_send_layout.addWidget(multi_send_group)
         
-        # 创建一个水平分割器，用于在右侧放置多字符发送区域
+        # 创建一个水平分割器，用于在右侧放置多字符串发送区域
         self.main_splitter = QSplitter(Qt.Horizontal)
         # 设置分割器手柄宽度
         self.main_splitter.setHandleWidth(8)
@@ -1105,11 +1108,11 @@ class SerialTool(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(4)
         left_layout.addWidget(serial_group)
-        left_layout.addWidget(splitter)
+        left_layout.addWidget(self.io_splitter)
         # 设置左侧内容的大小策略
         left_content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
-        # 创建右侧内容（多字符发送区域）
+        # 创建右侧内容（多字符串发送区域）
         right_content = QWidget()
         right_layout = QVBoxLayout(right_content)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -1122,10 +1125,7 @@ class SerialTool(QMainWindow):
         self.main_splitter.addWidget(left_content)
         self.main_splitter.addWidget(right_content)
         
-        # 设置分割器大小，左侧占90%，右侧占10%
-        self.main_splitter.setSizes([900, 100])
-        
-        # 初始隐藏多字符发送区域
+        # 初始隐藏多字符串发送区域
         right_content.hide()
         # 调整左侧大小
         self.main_splitter.setSizes([1000, 0])
@@ -1173,6 +1173,23 @@ class SerialTool(QMainWindow):
         self.status_version = QLabel(f"版本: {VERSION}")
         self.status_version.setFont(QFont("Microsoft YaHei", 9))
         self.statusBar().addPermanentWidget(self.status_version)
+
+        # 为主要操作建立稳定的键盘导航顺序，动态禁用的控件会由 Qt 自动跳过。
+        tab_order = (
+            self.combo_mode, self.combo_port, self.btn_refresh_serial,
+            self.combo_baud, self.btn_switch_serial, self.btn_more_settings_serial,
+            self.check_hex_recv, self.check_filter, self.edit_filter,
+            self.combo_filter_mode, self.combo_encoding, self.check_timestamp,
+            self.btn_clear_recv, self.check_hex_send, self.check_newline,
+            self.check_rts, self.check_dtr, self.combo_checksum,
+            self.check_repeat, self.spin_interval, self.check_head_field,
+            self.text_ota, self.check_tail_field, self.text_tail,
+            self.btn_select_file, self.btn_send_file, self.text_send,
+            self.btn_send, self.btn_stop, self.btn_clear_send,
+            self.btn_save_params, self.btn_toggle_multi_send,
+        )
+        for current, following in zip(tab_order, tab_order[1:]):
+            self.setTabOrder(current, following)
 
         # 应用初始主题（必须在所有控件创建之后调用）
         self.apply_theme(self.current_theme)
@@ -1961,13 +1978,19 @@ class SerialTool(QMainWindow):
                     # 使用互斥锁保护串口操作
                     try:
                         with QMutexLocker(self.serial_mutex):
-                            if hasattr(self, 'transport') and self.transport and self.transport.is_open:
-                                self.transport.write(data)
-                                self.transport.flush()
+                            if not (hasattr(self, 'transport') and self.transport
+                                    and self.transport.is_open):
+                                raise IOError("连接已关闭")
+                            bytes_written = self.transport.write(data)
+                            if bytes_written != len(data):
+                                raise IOError(
+                                    f"部分写入: 期望 {len(data)} 字节，实际 {bytes_written} 字节"
+                                )
+                            self.transport.flush()
                     except Exception as mutex_error:
                         raise Exception(f"串口操作失败: {mutex_error}")
-                    
-                    total_sent += len(data)
+
+                    total_sent += bytes_written
                     
                     # 更新进度（每发送10%更新一次）
                     progress = int((total_sent / file_size) * 100)
@@ -2463,17 +2486,16 @@ class SerialTool(QMainWindow):
             finally:
                 self.batch_thread = None
         
-        # 停止接收线程并关闭连接（需要互斥锁保护）
+        # 必须在传输锁外等待接收线程，否则线程可能正等同一把锁而形成锁反转。
+        read_thread = getattr(self, 'read_thread', None)
+        if read_thread and read_thread.isRunning():
+            try:
+                read_thread.stop()
+            except Exception as e:
+                print(f"停止接收线程失败: {e}")
+
+        # 关闭连接（需要互斥锁保护）
         with QMutexLocker(self.serial_mutex):
-            # 停止接收线程
-            if hasattr(self, 'read_thread') and self.read_thread and self.read_thread.isRunning():
-                try:
-                    self.read_thread.stop()
-                except Exception as e:
-                    print(f"停止接收线程失败: {e}")
-                finally:
-                    self.read_thread = None
-            
             # 关闭连接
             if hasattr(self, 'transport') and self.transport:
                 try:
@@ -2483,6 +2505,12 @@ class SerialTool(QMainWindow):
                     print(f"关闭连接失败: {e}")
                 finally:
                     self.transport = None
+
+        # 关闭 transport 后再给超时线程一次退出机会；仍未退出时保留引用。
+        if read_thread:
+            if read_thread.isRunning():
+                read_thread.wait(1000)
+            self.read_thread = read_thread if read_thread.isRunning() else None
         
         # 关闭日志文件
         if hasattr(self, 'current_log_file') and self.current_log_file:
@@ -2495,6 +2523,7 @@ class SerialTool(QMainWindow):
         
         # 清理线程池（设置超时时间，避免程序无法退出）
         if hasattr(self, 'thread_pool') and self.thread_pool:
+            self.stop_file_send = True
             # 先尝试温和地清理
             self.thread_pool.clear()
             
@@ -2525,6 +2554,10 @@ class SerialTool(QMainWindow):
         # 否则主窗口 save_config 保留的会是旧值，导致 OTA 指令修改丢失
         if hasattr(self, '_ota_dialog') and self._ota_dialog is not None:
             try:
+                if self._ota_dialog.server_thread:
+                    server_thread = self._ota_dialog.server_thread
+                    self._ota_dialog._stop_http_service()
+                    server_thread.wait(2000)
                 self._ota_dialog.close()
             except RuntimeError:
                 pass
@@ -3235,7 +3268,7 @@ class SerialTool(QMainWindow):
             return bytes([sum1, sum2])
     
     def on_send_multi_btn_clicked(self):
-        """处理多字符发送按钮点击，通过遍历查找sender所在行"""
+        """处理多字符串发送按钮点击，通过遍历查找sender所在行"""
         sender = self.sender()
         if sender:
             for row in range(self.table_multi_send.rowCount()):
@@ -3365,18 +3398,18 @@ class SerialTool(QMainWindow):
             self.append_text("[系统]: 已清空所有列表内指令\n")
     
     def toggle_multi_send(self):
-        """切换多字符发送区域的显示/隐藏状态"""
+        """切换多字符串发送区域的显示/隐藏状态"""
         right_content = self.main_splitter.widget(1)
         if right_content.isVisible():
             right_content.hide()
-            self.btn_toggle_multi_send.setText("显示多字符发送")
+            self.btn_toggle_multi_send.setText("显示多字符串发送")
             if hasattr(self, 'act_multi_send'):
                 self.act_multi_send.setChecked(False)
             # 调整左侧大小
             self.main_splitter.setSizes([1000, 0])
         else:
             right_content.show()
-            self.btn_toggle_multi_send.setText("隐藏多字符发送")
+            self.btn_toggle_multi_send.setText("隐藏多字符串发送")
             if hasattr(self, 'act_multi_send'):
                 self.act_multi_send.setChecked(True)
             # 确保所有相关组件的大小策略正确
@@ -3391,7 +3424,7 @@ class SerialTool(QMainWindow):
             self.main_splitter.setStretchFactor(1, 1)
             
             # 恢复分割器大小
-            self.main_splitter.setSizes([900, 100])
+            self.main_splitter.setSizes([600, 400])
             
             # 强制刷新布局
             self.main_splitter.update()
@@ -3402,23 +3435,23 @@ class SerialTool(QMainWindow):
         self.spin_cycle_count.setEnabled(state == 2)
     
     def show_multi_send_help(self):
-        """显示多字符发送使用教程"""
+        """显示多字符串发送使用教程"""
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QTextEdit
         
         dialog = QDialog(self)
-        dialog.setWindowTitle("多字符发送使用教程")
+        dialog.setWindowTitle("多字符串发送使用教程")
         dialog.setMinimumSize(500, 400)
         
         layout = QVBoxLayout(dialog)
         
         # 标题
-        title_label = QLabel("多字符发送使用教程")
+        title_label = QLabel("多字符串发送使用教程")
         title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
         layout.addWidget(title_label)
         
         # 内容
         help_text = """
-        多字符发送功能使用说明：
+        多字符串发送功能使用说明：
         
         1. 循环发送：
            - 勾选"循环发送"复选框，系统将按照顺序循环发送所有有效项目
@@ -3829,7 +3862,7 @@ class SerialTool(QMainWindow):
         if text_recv is not None and obj is text_recv.viewport() and event.type() == QEvent.Wheel:
             self._on_recv_wheel(event)
 
-        # ---- 右键重命名多字符发送按钮 ----
+        # ---- 右键重命名多字符串发送按钮 ----
         if event.type() == event.MouseButtonPress and event.button() == Qt.RightButton:
             table = getattr(self, 'table_multi_send', None)
             if table is not None and obj.objectName().startswith("btn_"):
@@ -5071,24 +5104,31 @@ class SerialTool(QMainWindow):
         import os
         from PyQt5.QtCore import QDateTime
         
+        previous_log_path = self.log_file_path if self.current_log_file else ""
         # 关闭当前文件（如果存在）
         if self.current_log_file:
             try:
                 self.current_log_file.close()
             except Exception as e:
                 self.append_text(f"[错误]: 关闭旧日志文件失败: {str(e)}\n")
+            finally:
+                self.current_log_file = None
         
         # 获取当前时间作为文件名的一部分
-        current_time = QDateTime.currentDateTime().toString("yyyyMMdd_HHmmss")
+        current_time = QDateTime.currentDateTime().toString("yyyyMMdd_HHmmss_zzz")
         self.log_file_count += 1
         
         # 创建默认文件名
-        default_filename = f"serial_data_{current_time}_{self.log_file_count}.txt"
+        default_filename = (
+            f"serial_data_{current_time}_{os.getpid()}_{self.log_file_count}.txt"
+        )
         
         try:
             # 确保保存目录存在
             if not os.path.exists(self.save_directory):
                 os.makedirs(self.save_directory)
+
+            self.rollover_log_files()
             
             # 检查磁盘空间
             import platform
@@ -5116,8 +5156,8 @@ class SerialTool(QMainWindow):
                 raise Exception("文件路径无效")
             
             # 检查是否需要备份当前文件（如果存在）
-            if self.current_log_file and self.log_file_path:
-                worker = FileOperationWorker(self.backup_current_file)
+            if previous_log_path and os.path.exists(previous_log_path):
+                worker = FileOperationWorker(self.backup_current_file, previous_log_path)
                 self.thread_pool.start(worker)
             
             # 打开文件
@@ -5280,26 +5320,38 @@ class SerialTool(QMainWindow):
             oldest_file = log_files.pop(0)
             try:
                 os.remove(oldest_file[1])
+                backup_path = oldest_file[1] + ".bak"
+                if os.path.isfile(backup_path):
+                    os.remove(backup_path)
                 self.append_text(f"[系统]: 已删除旧日志文件: {os.path.basename(oldest_file[1])}\n")
             except Exception as e:
                 self.append_text(f"[错误]: 删除旧日志文件失败: {str(e)}\n")
 
-    def backup_current_file(self):
+    def backup_current_file(self, signals=None, source_path=None):
         """备份当前日志文件"""
         import os
         import shutil
         
-        if not os.path.exists(self.log_file_path):
+        source_path = source_path or self.log_file_path
+        if not source_path or not os.path.exists(source_path):
             return
         
         try:
             # 创建备份文件名
-            backup_path = self.log_file_path + ".bak"
+            backup_path = source_path + ".bak"
             # 复制文件
-            shutil.copy2(self.log_file_path, backup_path)
-            self.append_text(f"[系统]: 已备份日志文件到: {os.path.basename(backup_path)}\n")
+            shutil.copy2(source_path, backup_path)
+            message = f"[系统]: 已备份日志文件到: {os.path.basename(backup_path)}"
+            if signals is not None:
+                signals.progress.emit(message)
+            else:
+                self.append_text(message + "\n")
         except Exception as e:
-            self.append_text(f"[错误]: 备份日志文件失败: {str(e)}\n")
+            message = f"[错误]: 备份日志文件失败: {str(e)}"
+            if signals is not None:
+                signals.progress.emit(message)
+            else:
+                self.append_text(message + "\n")
 
     def load_config(self):
         """加载配置文件"""
@@ -5447,7 +5499,7 @@ class SerialTool(QMainWindow):
                     else:
                         print(f"未找到保存的编码格式: {encoding}，使用默认UTF-8")
                 
-                # 加载多字符发送项目
+                # 加载多字符串发送项目
                 if 'multi_items' in config and isinstance(config['multi_items'], list):
                     # 清空现有项目
                     self.table_multi_send.setRowCount(0)
@@ -5532,6 +5584,18 @@ class SerialTool(QMainWindow):
                 if need_apply_theme:
                     self.apply_theme(self.current_theme)
 
+                # 窗口和分割器状态只接受有界十六进制字符串，避免损坏配置影响启动。
+                ui_state_targets = (
+                    ('window_geometry', self.restoreGeometry),
+                    ('main_splitter_state', self.main_splitter.restoreState),
+                    ('io_splitter_state', self.io_splitter.restoreState),
+                )
+                for key, restore in ui_state_targets:
+                    encoded = config.get(key, '')
+                    if (isinstance(encoded, str) and len(encoded) <= 16384
+                            and re.fullmatch(r'[0-9a-fA-F]*', encoded)):
+                        restore(QByteArray.fromHex(encoded.encode('ascii')))
+
                 self.append_text("[系统]: 配置已加载\n")
             except Exception as e:
                 self.append_text(f"[错误]: 加载配置失败: {str(e)}\n")
@@ -5546,7 +5610,7 @@ class SerialTool(QMainWindow):
         except ValueError:
             baudrate = 115200  # 默认值
         
-        # 保存多字符发送项目
+        # 保存多字符串发送项目
         multi_items = []
         for i in range(self.table_multi_send.rowCount()):
             try:
@@ -5634,6 +5698,14 @@ class SerialTool(QMainWindow):
             'encoding': self.combo_encoding.currentText(),
             # 主题设置
             'theme': self.current_theme,
+            # 窗口布局状态
+            'window_geometry': bytes(self.saveGeometry().toHex()).decode('ascii'),
+            'main_splitter_state': bytes(
+                self.main_splitter.saveState().toHex()
+            ).decode('ascii'),
+            'io_splitter_state': bytes(
+                self.io_splitter.saveState().toHex()
+            ).decode('ascii'),
         }
         
         # 保留已有的 OTA 配置（由 OTAControlCenter 独立管理）

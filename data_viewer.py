@@ -14,6 +14,7 @@ import re
 import time
 import datetime
 import shutil
+import codecs
 from collections import deque
 from typing import Optional
 
@@ -47,6 +48,7 @@ except ImportError:
 #  常量
 # ──────────────────────────────────────────────
 MAX_CAPTURE_ITEMS = 100_000          # 捕获列表最大条目
+MAX_CAPTURE_QUEUE_BYTES = 4 * 1024 * 1024  # 后台待解析队列最大字节数
 MAX_CURVE_POINTS = 50000            # 每条曲线最大原始点数（提升10倍，增加显示范围）
 BATCH_UPDATE_MS = 30                # 批量更新间隔 ms（低延迟）
 CHART_REFRESH_MS = 50               # 图表刷新间隔 ms
@@ -421,31 +423,23 @@ class CaptureTableModel(QAbstractTableModel):
 
         # 超限则丢弃最旧数据，需要完全重置模型
         if total > MAX_CAPTURE_ITEMS:
-            discard = total - MAX_CAPTURE_ITEMS
-            if discard >= len(new_items):
-                return  # 全部被丢弃
-            del self._items[:discard]
-            start = len(self._items)
-            # 有删除又有新增，直接全量刷新避免索引混乱
+            self.beginResetModel()
+            self._items = (self._items + new_items)[-MAX_CAPTURE_ITEMS:]
+            self._rebuild_filter_indices()
+            self.endResetModel()
+            return
+
+        if self._filter_enabled:
+            # 过滤视图的行号与全量数据不同，直接重置可避免发出错误的插入区间。
+            self.beginResetModel()
             self._items.extend(new_items)
-            if self._filter_enabled:
-                self._rebuild_filter()  # 内部有 beginResetModel/endResetModel
-            else:
-                self.beginResetModel()
-                self.endResetModel()
+            self._rebuild_filter_indices()
+            self.endResetModel()
             return
 
         self.beginInsertRows(QModelIndex(), start, start + len(new_items) - 1)
         self._items.extend(new_items)
         self.endInsertRows()
-
-        # 有筛选时增量更新筛选索引
-        if self._filter_enabled and self._filter_text:
-            txt = self._filter_text
-            for i in range(start, start + len(new_items)):
-                summary = self._items[i].get('summary', '').lower()
-                if txt in summary:
-                    self._filtered.append(i)
 
     def clear(self):
         self.beginResetModel()
@@ -492,16 +486,19 @@ class CaptureTableModel(QAbstractTableModel):
 
     def _rebuild_filter(self):
         self.beginResetModel()
+        self._rebuild_filter_indices()
+        self.endResetModel()
+
+    def _rebuild_filter_indices(self):
+        """重建过滤索引；调用方负责发送模型重置信号。"""
         self._filtered.clear()
         if not self._filter_enabled:
-            self.endResetModel()
             return
         txt = self._filter_text
         for i, item in enumerate(self._items):
             summary = item.get('summary', '').lower()
             if txt in summary:
                 self._filtered.append(i)
-        self.endResetModel()
 
     @property
     def total_count(self) -> int:
@@ -2434,6 +2431,7 @@ class JsonCaptureThread(QThread):
         self.custom_regex = ""          # 自定义正则模式
         self.protocol_template: ProtocolTemplate | None = None  # 二进制协议模板
         self._queue: deque[bytes] = deque()
+        self._queued_bytes = 0
         self._queue_mutex = QMutex()
         self._byte_buffer = bytearray()
         self.bytes_scanned = 0          # 已扫描字节数（主线程可读）
@@ -2442,14 +2440,22 @@ class JsonCaptureThread(QThread):
         self.running = val
 
     def enqueue_data(self, data: bytes):
+        if not data:
+            return
+        if len(data) > MAX_CAPTURE_QUEUE_BYTES:
+            data = data[-MAX_CAPTURE_QUEUE_BYTES:]
         with QMutexLocker(self._queue_mutex):
             self._queue.append(data)
+            self._queued_bytes += len(data)
+            while self._queued_bytes > MAX_CAPTURE_QUEUE_BYTES and len(self._queue) > 1:
+                self._queued_bytes -= len(self._queue.popleft())
 
     def run(self):
         while self.running:
             with QMutexLocker(self._queue_mutex):
                 if self._queue:
                     data = self._queue.popleft()
+                    self._queued_bytes -= len(data)
                 else:
                     data = None
 
@@ -2479,18 +2485,27 @@ class JsonCaptureThread(QThread):
         """通用解析：尝试 json.loads，返回 (raw, obj, summary, parse_error)"""
         obj = None
         summary = ""
+        parse_error = False
         try:
             obj = json.loads(raw)
             summary = _make_summary(obj)
         except json.JSONDecodeError:
             summary = raw[:SUMMARY_MAX_LEN] + "…"
             obj = None
-        return (raw, obj, summary, not obj)
+            parse_error = True
+        return (raw, obj, summary, parse_error)
+
+    def _decode_utf8_buffer(self) -> tuple[str, bytes]:
+        """解码完整 UTF-8 前缀，并保留跨数据块的不完整字节。"""
+        decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+        text = decoder.decode(bytes(self._byte_buffer), final=False)
+        pending, _ = decoder.getstate()
+        return text, pending
 
     def _extract_json_objects(self) -> list:
         """模式1：括号计数提取完整 JSON 对象（支持任意深度嵌套）"""
         batch = []
-        text = self._byte_buffer.decode('utf-8', errors='replace')
+        text, pending = self._decode_utf8_buffer()
         i = 0
         n = len(text)
         last_end = 0
@@ -2550,7 +2565,7 @@ class JsonCaptureThread(QThread):
             i = max(i, start + 1)
 
         if last_end > 0:
-            self._byte_buffer = bytearray(text[last_end:].encode('utf-8'))
+            self._byte_buffer = bytearray(text[last_end:].encode('utf-8') + pending)
         elif len(self._byte_buffer) > 256 * 1024:
             self._byte_buffer = self._byte_buffer[-65536:]
 
@@ -2559,19 +2574,18 @@ class JsonCaptureThread(QThread):
     def _extract_lines(self) -> list:
         """模式2：按行分割，逐行尝试；JSON行正常解析，非JSON行也保留原文"""
         batch = []
-        text = self._byte_buffer.decode('utf-8', errors='replace')
-        lines = text.split('\n')
-        incomplete = lines[-1]
-        complete_lines = lines[:-1]
+        byte_lines = bytes(self._byte_buffer).split(b'\n')
+        incomplete = byte_lines[-1]
+        complete_lines = byte_lines[:-1]
 
-        for line in complete_lines:
-            line = line.strip('\r')
+        for raw_line in complete_lines:
+            line = raw_line.decode('utf-8', errors='replace').strip('\r')
             if not line.strip():
                 continue
             # 尝试整行 JSON 解析
             batch.append(self._try_parse(line.strip()))
 
-        self._byte_buffer = bytearray(incomplete.encode('utf-8'))
+        self._byte_buffer = bytearray(incomplete)
         return batch
 
     def _extract_regex(self) -> list:
@@ -2579,7 +2593,7 @@ class JsonCaptureThread(QThread):
         if not self.custom_regex:
             return self._extract_json_objects()  # 回退
         batch = []
-        text = self._byte_buffer.decode('utf-8', errors='replace')
+        text, pending = self._decode_utf8_buffer()
         try:
             pattern = re.compile(self.custom_regex)
             seen_lines = set()  # 去重：同一行可能被多次匹配
@@ -2589,14 +2603,15 @@ class JsonCaptureThread(QThread):
                 line_start = text.rfind('\n', 0, m.start()) + 1
                 line_end = text.find('\n', m.end())
                 if line_end == -1:
-                    line_end = len(text)
+                    # 尾部没有换行时仍可能是跨数据块的半包，留待下次解析。
+                    break
                 raw = text[line_start:line_end].strip('\r')
                 if raw not in seen_lines:
                     seen_lines.add(raw)
                     batch.append(self._try_parse(raw))
                 last_end = max(last_end, line_end)
             if last_end > 0:
-                self._byte_buffer = bytearray(text[last_end:].encode('utf-8'))
+                self._byte_buffer = bytearray(text[last_end:].encode('utf-8') + pending)
             elif len(self._byte_buffer) > 256 * 1024:
                 self._byte_buffer = self._byte_buffer[-65536:]
         except re.error:
@@ -3225,6 +3240,7 @@ class JsonViewerDialog(QDialog):
         self.btn_help = QPushButton("?")
         self.btn_help.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
         self.btn_help.setFixedWidth(28)
+        self.btn_help.setAccessibleName("帮助")
         self.btn_help.setToolTip("查看使用说明")
         self.btn_help.clicked.connect(self._show_help)
         ctrl_layout.addWidget(self.btn_help)

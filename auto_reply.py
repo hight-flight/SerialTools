@@ -9,11 +9,12 @@
 - 全局开关和响应延迟控制
 """
 
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QComboBox, QPushButton, QLineEdit, QTextEdit,
                              QMessageBox, QTableWidget, QTableWidgetItem,
                              QHeaderView, QAbstractItemView, QGroupBox,
-                             QFrame, QCheckBox, QSpinBox, QFileDialog)
+                             QFrame, QCheckBox, QSpinBox, QFileDialog,
+                             QScrollArea, QSplitter, QWidget)
 from PyQt5.QtCore import Qt, QTimer, QMutexLocker
 from PyQt5.QtGui import QFont, QTextCursor
 
@@ -29,6 +30,7 @@ class AutoReplyDialog(QDialog):
         self._data_buffer = b''
         self._data_receiver = DataReceiver()
         self._data_receiver.data_received.connect(self._process_receive_data)
+        self._response_timers = set()
         import os
         self._last_rules_dir = os.path.join(os.path.expanduser('~'), '.serial_GUI')
         self._init_ui()
@@ -36,44 +38,68 @@ class AutoReplyDialog(QDialog):
 
     def _init_ui(self):
         self.setWindowTitle("自动应答配置")
-        self.setMinimumSize(750, 550)
+        self.resize(780, 760)
+        self.setMinimumSize(560, 420)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
-        layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(4, 4, 4, 4)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setAccessibleName("自动应答配置内容")
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setSpacing(8)
 
         self._build_global_options(layout)
-        self._build_rules_table(layout)
-        self._build_rule_editor(layout)
-        self._build_log_area(layout)
+
+        self.reply_sections_splitter = QSplitter(Qt.Vertical)
+        self.reply_sections_splitter.setObjectName("replySectionsSplitter")
+        self.reply_sections_splitter.setChildrenCollapsible(False)
+        for builder in (
+                self._build_rules_table,
+                self._build_rule_editor,
+                self._build_log_area):
+            section = QWidget()
+            section_layout = QVBoxLayout(section)
+            section_layout.setContentsMargins(0, 0, 0, 0)
+            builder(section_layout)
+            self.reply_sections_splitter.addWidget(section)
+        self.reply_sections_splitter.setSizes([220, 180, 140])
+        layout.addWidget(self.reply_sections_splitter, 1)
+
         self._build_buttons_bar(layout)
+        self.scroll_area.setWidget(content)
+        outer_layout.addWidget(self.scroll_area)
 
     def _build_global_options(self, parent_layout):
         global_group = QGroupBox("全局设置")
-        global_layout = QHBoxLayout(global_group)
-        global_layout.setSpacing(16)
+        global_layout = QGridLayout(global_group)
+        global_layout.setHorizontalSpacing(16)
+        global_layout.setVerticalSpacing(8)
 
         self.check_enable = QCheckBox("启用自动应答")
-        global_layout.addWidget(self.check_enable)
+        global_layout.addWidget(self.check_enable, 0, 0)
 
-        global_layout.addWidget(QLabel("响应延迟:"))
+        global_layout.addWidget(QLabel("响应延迟："), 0, 1)
         self.spin_delay = QSpinBox()
         self.spin_delay.setRange(0, 5000)
         self.spin_delay.setValue(100)
         self.spin_delay.setSuffix(" ms")
         self.spin_delay.setMaximumWidth(120)
-        global_layout.addWidget(self.spin_delay)
+        global_layout.addWidget(self.spin_delay, 0, 2)
 
         self.check_case_ignore = QCheckBox("忽略大小写")
-        global_layout.addWidget(self.check_case_ignore)
+        global_layout.addWidget(self.check_case_ignore, 1, 0)
 
         self.check_stop_after_match = QCheckBox("匹配后停止")
-        global_layout.addWidget(self.check_stop_after_match)
+        global_layout.addWidget(self.check_stop_after_match, 1, 1)
 
         self.check_log_to_receive = QCheckBox("发送后记录到接收区")
-        global_layout.addWidget(self.check_log_to_receive)
+        global_layout.addWidget(self.check_log_to_receive, 1, 2)
 
-        global_layout.addStretch()
+        global_layout.setColumnStretch(3, 1)
         parent_layout.addWidget(global_group)
 
     def _build_rules_table(self, parent_layout):
@@ -556,10 +582,23 @@ class AutoReplyDialog(QDialog):
         for i, rule in enumerate(rules_data):
             if not isinstance(rule, dict):
                 return False, f"第{i+1}条规则格式错误：不是对象"
-            if 'trigger' not in rule or not isinstance(rule['trigger'], str):
+            if ('trigger' not in rule or not isinstance(rule['trigger'], str)
+                    or not rule['trigger'].strip()):
                 return False, f"第{i+1}条规则缺少或无效的触发条件"
-            if 'response' not in rule or not isinstance(rule['response'], str):
+            if ('response' not in rule or not isinstance(rule['response'], str)
+                    or not rule['response'].strip()):
                 return False, f"第{i+1}条规则缺少或无效的响应内容"
+            if rule.get('match_mode', '文本包含') not in ('文本包含', '文本完全', 'HEX匹配'):
+                return False, f"第{i+1}条规则的匹配模式无效"
+            if rule.get('response_format', '文本') not in ('文本', 'HEX'):
+                return False, f"第{i+1}条规则的响应格式无效"
+            if not isinstance(rule.get('enabled', True), bool):
+                return False, f"第{i+1}条规则的 enabled 必须是布尔值"
+            max_count = rule.get('max_count', 0)
+            if not isinstance(max_count, int) or isinstance(max_count, bool) or max_count < 0:
+                return False, f"第{i+1}条规则的 max_count 必须是非负整数"
+            if not isinstance(rule.get('newline', False), bool):
+                return False, f"第{i+1}条规则的 newline 必须是布尔值"
 
         return True, ""
 
@@ -702,7 +741,7 @@ class AutoReplyDialog(QDialog):
             if matched_any:
                 self._data_buffer = b''
             elif len(self._data_buffer) > 4096:
-                self._data_buffer = b''
+                self._data_buffer = self._data_buffer[-4096:]
 
         except Exception:
             pass
@@ -723,7 +762,16 @@ class AutoReplyDialog(QDialog):
             delay = self.spin_delay.value()
             timer = QTimer(self)
             timer.setSingleShot(True)
-            timer.timeout.connect(lambda rd=response_data: self._do_send(rd))
+            self._response_timers.add(timer)
+
+            def send_and_release(rd=response_data, active_timer=timer):
+                try:
+                    self._do_send(rd)
+                finally:
+                    self._response_timers.discard(active_timer)
+                    active_timer.deleteLater()
+
+            timer.timeout.connect(send_and_release)
             timer.start(delay)
 
             self._append_log(f"发送响应: {rule['response'][:50]}...")

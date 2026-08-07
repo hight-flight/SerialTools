@@ -1,34 +1,43 @@
+# -*- coding: utf-8 -*-
 """
 主题模块：颜色常量、QSS 样式表、对话框主题应用工具函数。
 """
 
-VERSION = "1.3.5"
+VERSION = "1.3.6"
 
 import platform
+import re
 
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import QApplication
 
 
+_TEXT_ESCAPE_PATTERN = re.compile(
+    r"\\(?:[\\rntbfva]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})"
+)
+
+
 def unescape_text(text):
-    """将字面转义序列解码为实际控制字符。
+    """解析受支持的字面转义，同时保持普通 Unicode 文本不变。"""
+    simple_escapes = {
+        r"\\": "\\", r"\r": "\r", r"\n": "\n", r"\t": "\t",
+        r"\b": "\b", r"\f": "\f", r"\v": "\v", r"\a": "\a",
+    }
 
-    使用 Python 标准 unicode_escape 解码器，支持：
-        \\\\  →  \\
-        \\r   →  CR  (0x0D, 回车)
-        \\n   →  LF  (0x0A, 换行)
-        \\t   →  TAB (0x09, 制表符)
-        \\xNN →  十六进制字节（如 \\x0D → 0x0D）
-        \\uNNNN / \\UNNNNNNNN → Unicode 字符
+    def replace_escape(match):
+        token = match.group(0)
+        if token in simple_escapes:
+            return simple_escapes[token]
+        digit_counts = {"x": 2, "u": 4, "U": 8}
+        prefix = token[1]
+        digits = token[2:2 + digit_counts[prefix]]
+        try:
+            return chr(int(digits, 16))
+        except (ValueError, OverflowError):
+            return token
 
-    解码失败时返回原文，不影响发送流程。
-    """
-    import codecs
-    try:
-        return codecs.decode(text, 'unicode_escape')
-    except Exception:
-        return text
+    return _TEXT_ESCAPE_PATTERN.sub(replace_escape, text)
 
 
 class DataReceiver(QObject):
@@ -116,13 +125,14 @@ QLineEdit {
 }
 QLineEdit:focus { border-color: #528BFF; }
 QLineEdit:read-only { background-color: #21252B; }
+QLineEdit:disabled { background-color: #21252B; color: #9AA2B4; }
 QComboBox {
     background-color: #2C313C; color: #ABB2BF;
     border: 1px solid #3E4451; border-radius: 4px; padding: 4px 8px;
 }
 QComboBox:hover { border-color: #528BFF; }
 QComboBox:focus { border-color: #528BFF; }
-QComboBox:disabled { background-color: #21252B; color: #7A8294; }
+QComboBox:disabled { background-color: #21252B; color: #9AA2B4; }
 QComboBox::drop-down { border: none; width: 22px; }
 QComboBox::down-arrow { image: url(__ARROW_DARK__); width: 12px; height: 12px; }
 QComboBox QAbstractItemView {
@@ -138,8 +148,15 @@ QPushButton:hover    { background-color: #3E4451; }
 QPushButton:pressed  { background-color: #21252B; }
 QPushButton:checked  { background-color: #528BFF; color: #FFFFFF; }
 QPushButton:checked:hover { background-color: #61AFEF; }
-QPushButton:disabled { background-color: #21252B; color: #7A8294; }
+QPushButton:focus { border: 2px solid #61AFEF; padding: 3px 11px; }
+QPushButton:disabled { background-color: #21252B; color: #9AA2B4; }
+QPushButton[danger="true"] {
+    background-color: #5C2B31; color: #FFB3B8; border-color: #A64B55;
+}
+QPushButton[danger="true"]:hover { background-color: #71343C; color: #FFFFFF; }
 QCheckBox   { color: #ABB2BF; spacing: 6px; }
+QCheckBox:focus { color: #FFFFFF; }
+QCheckBox:disabled { color: #9AA2B4; }
 QCheckBox::indicator {
     background-color: #2C313C; border: 1px solid #3E4451;
     border-radius: 3px; width: 16px; height: 16px;
@@ -153,7 +170,7 @@ QSpinBox {
     border: 1px solid #3E4451; border-radius: 4px; padding: 4px 4px;
 }
 QSpinBox:focus { border-color: #528BFF; }
-QSpinBox:disabled { background-color: #21252B; color: #7A8294; }
+QSpinBox:disabled { background-color: #21252B; color: #9AA2B4; }
 QTableView, QTableWidget {
     background-color: #2C313C; color: #ABB2BF;
     border: 1px solid #3E4451; gridline-color: #3E4451;
@@ -181,6 +198,8 @@ QStatusBar::item { border: none; }
 QSplitter::handle { background-color: #3E4451; }
 QSplitter::handle:hover { background-color: #4B5363; }
 QSplitter::handle:pressed { background-color: #5C6370; }
+QScrollArea { background-color: #282C34; border: none; }
+QScrollArea > QWidget > QWidget { background-color: #282C34; }
 QScrollBar:vertical {
     background-color: #282C34; width: 12px; border-radius: 6px; margin: 0;
 }
@@ -260,6 +279,7 @@ QLineEdit {
 }
 QLineEdit:focus { border-color: #005A9E; }
 QLineEdit:read-only { background-color: #F0F0F0; }
+QLineEdit:disabled { background-color: #F0F0F0; color: #666666; }
 QComboBox {
     background-color: rgba(255, 255, 255, 230); color: #333333;
     border: 1px solid #CCCCCC; border-radius: 4px; padding: 4px 8px;
@@ -282,8 +302,15 @@ QPushButton:hover    { background-color: #D0D0D0; }
 QPushButton:pressed  { background-color: #C0C0C0; }
 QPushButton:checked  { background-color: #0078D4; color: #FFFFFF; }
 QPushButton:checked:hover { background-color: #168BE0; }
-QPushButton:disabled { background-color: #F0F0F0; color: #767676; }
+QPushButton:focus { border: 2px solid #005A9E; padding: 3px 11px; }
+QPushButton:disabled { background-color: #F0F0F0; color: #666666; }
+QPushButton[danger="true"] {
+    background-color: #FDE7E9; color: #A4262C; border-color: #D13438;
+}
+QPushButton[danger="true"]:hover { background-color: #F8D7DA; }
 QCheckBox   { color: #333333; spacing: 6px; }
+QCheckBox:focus { color: #005A9E; }
+QCheckBox:disabled { color: #666666; }
 QCheckBox::indicator {
     background-color: #FFFFFF; border: 1px solid #AAAAAA;
     border-radius: 3px; width: 16px; height: 16px;
@@ -325,6 +352,8 @@ QStatusBar::item { border: none; }
 QSplitter::handle { background-color: #CCCCCC; }
 QSplitter::handle:hover { background-color: #AAAAAA; }
 QSplitter::handle:pressed { background-color: #999999; }
+QScrollArea { background-color: #F5F5F5; border: none; }
+QScrollArea > QWidget > QWidget { background-color: #F5F5F5; }
 QScrollBar:vertical {
     background-color: #F5F5F5; width: 12px; border-radius: 6px; margin: 0;
 }

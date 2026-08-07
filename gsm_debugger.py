@@ -10,12 +10,14 @@ GSM/Modem AT指令调试助手
 - 状态监控：信号强度、SIM状态、网络注册状态
 """
 
+import csv
+
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QComboBox, QPushButton, QLineEdit, QTextEdit,
                              QMessageBox, QTableWidget, QTableWidgetItem,
                              QHeaderView, QAbstractItemView, QGroupBox,
                              QFrame, QSizePolicy, QCheckBox, QTabWidget,
-                             QWidget)
+                             QWidget, QScrollArea)
 from PyQt5.QtCore import Qt, QTimer, QMutexLocker
 from PyQt5.QtGui import QFont, QTextCursor, QColor
 
@@ -29,16 +31,32 @@ class GSMDebuggerDialog(QDialog):
         self._data_buffer = b''
         self._data_receiver = DataReceiver()
         self._data_receiver.data_received.connect(self._process_receive_data)
+        self._sms_send_state = 'idle'
+        self._pending_sms = None
+        self._pending_cmgl = None
+        self._sms_response_timer = QTimer(self)
+        self._sms_response_timer.setSingleShot(True)
+        self._sms_response_timer.timeout.connect(self._on_sms_timeout)
         self._init_ui()
         self.setAttribute(Qt.WA_DeleteOnClose)
 
     def _init_ui(self):
         self.setWindowTitle("GSM 调试助手")
-        self.setMinimumSize(720, 620)
+        self.resize(760, 620)
+        self.setMinimumSize(560, 460)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
-        layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(4, 4, 4, 4)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setAccessibleName("GSM 调试功能")
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setSpacing(8)
+        self.scroll_area.setWidget(content)
+        outer_layout.addWidget(self.scroll_area)
 
         # ── 标签页：按功能域分组，降低单屏按钮密度 ──
         self.tab_widget = QTabWidget()
@@ -201,6 +219,7 @@ class GSMDebuggerDialog(QDialog):
             btn.setMinimumWidth(90)
             btn.setToolTip(cmd)
             if label in dangerous_commands:
+                self._mark_dangerous_button(btn, label)
                 btn.clicked.connect(lambda checked, c=cmd, l=label: self._send_dangerous_command(c, l))
             else:
                 btn.clicked.connect(lambda checked, c=cmd: self._send_command(c))
@@ -225,8 +244,9 @@ class GSMDebuggerDialog(QDialog):
         for label, cmd in control_row3:
             btn = QPushButton(label)
             btn.setMinimumWidth(90)
-            btn.setToolTip(cmd + " (危险操作)")
-            btn.clicked.connect(lambda checked, c=cmd: self._send_dangerous_command(c, label))
+            btn.setToolTip(cmd + "（危险操作）")
+            self._mark_dangerous_button(btn, label)
+            btn.clicked.connect(lambda checked, c=cmd, l=label: self._send_dangerous_command(c, l))
             row3_layout.addWidget(btn)
         row3_layout.addStretch()
         control_layout.addLayout(row3_layout)
@@ -374,6 +394,13 @@ class GSMDebuggerDialog(QDialog):
 
         parent_layout.addLayout(options_layout)
 
+    @staticmethod
+    def _mark_dangerous_button(button, label):
+        """为会改变设备状态的操作增加统一视觉和无障碍提示。"""
+        button.setProperty("danger", True)
+        button.setAccessibleName(f"危险操作：{label}")
+        button.setAccessibleDescription("此操作会改变设备状态，执行前需要再次确认")
+
     def _send_dangerous_command(self, command, label):
         """发送危险指令前弹确认框。"""
         reply = QMessageBox.question(
@@ -400,10 +427,14 @@ class GSMDebuggerDialog(QDialog):
 
         try:
             with QMutexLocker(self.parent_window.serial_mutex):
-                self.parent_window.transport.write(data)
+                written = self.parent_window.transport.write(data)
+            if written is not None and written != len(data):
+                raise IOError(f"仅发送 {written}/{len(data)} 字节")
             self._append_sent_command(f">>> {command}")
+            return True
         except Exception as e:
             QMessageBox.warning(self, "发送失败", f"发送命令失败: {e}")
+            return False
 
     def _send_command_from_input(self):
         command = self.edit_command.text().strip()
@@ -422,26 +453,35 @@ class GSMDebuggerDialog(QDialog):
         if not content:
             QMessageBox.warning(self, "输入错误", "请输入短信内容")
             return
+        if self._sms_send_state != 'idle':
+            QMessageBox.warning(self, "操作繁忙", "上一条短信仍在发送，请等待模块响应")
+            return
 
-        self._send_command('AT+CMGF=1')
-        QTimer.singleShot(300, lambda: self._send_sms_content(phone, content))
+        self._pending_sms = (phone, content)
+        self._sms_send_state = 'waiting_text_mode'
+        if self._send_command('AT+CMGF=1'):
+            self._sms_response_timer.start(10000)
+        else:
+            self._finish_sms_send(False, "无法发送短信模式命令")
 
     def _send_sms_content(self, phone, content):
-        cmd = f'AT+CMGS="{phone}"'
-        self._send_command(cmd)
-        QTimer.singleShot(500, lambda: self._send_sms_data(content))
+        return self._send_command(f'AT+CMGS="{phone}"')
 
     def _send_sms_data(self, content):
         if not hasattr(self.parent_window, 'transport') or not self.parent_window.transport or not self.parent_window.transport.is_open:
             QMessageBox.warning(self, "连接错误", "串口连接已断开")
-            return
+            return False
         data = unescape_text(content).encode('utf-8') + b'\x1A'
         try:
             with QMutexLocker(self.parent_window.serial_mutex):
-                self.parent_window.transport.write(data)
+                written = self.parent_window.transport.write(data)
+            if written is not None and written != len(data):
+                raise IOError(f"仅发送 {written}/{len(data)} 字节")
             self._append_sent_command(f">>> {content} (Ctrl+Z)")
+            return True
         except Exception as e:
             QMessageBox.warning(self, "发送失败", f"发送短信失败: {e}")
+            return False
 
     def _read_sms(self):
         self._clear_sms_list()
@@ -543,6 +583,15 @@ class GSMDebuggerDialog(QDialog):
             else:
                 encoding = 'UTF-8'
 
+            # 短信正文提示符通常没有换行，需要直接从字节流识别。
+            if self._sms_send_state == 'waiting_prompt' and b'>' in self._data_buffer:
+                prompt_end = self._data_buffer.index(b'>') + 1
+                prompt_bytes = self._data_buffer[:prompt_end]
+                self._data_buffer = self._data_buffer[prompt_end:].lstrip(b' ')
+                prompt = prompt_bytes.decode(encoding, errors='replace').strip()
+                self._append_response(prompt)
+                self._parse_response(prompt)
+
             # 使用 bytes 分割避免编解码往返损坏数据
             if b'\n' in self._data_buffer:
                 byte_lines = self._data_buffer.split(b'\n')
@@ -555,6 +604,7 @@ class GSMDebuggerDialog(QDialog):
                         line = byte_line.decode('utf-8', errors='replace').replace('\r', '')
                     if line:
                         self._append_response(line)
+                    if line or self._pending_cmgl is not None:
                         self._parse_response(line)
             elif len(self._data_buffer) > 4096:
                 # 缓冲区溢出时强制刷新
@@ -572,7 +622,45 @@ class GSMDebuggerDialog(QDialog):
 
     def _parse_response(self, line):
         line = line.strip()
-        
+
+        if self._pending_cmgl is not None:
+            pending = self._pending_cmgl
+            self._pending_cmgl = None
+            self._append_sms_row(pending, line)
+            return
+
+        upper_line = line.upper()
+        if self._sms_send_state == 'waiting_text_mode':
+            if upper_line == 'OK' and self._pending_sms:
+                phone, content = self._pending_sms
+                self._sms_send_state = 'waiting_prompt'
+                if self._send_sms_content(phone, content):
+                    self._sms_response_timer.start(10000)
+                else:
+                    self._finish_sms_send(False, "无法发送收件人号码")
+                return
+            if 'ERROR' in upper_line:
+                self._finish_sms_send(False, line)
+                return
+        elif self._sms_send_state == 'waiting_prompt':
+            if '>' in line and self._pending_sms:
+                _phone, content = self._pending_sms
+                self._sms_send_state = 'waiting_result'
+                if self._send_sms_data(content):
+                    self._sms_response_timer.start(30000)
+                else:
+                    self._finish_sms_send(False, "无法发送短信正文")
+                return
+            if 'ERROR' in upper_line:
+                self._finish_sms_send(False, line)
+                return
+        elif self._sms_send_state == 'waiting_result':
+            if upper_line == 'OK':
+                self._finish_sms_send(True, line)
+                return
+            if 'ERROR' in upper_line:
+                self._finish_sms_send(False, line)
+                return
         if line.startswith('+CSQ:'):
             try:
                 parts = line.split(':')[1].strip().split(',')
@@ -656,39 +744,53 @@ class GSMDebuggerDialog(QDialog):
         
         elif line.startswith('+CMGL:'):
             try:
-                parts = line.split(':')[1].strip().split(',')
-                if len(parts) >= 5:
-                    sms_index = parts[0].strip().strip('"')
-                    stat_code = parts[1].strip().strip('"')
-                    phone = parts[2].strip().strip('"')
-                    date = parts[3].strip().strip('"') + ' ' + parts[4].strip().strip('"')
-                    content = parts[5].strip().strip('"') if len(parts) > 5 else ""
-
-                    # 状态码转可读文字
+                fields = next(csv.reader(
+                    [line.split(':', 1)[1].strip()], skipinitialspace=True
+                ))
+                if len(fields) >= 5:
                     status_map = {
-                        "REC UNREAD": "未读",
-                        "REC READ": "已读",
-                        "STO UNSENT": "待发",
-                        "STO SENT": "已发",
-                        "ALL": "全部",
+                        "REC UNREAD": "未读", "REC READ": "已读",
+                        "STO UNSENT": "待发", "STO SENT": "已发", "ALL": "全部",
                     }
-                    status_text = status_map.get(stat_code, stat_code)
+                    status_code = fields[1].strip()
+                    self._pending_cmgl = {
+                        'index': fields[0].strip(),
+                        'phone': fields[2].strip(),
+                        'date': fields[4].strip(),
+                        'status': status_map.get(status_code, status_code),
+                    }
+            except (csv.Error, IndexError):
+                self._pending_cmgl = None
 
-                    # 第一条数据时清除空状态行
-                    if self.table_sms.rowCount() == 1:
-                        first_item = self.table_sms.item(0, 0)
-                        if first_item and first_item.text().startswith("暂无"):
-                            self.table_sms.setRowCount(0)
+    def _append_sms_row(self, header, content):
+        """把 CMGL 头部与紧随其后的短信正文合并到表格。"""
+        if self.table_sms.rowCount() == 1:
+            first_item = self.table_sms.item(0, 0)
+            if first_item and first_item.text().startswith("暂无"):
+                self.table_sms.clearSpans()
+                self.table_sms.setRowCount(0)
+        row = self.table_sms.rowCount()
+        self.table_sms.insertRow(row)
+        self.table_sms.setItem(row, 0, QTableWidgetItem(header['index']))
+        self.table_sms.setItem(row, 1, QTableWidgetItem(header['phone']))
+        self.table_sms.setItem(row, 2, QTableWidgetItem(header['date']))
+        self.table_sms.setItem(row, 3, QTableWidgetItem(header['status']))
+        self.table_sms.setItem(row, 4, QTableWidgetItem(content))
 
-                    row = self.table_sms.rowCount()
-                    self.table_sms.insertRow(row)
-                    self.table_sms.setItem(row, 0, QTableWidgetItem(sms_index))
-                    self.table_sms.setItem(row, 1, QTableWidgetItem(phone))
-                    self.table_sms.setItem(row, 2, QTableWidgetItem(date))
-                    self.table_sms.setItem(row, 3, QTableWidgetItem(status_text))
-                    self.table_sms.setItem(row, 4, QTableWidgetItem(content))
-            except:
-                pass
+    def _on_sms_timeout(self):
+        """模块在限定时间内未响应时终止当前短信事务。"""
+        if self._sms_send_state != 'idle':
+            self._finish_sms_send(False, "等待模块响应超时")
+
+    def _finish_sms_send(self, success, response):
+        """结束短信发送状态机，允许下一条短信开始。"""
+        self._sms_response_timer.stop()
+        if success:
+            self._append_response("短信发送完成")
+        else:
+            self._append_response(f"短信发送失败: {response}")
+        self._sms_send_state = 'idle'
+        self._pending_sms = None
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
@@ -697,6 +799,7 @@ class GSMDebuggerDialog(QDialog):
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
+        self._sms_response_timer.stop()
         if hasattr(self.parent_window, '_gsm_dialog'):
             self.parent_window._gsm_dialog = None
         event.accept()
