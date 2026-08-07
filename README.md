@@ -116,6 +116,7 @@ SerialTools/
 | 平台 | 单文件版 | 便携版 | 安装包 |
 |------|------------|--------|--------|
 | Windows | `dist/SerialTool.exe` | `dist/SerialTool/` | `dist/SerialTool_Setup.exe` |
+| Ubuntu 20.04+ | — | `dist/linux20/SerialTool-<版本>-ubuntu20.04-<架构>.tar.gz` | `dist/linux20/SerialTool-<版本>-ubuntu20.04-<架构>.deb` |
 | Ubuntu 22.04+ | — | `dist/linux/SerialTool-<版本>-ubuntu22.04-<架构>.tar.gz` | `dist/linux/SerialTool-<版本>-ubuntu22.04-<架构>.deb` |
 
 Windows 和 Ubuntu 二进制文件必须分别在对应系统中构建，不能跨平台生成。
@@ -152,6 +153,16 @@ chmod +x build_ubuntu.sh
 ```
 
 脚本会自动创建缓存虚拟环境、按哈希安装锁定依赖并调用 PyInstaller。构建结果位于 `dist/linux/`，同时生成 `.deb`、便携包和 `SHA256SUMS`。完整说明见 [Ubuntu 发布包文档](packaging/linux/README.md)。
+
+### Ubuntu 20.04+
+
+Ubuntu 20.04 兼容包使用独立入口，必须在 Ubuntu 20.04 中通过 Python 3.10+ 构建：
+
+```bash
+bash build_ubuntu20.sh --install-system-deps
+```
+
+构建结果位于 `dist/linux20/`，不会覆盖 Ubuntu 22.04 产物。完整说明见 [Ubuntu 20.04 独立构建文档](Ubuntu20.04打包使用说明.md)。
 
 ---
 

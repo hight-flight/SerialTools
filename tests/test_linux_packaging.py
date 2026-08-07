@@ -1,5 +1,6 @@
 import importlib.util
 import hashlib
+import inspect
 import os
 import stat
 import tarfile
@@ -14,6 +15,8 @@ from unittest import mock
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = PROJECT_ROOT / "packaging" / "linux" / "build_linux.py"
 BUILD_WRAPPER = PROJECT_ROOT / "build_ubuntu.sh"
+BUILD_2004_SCRIPT = PROJECT_ROOT / "packaging" / "linux" / "build_linux_2004.py"
+BUILD_2004_WRAPPER = PROJECT_ROOT / "build_ubuntu20.sh"
 GIT_ATTRIBUTES = PROJECT_ROOT / ".gitattributes"
 RELEASE_REQUIREMENTS = (
     PROJECT_ROOT / "requirements-release-linux.txt",
@@ -52,17 +55,19 @@ class LinuxPackagingTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "Shell 行为在 Linux 环境验证")
     @unittest.skipUnless(shutil.which("bash"), "当前环境没有 Bash")
     def test一键脚本语法有效(self):
-        self.assertTrue(BUILD_WRAPPER.is_file(), "缺少 Ubuntu 一键打包脚本")
-        result = subprocess.run(
-            ["bash", "-n", os.fspath(BUILD_WRAPPER)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        for wrapper in (BUILD_WRAPPER, BUILD_2004_WRAPPER):
+            with self.subTest(wrapper=wrapper.name):
+                self.assertTrue(wrapper.is_file(), f"缺少一键打包脚本：{wrapper.name}")
+                result = subprocess.run(
+                    ["bash", "-n", os.fspath(wrapper)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
 
-        if os.name != "nt":
-            self.assertTrue(BUILD_WRAPPER.stat().st_mode & stat.S_IXUSR)
+                if os.name != "nt":
+                    self.assertTrue(wrapper.stat().st_mode & stat.S_IXUSR)
 
     @unittest.skipIf(os.name == "nt", "Shell 行为在 Linux 环境验证")
     @unittest.skipUnless(shutil.which("bash"), "当前环境没有 Bash")
@@ -87,10 +92,135 @@ class LinuxPackagingTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertIn("Ubuntu 22.04", result.stderr)
 
+    @unittest.skipIf(os.name == "nt", "Shell 行为在 Linux 环境验证")
+    @unittest.skipUnless(shutil.which("bash"), "当前环境没有 Bash")
+    def test独立ubuntu2004脚本拒绝ubuntu2204(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            release_file = Path(temp_dir) / "os-release"
+            release_file.write_text(
+                'ID=ubuntu\nVERSION_ID="22.04"\n',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["bash", os.fspath(BUILD_2004_WRAPPER)],
+                env={
+                    **os.environ,
+                    "SERIALTOOL_OS_RELEASE_FILE": os.fspath(release_file),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Ubuntu 20.04", result.stderr)
+
     def test_shell脚本在windows检出时保持lf换行(self):
         self.assertTrue(GIT_ATTRIBUTES.is_file(), "缺少 .gitattributes")
         attributes = GIT_ATTRIBUTES.read_text(encoding="utf-8")
         self.assertIn("*.sh text eol=lf", attributes)
+
+    def test独立ubuntu2004构建入口声明正确基线(self):
+        self.assertTrue(BUILD_2004_WRAPPER.is_file(), "缺少 Ubuntu 20.04 一键脚本")
+        self.assertTrue(BUILD_2004_SCRIPT.is_file(), "缺少 Ubuntu 20.04 底层构建器")
+
+        wrapper = BUILD_2004_WRAPPER.read_text(encoding="utf-8")
+        builder = BUILD_2004_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('VERSION_ID:-}" != "20.04"', wrapper)
+        self.assertIn("SERIALTOOL_PYTHON", wrapper)
+        self.assertIn("build_linux_2004.py", wrapper)
+        self.assertIn("dist/linux20", wrapper)
+        self.assertIn('UBUNTU_BASELINE = "20.04"', builder)
+        self.assertIn('GLIBC_BASELINE = "2.31"', builder)
+
+    def test共享构建器支持ubuntu2004独立参数(self):
+        builder = self._load_module()
+
+        self.assertIn("glibc_baseline", inspect.signature(builder.debian_control).parameters)
+        self.assertIn(
+            "ubuntu_baseline",
+            inspect.signature(builder.build_portable_archive).parameters,
+        )
+        self.assertIn(
+            "ubuntu_baseline",
+            inspect.signature(builder.build_deb_package).parameters,
+        )
+        self.assertIn("ubuntu_baseline", inspect.signature(builder.main).parameters)
+
+        control = builder.debian_control(
+            "1.3.5",
+            "amd64",
+            glibc_baseline="2.31",
+        )
+        self.assertIn("libc6 (>= 2.31)", control)
+
+    def test共享构建器默认行为仍为ubuntu2204(self):
+        builder = self._load_module()
+
+        self.assertIn("libc6 (>= 2.35)", builder.debian_control("1.3.5", "amd64"))
+        signature = inspect.signature(builder.main)
+        self.assertIn("ubuntu_baseline", signature.parameters)
+        self.assertIn("glibc_baseline", signature.parameters)
+        self.assertEqual(signature.parameters["ubuntu_baseline"].default, "22.04")
+        self.assertEqual(signature.parameters["glibc_baseline"].default, "2.35")
+
+    def test共享构建器按ubuntu2004命名便携包(self):
+        builder = self._load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            (bundle / "SerialTool").write_bytes(b"executable")
+            output = root / "output"
+            output.mkdir()
+
+            package = builder.build_portable_archive(
+                bundle,
+                output,
+                "1.3.5",
+                "x86_64",
+                ubuntu_baseline="20.04",
+            )
+
+            self.assertEqual(
+                package.name,
+                "SerialTool-1.3.5-ubuntu20.04-x86_64.tar.gz",
+            )
+
+    def test共享构建器按ubuntu2004生成deb元数据(self):
+        builder = self._load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output = root / "output"
+            output.mkdir()
+            captured = {}
+
+            def capture_layout(**kwargs):
+                captured.update(kwargs)
+
+            with mock.patch.object(
+                builder,
+                "create_debian_layout",
+                side_effect=capture_layout,
+            ), mock.patch.object(builder.subprocess, "run"):
+                package = builder.build_deb_package(
+                    bundle_dir=root / "bundle",
+                    output_dir=output,
+                    version="1.3.5",
+                    release_arch="x86_64",
+                    deb_arch="amd64",
+                    project_root=root,
+                    ubuntu_baseline="20.04",
+                    glibc_baseline="2.31",
+                )
+
+            self.assertEqual(
+                package.name,
+                "SerialTool-1.3.5-ubuntu20.04-x86_64.deb",
+            )
+            self.assertEqual(captured["glibc_baseline"], "2.31")
 
     def test支持amd64和arm64架构名称(self):
         builder = self._load_module()

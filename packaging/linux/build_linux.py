@@ -85,7 +85,11 @@ def pyinstaller_arguments(
     ]
 
 
-def debian_control(version: str, deb_arch: str) -> str:
+def debian_control(
+    version: str,
+    deb_arch: str,
+    glibc_baseline: str = "2.35",
+) -> str:
     """生成 Debian control 文件内容。"""
     return f"""Package: {DEB_PACKAGE_NAME}
 Version: {version}
@@ -93,7 +97,7 @@ Section: utils
 Priority: optional
 Architecture: {deb_arch}
 Maintainer: GAOXIANG <770807059@qq.com>
-Depends: libc6 (>= 2.35), libgl1, libxkbcommon-x11-0, libxcb-xinerama0, libxcb-keysyms1, libxcb-shape0, libxcb-icccm4, libxcb-cursor0
+Depends: libc6 (>= {glibc_baseline}), libgl1, libxkbcommon-x11-0, libxcb-xinerama0, libxcb-keysyms1, libxcb-shape0, libxcb-icccm4, libxcb-cursor0
 Recommends: fonts-noto-cjk
 Description: 串口、UDP 和 TCP 调试工具
  SerialTool 是基于 PyQt5 的多协议通信与数据分析桌面工具。
@@ -108,6 +112,7 @@ def create_debian_layout(
     icon_path: Path,
     license_path: Path,
     source_date_epoch: int = 0,
+    glibc_baseline: str = "2.35",
 ) -> None:
     """把 PyInstaller onedir 产物组装成 Debian 包目录。"""
     source_dir = Path(source_dir)
@@ -126,7 +131,10 @@ def create_debian_layout(
 
     control_path = package_root / "DEBIAN" / "control"
     control_path.parent.mkdir(parents=True)
-    control_path.write_text(debian_control(version, deb_arch), encoding="utf-8")
+    control_path.write_text(
+        debian_control(version, deb_arch, glibc_baseline),
+        encoding="utf-8",
+    )
     control_path.chmod(0o644)
 
     launcher = package_root / "usr" / "bin" / DEB_PACKAGE_NAME
@@ -233,9 +241,10 @@ def build_portable_archive(
     version: str,
     release_arch: str,
     source_date_epoch: int = 0,
+    ubuntu_baseline: str = "22.04",
 ) -> Path:
     """生成无需安装的 onedir 压缩包。"""
-    release_name = f"{APP_NAME}-{version}-ubuntu22.04-{release_arch}"
+    release_name = f"{APP_NAME}-{version}-ubuntu{ubuntu_baseline}-{release_arch}"
     archive_path = output_dir / f"{release_name}.tar.gz"
 
     def normalize_tar_entry(member: tarfile.TarInfo) -> tarfile.TarInfo:
@@ -300,9 +309,14 @@ def build_deb_package(
     deb_arch: str,
     project_root: Path,
     source_date_epoch: int = 0,
+    ubuntu_baseline: str = "22.04",
+    glibc_baseline: str = "2.35",
 ) -> Path:
     """使用 dpkg-deb 生成 Ubuntu 可安装包。"""
-    output_path = output_dir / f"{APP_NAME}-{version}-ubuntu22.04-{release_arch}.deb"
+    output_path = (
+        output_dir
+        / f"{APP_NAME}-{version}-ubuntu{ubuntu_baseline}-{release_arch}.deb"
+    )
     # WSL 的 Windows 挂载盘通常把目录权限固定为 0777，无法满足 dpkg-deb
     # 对 DEBIAN 目录的权限要求，因此始终在 Linux 原生临时目录中组装。
     with tempfile.TemporaryDirectory(prefix="serialtool-deb-") as temp_dir:
@@ -315,6 +329,7 @@ def build_deb_package(
             icon_path=project_root / "图标.png",
             license_path=project_root / "LICENSE",
             source_date_epoch=source_date_epoch,
+            glibc_baseline=glibc_baseline,
         )
         environment = {
             **os.environ,
@@ -339,25 +354,43 @@ def write_checksums(artifacts: list[Path], output_dir: Path) -> Path:
     return checksum_path
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="构建 Ubuntu 22.04+ SerialTool 发布包")
+def main(
+    ubuntu_baseline: str = "22.04",
+    glibc_baseline: str = "2.35",
+    build_dir_name: str = "linux",
+    default_output_dir: Path | None = None,
+    required_ubuntu: str | None = None,
+) -> int:
+    parser = argparse.ArgumentParser(
+        description=f"构建 Ubuntu {ubuntu_baseline}+ SerialTool 发布包"
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=PROJECT_ROOT / "dist" / "linux",
+        default=default_output_dir or PROJECT_ROOT / "dist" / "linux",
         help="发布包输出目录",
     )
     parser.add_argument("--skip-deb", action="store_true", help="只生成便携压缩包")
     args = parser.parse_args()
 
     if not sys.platform.startswith("linux"):
-        parser.error("Linux 发布包必须在 Ubuntu 22.04+ 环境中构建")
+        parser.error(f"Linux 发布包必须在 Ubuntu {ubuntu_baseline}+ 环境中构建")
+    if required_ubuntu is not None:
+        try:
+            release = platform.freedesktop_os_release()
+        except OSError as error:
+            parser.error(f"无法识别 Ubuntu 版本：{error}")
+        if release.get("ID") != "ubuntu" or release.get("VERSION_ID") != required_ubuntu:
+            parser.error(
+                f"兼容 Ubuntu {ubuntu_baseline}+ 的正式发布包必须在 "
+                f"Ubuntu {required_ubuntu} 中构建"
+            )
 
     release_arch, deb_arch = normalize_architecture(platform.machine())
     version = read_version(PROJECT_ROOT)
     build_parent = PROJECT_ROOT / "build"
     build_parent.mkdir(parents=True, exist_ok=True)
-    build_root = build_parent / "linux"
+    build_root = build_parent / build_dir_name
     output_dir = validate_output_directory(args.output_dir, build_root)
     _reset_build_directory(build_root, build_parent)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -371,6 +404,7 @@ def main() -> int:
         version,
         release_arch,
         source_date_epoch=build_epoch,
+        ubuntu_baseline=ubuntu_baseline,
     )
     print(f"便携包：{portable}")
     artifacts = [portable]
@@ -386,6 +420,8 @@ def main() -> int:
             deb_arch,
             PROJECT_ROOT,
             source_date_epoch=build_epoch,
+            ubuntu_baseline=ubuntu_baseline,
+            glibc_baseline=glibc_baseline,
         )
         print(f"Debian 安装包：{deb_path}")
         artifacts.append(deb_path)

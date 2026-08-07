@@ -1,5 +1,7 @@
 # Ubuntu 发布包
 
+本文件描述现有 Ubuntu 22.04 构建链。Ubuntu 20.04 兼容包使用独立的 `build_ubuntu20.sh` 和 `packaging/linux/build_linux_2004.py`，详见项目根目录的 `Ubuntu20.04打包使用说明.md`。
+
 默认运行会同时生成 Ubuntu 便携版和 `.deb` 安装包；与 Windows 中默认运行 `python build_app.py` 生成的单文件版、便携版和安装包共同构成五种正式发布产品。
 
 Linux 产物必须在目标架构的 Ubuntu 22.04 环境中构建。脚本会拒绝 Ubuntu 24.04 等其他构建系统，防止生成依赖更高版本 glibc 却被错误标记为兼容 22.04 的发布包。
