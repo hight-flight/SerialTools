@@ -7,16 +7,18 @@ import shutil
 import json
 import re
 import time
+import threading
 import serial
 import serial.tools.list_ports
 from collections import deque
+from dataclasses import dataclass
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QComboBox, QPushButton,
                              QTextEdit, QCheckBox, QMessageBox, QSplitter, QSpinBox, QLineEdit, QGroupBox, QDialog, QFormLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog, QSizePolicy,
                              QAction, QTabWidget, QRadioButton, QButtonGroup, QStackedWidget)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint, QEvent, QByteArray
-from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon
+from PyQt5.QtGui import QBrush, QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon, QPen
 
 from dialogs import (show_crc_calculator, show_hex_converter,
                          show_serial_monitor, show_usage_dialog,
@@ -35,6 +37,195 @@ from gsm_debugger import GSMDebuggerDialog
 _ANSI_PATTERN = re.compile(r'\x1B(?:\[([0-9;]*)m)?')
 # 控制字符集合（除 \r \n \t 外的 ASCII < 32 字符需转义显示）
 _CONTROL_CHARS_ESCAPE = {chr(i): f'\\x{i:02X}' for i in range(32) if chr(i) not in '\r\n\t'}
+
+MULTI_COL_HEX = 0
+MULTI_COL_TEXT = 1
+MULTI_COL_NAME = 2
+MULTI_COL_SEND = 3
+MULTI_COL_DELAY = 4
+MULTI_COL_ORDER = 5
+
+
+class FullHitCheckBox(QCheckBox):
+    """绘制紧凑方框复选框，并让整个控件矩形响应点击。"""
+
+    def hitButton(self, position):
+        return self.rect().contains(position)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        side = 16
+        left = (self.width() - side) // 2
+        top = (self.height() - side) // 2
+        border = QColor("#5D6675") if self.isEnabled() else QColor("#A0A4AA")
+        fill = QColor("#FFFFFF") if self.isEnabled() else QColor("#E5E7EB")
+        painter.setPen(QPen(border, 1.4))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(left, top, side, side, 2, 2)
+
+        if self.isChecked():
+            painter.setPen(QPen(QColor("#1F2937"), 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.drawLine(QPoint(left + 4, top + 8), QPoint(left + 7, top + 11))
+            painter.drawLine(QPoint(left + 7, top + 11), QPoint(left + 13, top + 4))
+
+
+@dataclass(frozen=True)
+class MultiSendPayload:
+    """批量发送启动时冻结的单条指令，避免运行中编辑表格改变实际发送内容。"""
+
+    text: str
+    is_hex: bool
+    delay_ms: int
+    order: int
+    name: str
+    source_row: int
+
+
+class BatchSendThread(QThread):
+    """只调度不可变发送快照；所有界面和传输操作仍由主线程完成。"""
+
+    send_requested = pyqtSignal(object)
+    progress_changed = pyqtSignal(int, int, int)
+    batch_finished = pyqtSignal(str)
+
+    def __init__(self, items, cycle_delay_ms, cycle_count, parent=None):
+        super().__init__(parent)
+        self.items = tuple(items)
+        self.cycle_delay_ms = max(0, int(cycle_delay_ms))
+        self.cycle_count = cycle_count
+        self._stop_event = threading.Event()
+        self._send_result_event = threading.Event()
+        self._send_succeeded = False
+        self._stop_result = "停止"
+
+    def request_stop(self, result="停止"):
+        self._stop_result = result
+        self._stop_event.set()
+        self._send_result_event.set()
+
+    def is_stop_requested(self):
+        return self._stop_event.is_set()
+
+    def report_send_result(self, succeeded):
+        """由 GUI 线程回报真实写入结果，调度线程据此决定是否继续。"""
+        self._send_succeeded = bool(succeeded)
+        if not self._send_succeeded:
+            self._stop_result = "错误"
+            self._stop_event.set()
+        self._send_result_event.set()
+
+    def _wait(self, delay_ms):
+        return self._stop_event.wait(max(0, delay_ms) / 1000)
+
+    def run(self):
+        current_cycle = 0
+        result = "完成"
+        try:
+            while not self._stop_event.is_set():
+                for item_index, item in enumerate(self.items, start=1):
+                    if self._stop_event.is_set():
+                        break
+                    self.progress_changed.emit(current_cycle + 1, item_index, len(self.items))
+                    self._send_succeeded = False
+                    self._send_result_event.clear()
+                    self.send_requested.emit(item)
+                    while not self._send_result_event.wait(0.05):
+                        if self._stop_event.is_set():
+                            break
+                    if self._stop_event.is_set():
+                        result = self._stop_result
+                        break
+                    if not self._send_succeeded:
+                        result = "错误"
+                        break
+                    if self._wait(max(10, item.delay_ms)):
+                        break
+                if self._stop_event.is_set():
+                    result = self._stop_result
+                    break
+                current_cycle += 1
+                if self.cycle_count is not None and current_cycle >= self.cycle_count:
+                    break
+                if self._wait(self.cycle_delay_ms):
+                    result = self._stop_result
+                    break
+        except Exception:
+            result = "错误"
+        self.batch_finished.emit(result)
+
+
+def parse_multi_send_csv(text_content):
+    """严格解析多字符串 CSV，返回有效行、问题列表和可选批量设置。"""
+    import csv
+    import io
+
+    items = []
+    issues = []
+    settings = {}
+    reader = csv.DictReader(io.StringIO(text_content))
+    required_fields = {"hex", "string", "button_text", "delay", "order"}
+    if not reader.fieldnames or not required_fields.issubset(reader.fieldnames):
+        return [], ["缺少必要列：hex、string、button_text、delay、order"], {}
+
+    for line_number, row in enumerate(reader, start=2):
+        hex_text = (row.get("hex") or "").strip().lower()
+        if hex_text not in {"true", "false"}:
+            issues.append(f"第 {line_number} 行：HEX 必须是 true 或 false")
+            continue
+        try:
+            delay = int((row.get("delay") or "").strip())
+            if not 0 <= delay <= 10000:
+                raise ValueError
+        except ValueError:
+            issues.append(f"第 {line_number} 行：延时必须是 0–10000 的整数")
+            continue
+        try:
+            order = int((row.get("order") or "").strip())
+            if order <= 0:
+                raise ValueError
+        except ValueError:
+            issues.append(f"第 {line_number} 行：顺序必须是大于 0 的整数")
+            continue
+
+        command_text = row.get("string", "")
+        if not command_text.strip():
+            issues.append(f"第 {line_number} 行：字符串不能为空")
+            continue
+        if hex_text == "true":
+            normalized_hex = command_text.replace(" ", "").replace("\n", "").replace("\r", "")
+            try:
+                if len(normalized_hex) % 2:
+                    raise ValueError
+                bytes.fromhex(normalized_hex)
+            except ValueError:
+                issues.append(f"第 {line_number} 行：HEX 格式无效")
+                continue
+
+        items.append({
+            "hex": hex_text == "true",
+            "string": command_text,
+            "button_text": row.get("button_text", "无注释") or "无注释",
+            "delay": delay,
+            "order": str(order),
+        })
+        if not settings and {"cycle_delay", "limit_cycles", "cycle_count"}.issubset(row):
+            try:
+                cycle_delay = int((row.get("cycle_delay") or "").strip())
+                cycle_count = int((row.get("cycle_count") or "").strip())
+                limit_text = (row.get("limit_cycles") or "").strip().lower()
+                if not 0 <= cycle_delay <= 10000 or not 1 <= cycle_count <= 9999:
+                    raise ValueError
+                if limit_text not in {"true", "false"}:
+                    raise ValueError
+                settings = {
+                    "cycle_delay": cycle_delay,
+                    "limit_cycles": limit_text == "true",
+                    "cycle_count": cycle_count,
+                }
+            except ValueError:
+                issues.append(f"第 {line_number} 行：批量设置无效，已保留当前设置")
+    return items, issues, settings
 
 # --- 文件操作工作类 ---
 class WorkerSignals(QObject):
@@ -217,6 +408,7 @@ class SerialTool(QMainWindow):
         # 发送历史相关
         self.send_history = deque(maxlen=30)  # 发送历史记录，最多30条
         self.history_index = -1               # 当前浏览位置，-1表示未在历史中
+        self._draft_text = ""
 
         # 筛选相关
         self.filter_enabled = False   # 筛选开关
@@ -266,7 +458,12 @@ class SerialTool(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("hight-flight串口工具")
-        self.resize(1000, 900)
+        primary_screen = QApplication.primaryScreen()
+        if primary_screen is not None:
+            available = primary_screen.availableGeometry()
+            self.resize(min(1080, available.width()), min(900, available.height()))
+        else:
+            self.resize(1080, 900)
         self.setMinimumSize(720, 560)  # 保证顶部设置栏和发送区控件不重叠
 
         # 主窗口部件
@@ -908,14 +1105,15 @@ class SerialTool(QMainWindow):
         # 工具栏
         toolbar_layout = QHBoxLayout()
         
-        # 循环发送复选框（用于控制批量发送的开始/停止）
-        self.check_cycle_send = QCheckBox("循环发送")
-        self.check_cycle_send.setFont(QFont("Microsoft YaHei", 9))
-        self.check_cycle_send.stateChanged.connect(self.toggle_batch_send)
-        toolbar_layout.addWidget(self.check_cycle_send)
+        self.btn_batch_send = QPushButton("开始批量发送")
+        self.btn_batch_send.setCheckable(True)
+        self.btn_batch_send.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+        self.btn_batch_send.setAccessibleName("开始批量发送")
+        self.btn_batch_send.clicked.connect(self.toggle_batch_send)
+        toolbar_layout.addWidget(self.btn_batch_send)
         
         # 延时标签和输入框
-        delay_label = QLabel("延时:")
+        delay_label = QLabel("轮间隔(ms):")
         delay_label.setFont(QFont("Microsoft YaHei", 9))
         toolbar_layout.addWidget(delay_label)
         self.spin_delay = QSpinBox()
@@ -924,139 +1122,100 @@ class SerialTool(QMainWindow):
         self.spin_delay.setFont(QFont("Consolas", 9))
         self.spin_delay.setMinimumWidth(60)
         toolbar_layout.addWidget(self.spin_delay)
-        ms_label = QLabel("ms")
-        ms_label.setFont(QFont("Microsoft YaHei", 9))
-        toolbar_layout.addWidget(ms_label)
-        
+        toolbar_layout.addStretch()
+        multi_send_group_layout.addLayout(toolbar_layout)
+
+        # 第二行放置轮数限制和文件操作，窄面板下也不挤压控件。
+        option_row_layout = QHBoxLayout()
         # 循环次数勾选按钮和输入框
-        self.check_cycle_count = QCheckBox("次数:")
+        self.check_cycle_count = QCheckBox("限定轮数")
         self.check_cycle_count.setFont(QFont("Microsoft YaHei", 9))
-        toolbar_layout.addWidget(self.check_cycle_count)
+        option_row_layout.addWidget(self.check_cycle_count)
         
         self.spin_cycle_count = QSpinBox()
         self.spin_cycle_count.setRange(1, 9999)
         self.spin_cycle_count.setValue(1)
         self.spin_cycle_count.setFont(QFont("Consolas", 9))
         self.spin_cycle_count.setMinimumWidth(60)
-        self.spin_cycle_count.setEnabled(False)  # 默认禁用
-        toolbar_layout.addWidget(self.spin_cycle_count)
+        self.check_cycle_count.setChecked(True)
+        self.spin_cycle_count.setEnabled(True)
+        option_row_layout.addWidget(self.spin_cycle_count)
         
         # 连接信号
         self.check_cycle_count.stateChanged.connect(self.toggle_cycle_count)
-        
-        toolbar_layout.addStretch()
-        multi_send_group_layout.addLayout(toolbar_layout)
-        
-        # 创建第二行布局，用于放置保存、加载和帮助按钮
-        button_row_layout = QHBoxLayout()
-        
+
         # 保存/加载按钮
-        btn_save = QPushButton("保存")
-        btn_save.setFont(QFont("Microsoft YaHei", 9))
-        btn_save.setMinimumWidth(56)
-        btn_save.clicked.connect(self.save_multi_items)
-        button_row_layout.addWidget(btn_save)
-        
-        btn_load = QPushButton("加载")
-        btn_load.setFont(QFont("Microsoft YaHei", 9))
-        btn_load.setMinimumWidth(56)
-        btn_load.clicked.connect(self.load_multi_items)
-        button_row_layout.addWidget(btn_load)
-        
-        # 帮助按钮
-        btn_help = QPushButton("帮助")
-        btn_help.setFont(QFont("Microsoft YaHei", 9))
-        btn_help.setMinimumWidth(56)
-        btn_help.clicked.connect(self.show_multi_send_help)
-        button_row_layout.addWidget(btn_help)
-        
+        self.btn_save_multi = QPushButton("保存")
+        self.btn_save_multi.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_save_multi.setMinimumWidth(56)
+        self.btn_save_multi.clicked.connect(self.save_multi_items)
+        option_row_layout.addWidget(self.btn_save_multi)
+
+        self.btn_load_multi = QPushButton("加载")
+        self.btn_load_multi.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_load_multi.setMinimumWidth(56)
+        self.btn_load_multi.clicked.connect(self.load_multi_items)
+        option_row_layout.addWidget(self.btn_load_multi)
+
+        self.btn_help_multi = QPushButton("帮助")
+        self.btn_help_multi.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_help_multi.setMinimumWidth(56)
+        self.btn_help_multi.clicked.connect(self.show_multi_send_help)
+        option_row_layout.addWidget(self.btn_help_multi)
+
+        option_row_layout.addStretch()
+        multi_send_group_layout.addLayout(option_row_layout)
+
+        # 第三行单独显示状态，保证窄面板下文字仍完整可见。
+        button_row_layout = QHBoxLayout()
+
+        self.label_batch_status = QLabel("未运行")
+        self.label_batch_status.setAccessibleName("批量发送状态")
+        self.label_batch_status.setMinimumWidth(180)
+        self.label_batch_status.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.label_batch_status.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        button_row_layout.addSpacing(8)
+        button_row_layout.addWidget(self.label_batch_status, 1)
+
         button_row_layout.addStretch()
         multi_send_group_layout.addLayout(button_row_layout)
         
         # 多字符列表
         self.table_multi_send = QTableWidget()
-        self.table_multi_send.setColumnCount(5)
-        self.table_multi_send.setHorizontalHeaderLabels(["HEX", "字符串", "点击发送", "延时(ms)", "顺序"])
-        
-        # 设置编辑触发模式为单击
-        self.table_multi_send.setEditTriggers(QAbstractItemView.CurrentChanged | QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        self.table_multi_send.setColumnCount(6)
+        self.table_multi_send.setHorizontalHeaderLabels(
+            ["HEX", "字符串", "名称/备注", "操作", "单条延时(ms)", "顺序"]
+        )
+        self.table_multi_send.setAccessibleName("多字符串发送指令表")
+        self.table_multi_send.setToolTip("双击字符串、名称或顺序单元格进行编辑")
+        self.table_multi_send.setEditTriggers(
+            QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
+        )
         
         # 设置列宽调整模式
         header = self.table_multi_send.horizontalHeader()
         # 设置列宽调整模式为可交互，允许手动调整
-        header.setSectionResizeMode(0, QHeaderView.Interactive)  # HEX 列
-        header.setSectionResizeMode(1, QHeaderView.Interactive)  # 字符串列
-        header.setSectionResizeMode(2, QHeaderView.Interactive)  # 点击发送列
-        header.setSectionResizeMode(3, QHeaderView.Interactive)  # 延时列
-        header.setSectionResizeMode(4, QHeaderView.Interactive)  # 顺序列
+        for column in range(self.table_multi_send.columnCount()):
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
         
         # 设置初始列宽
-        self.table_multi_send.setColumnWidth(0, 40)   # HEX 列
-        self.table_multi_send.setColumnWidth(1, 80)  # 字符串列
-        self.table_multi_send.setColumnWidth(2, 80)  # 点击发送列
-        self.table_multi_send.setColumnWidth(3, 70)   # 延时列
-        self.table_multi_send.setColumnWidth(4, 50)   # 顺序列
+        self.table_multi_send.setColumnWidth(MULTI_COL_HEX, 38)
+        self.table_multi_send.setColumnWidth(MULTI_COL_NAME, 72)
+        self.table_multi_send.setColumnWidth(MULTI_COL_SEND, 54)
+        self.table_multi_send.setColumnWidth(MULTI_COL_DELAY, 90)
+        self.table_multi_send.setColumnWidth(MULTI_COL_ORDER, 46)
         # 字符串列自动填充剩余空间，避免窗口拉宽后右侧空白
-        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(MULTI_COL_TEXT, QHeaderView.Stretch)
 
         # 确保表格充满可用空间
         self.table_multi_send.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        
-
-        
-        # 添加默认条目（只有一行，字符串为空，按钮为无注释）
-        default_items = [
-            [False, "", "无注释", 1000, "1"],  # 默认顺序为1
-        ]
-        
-        self.table_multi_send.setRowCount(len(default_items))
-        for i, item in enumerate(default_items):
-            # HEX复选框
-            hex_checkbox = QCheckBox()
-            hex_checkbox.setChecked(item[0])
-            hex_widget = QWidget()
-            hex_layout = QHBoxLayout(hex_widget)
-            hex_layout.addWidget(hex_checkbox)
-            hex_layout.setAlignment(Qt.AlignCenter)
-            hex_layout.setContentsMargins(0, 0, 0, 0)
-            self.table_multi_send.setCellWidget(i, 0, hex_widget)
-            
-            # 字符串（可双击编辑）
-            string_item = QTableWidgetItem(item[1])
-            string_item.setFlags(Qt.ItemIsEditable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.table_multi_send.setItem(i, 1, string_item)
-            
-            # 发送按钮（右键重命名）
-            send_btn = QPushButton(item[2])
-            send_btn.setFont(QFont("Microsoft YaHei", 9))
-            send_btn.setMinimumWidth(70)  # 增加按钮宽度
-            send_btn.clicked.connect(self.on_send_multi_btn_clicked)
-            send_btn.setObjectName(f"btn_{i}")
-            send_btn.installEventFilter(self)
-            send_widget = QWidget()
-            send_layout = QHBoxLayout(send_widget)
-            send_layout.addWidget(send_btn)
-            send_layout.setAlignment(Qt.AlignCenter)
-            send_layout.setContentsMargins(0, 0, 0, 0)
-            self.table_multi_send.setCellWidget(i, 2, send_widget)
-            
-            # 延时
-            delay_spin = QSpinBox()
-            delay_spin.setRange(0, 10000)
-            delay_spin.setValue(item[3])
-            delay_spin.setFont(QFont("Consolas", 9))
-            delay_widget = QWidget()
-            delay_layout = QHBoxLayout(delay_widget)
-            delay_layout.addWidget(delay_spin)
-            delay_layout.setAlignment(Qt.AlignCenter)
-            delay_layout.setContentsMargins(0, 0, 0, 0)
-            self.table_multi_send.setCellWidget(i, 3, delay_widget)
-            
-            # 顺序显示框
-            order_item = QTableWidgetItem(item[4])
-            order_item.setFlags(Qt.ItemIsEditable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            order_item.setTextAlignment(Qt.AlignCenter)  # 文本居中显示
-            self.table_multi_send.setItem(i, 4, order_item)
+        self.table_multi_send.setMinimumWidth(360)
+        self.table_multi_send.setRowCount(0)
+        self._insert_multi_item_row({
+            "hex": False, "string": "", "button_text": "无注释",
+            "delay": 1000, "order": "1",
+        })
+        self.table_multi_send.itemChanged.connect(self._on_multi_item_changed)
         
         # 设置表格属性
         self.table_multi_send.verticalHeader().setVisible(False)
@@ -1068,24 +1227,26 @@ class SerialTool(QMainWindow):
         
         # 添加/删除按钮
         btn_layout = QHBoxLayout()
-        btn_add = QPushButton("＋ 添加")
-        btn_add.setFont(QFont("Microsoft YaHei", 9))
-        btn_add.setMinimumWidth(70)
-        btn_add.clicked.connect(self.add_multi_item)
-        btn_layout.addWidget(btn_add)
+        self.btn_add_multi = QPushButton("＋ 添加")
+        self.btn_add_multi.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_add_multi.setMinimumWidth(70)
+        self.btn_add_multi.clicked.connect(self.add_multi_item)
+        btn_layout.addWidget(self.btn_add_multi)
 
-        btn_remove = QPushButton("− 删除")
-        btn_remove.setFont(QFont("Microsoft YaHei", 9))
-        btn_remove.setMinimumWidth(70)
-        btn_remove.clicked.connect(self.remove_multi_item)
-        btn_layout.addWidget(btn_remove)
+        self.btn_remove_multi = QPushButton("− 删除")
+        self.btn_remove_multi.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_remove_multi.setMinimumWidth(70)
+        self.btn_remove_multi.clicked.connect(self.remove_multi_item)
+        btn_layout.addWidget(self.btn_remove_multi)
         
         # 清空指令按钮
-        btn_clear = QPushButton("清空指令")
-        btn_clear.setFont(QFont("Microsoft YaHei", 9))
-        btn_clear.setMinimumWidth(40)
-        btn_clear.clicked.connect(self.clear_all_items)
-        btn_layout.addWidget(btn_clear)
+        self.btn_clear_multi = QPushButton("清空指令")
+        self.btn_clear_multi.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_clear_multi.setMinimumWidth(70)
+        self.btn_clear_multi.setProperty("danger", True)
+        self.btn_clear_multi.setAccessibleDescription("清空全部多字符串指令，需要再次确认")
+        self.btn_clear_multi.clicked.connect(self.clear_all_items)
+        btn_layout.addWidget(self.btn_clear_multi)
         
         btn_layout.addStretch()
         multi_send_group_layout.addLayout(btn_layout)
@@ -1187,6 +1348,10 @@ class SerialTool(QMainWindow):
             self.btn_select_file, self.btn_send_file, self.text_send,
             self.btn_send, self.btn_stop, self.btn_clear_send,
             self.btn_save_params, self.btn_toggle_multi_send,
+            self.btn_batch_send, self.spin_delay, self.check_cycle_count,
+            self.spin_cycle_count, self.btn_save_multi, self.btn_load_multi,
+            self.btn_help_multi, self.table_multi_send, self.btn_add_multi,
+            self.btn_remove_multi, self.btn_clear_multi,
         )
         for current, following in zip(tab_order, tab_order[1:]):
             self.setTabOrder(current, following)
@@ -1861,9 +2026,8 @@ class SerialTool(QMainWindow):
                 self.error_state = True
         else:
             if hasattr(self, 'batch_thread') and self.batch_thread.isRunning():
-                self.batch_thread.stop()
-                self.check_cycle_send.setChecked(False)
-                self.append_text("[系统]: 批量发送已停止\n")
+                self.batch_thread.request_stop("断开")
+                self.label_batch_status.setText("连接已断开，正在停止…")
             # 停止重复发送定时器
             if hasattr(self, 'repeat_timer') and self.repeat_timer.isActive():
                 self.repeat_timer.stop()
@@ -2140,22 +2304,22 @@ class SerialTool(QMainWindow):
             widget.setStyleSheet(
                 "border: 1px solid red; border-radius: 4px;")
 
-    def send_data(self):
+    def send_data(self, manage_repeat=True, record_history=True):
         """发送数据"""
         # 检查串口状态
         if not hasattr(self, 'transport') or not self.transport or not self.transport.is_open:
             # 如果是重复发送过程中连接断开，静默停止，不再弹窗
             if self.repeat_timer.isActive():
                 self.stop_repeat()
-                return
+                return False
             QMessageBox.warning(self, "警告", "请先打开连接！")
-            return
+            return False
 
         # 获取发送内容
         content = self.text_send.toPlainText()
         if not content:
             QMessageBox.warning(self, "警告", "发送内容不能为空！")
-            return
+            return False
 
         # 获取首字段（保留空格）
         head_field = self.text_ota.text()
@@ -2172,13 +2336,13 @@ class SerialTool(QMainWindow):
                 hex_str = content.replace(' ', '').replace('\n', '').replace('\r', '')
                 if len(hex_str) % 2 != 0:
                     QMessageBox.warning(self, "格式错误", "HEX 字符串长度必须是偶数！")
-                    return
+                    return False
                 # 验证是否为有效的十六进制字符
                 try:
                     data = bytes.fromhex(hex_str)
                 except ValueError as e:
                     QMessageBox.warning(self, "格式错误", f"无效的十六进制数据: {e}")
-                    return
+                    return False
                 # HEX 模式下，首/尾字段也作为 HEX 字符串解析
                 if self.check_head_field.isChecked() and head_field:
                     try:
@@ -2186,24 +2350,24 @@ class SerialTool(QMainWindow):
                         if head_hex:
                             if len(head_hex) % 2 != 0:
                                 QMessageBox.warning(self, "格式错误", "首字段 HEX 字符串长度必须是偶数！")
-                                return
+                                return False
                             head_data = bytes.fromhex(head_hex)
                             data = head_data + data
                     except ValueError as e:
                         QMessageBox.warning(self, "格式错误", f"首字段无效的十六进制数据: {e}")
-                        return
+                        return False
                 if self.check_tail_field.isChecked() and tail_field:
                     try:
                         tail_hex = tail_field.replace(' ', '').replace('\n', '').replace('\r', '')
                         if tail_hex:
                             if len(tail_hex) % 2 != 0:
                                 QMessageBox.warning(self, "格式错误", "尾字段 HEX 字符串长度必须是偶数！")
-                                return
+                                return False
                             tail_data = bytes.fromhex(tail_hex)
                             data = data + tail_data
                     except ValueError as e:
                         QMessageBox.warning(self, "格式错误", f"尾字段无效的十六进制数据: {e}")
-                        return
+                        return False
                 # 更新显示内容，包含首/尾字段的完整 hex
                 content = ' '.join([f'{b:02X}' for b in data])
             else:
@@ -2234,6 +2398,10 @@ class SerialTool(QMainWindow):
                     try:
                         with QMutexLocker(self.serial_mutex):
                             bytes_sent = self.transport.write(data_with_checksum)
+                        if bytes_sent != len(data_with_checksum):
+                            raise IOError(
+                                f"仅写入 {bytes_sent}/{len(data_with_checksum)} 字节"
+                            )
                         # 更新发送数据统计
                         self.tx_bytes += bytes_sent
                         self.label_tx_bytes.setText(f"发送字节: {self.tx_bytes}")
@@ -2247,11 +2415,14 @@ class SerialTool(QMainWindow):
                         error_msg = f"发送数据失败: {e}"
                         QMessageBox.warning(self, "发送失败", error_msg)
                         self.append_text(f"[错误]: {error_msg}\n")
+                        return False
             else:
                 # 发送原始数据（使用互斥锁保护）
                 try:
                     with QMutexLocker(self.serial_mutex):
                         bytes_sent = self.transport.write(data)
+                    if bytes_sent != len(data):
+                        raise IOError(f"仅写入 {bytes_sent}/{len(data)} 字节")
                     # 更新发送数据统计
                     self.tx_bytes += bytes_sent
                     self.label_tx_bytes.setText(f"发送字节: {self.tx_bytes}")
@@ -2263,41 +2434,43 @@ class SerialTool(QMainWindow):
                     error_msg = f"发送数据失败: {e}"
                     QMessageBox.warning(self, "发送失败", error_msg)
                     self.append_text(f"[错误]: {error_msg}\n")
+                    return False
 
-            # 记录发送历史（去重连续相同条目）
-            raw_text = self.text_send.toPlainText()
-            if raw_text and (len(self.send_history) == 0 or self.send_history[0] != raw_text):
-                self.send_history.appendleft(raw_text)
-            self.history_index = -1  # 发送后重置历史浏览位置
+            if record_history:
+                raw_text = self.text_send.toPlainText()
+                if raw_text and (len(self.send_history) == 0 or self.send_history[0] != raw_text):
+                    self.send_history.appendleft(raw_text)
+                self.history_index = -1
 
-            # 处理重复发送
-            if self.check_repeat.isChecked():
-                # 只有在定时器未运行时才启动，避免重复启动
-                if not self.repeat_timer.isActive():
-                    # 启动定时器
-                    interval = self.spin_interval.value()
-                    self.repeat_timer.start(interval)
-                    self.append_text(f"[系统]: 开始重复发送，间隔 {interval}ms\n")
-                    self.btn_stop.setEnabled(True)  # 启用停止按钮
-            else:
-                # 停止定时器
-                if self.repeat_timer.isActive():
-                    self.repeat_timer.stop()
-                    self.append_text("[系统]: 停止重复发送\n")
-                self.btn_stop.setEnabled(False)  # 禁用停止按钮
-                
+            if manage_repeat:
+                if self.check_repeat.isChecked():
+                    if not self.repeat_timer.isActive():
+                        interval = self.spin_interval.value()
+                        self.repeat_timer.start(interval)
+                        self.append_text(f"[系统]: 开始重复发送，间隔 {interval}ms\n")
+                        self.btn_stop.setEnabled(True)
+                else:
+                    if self.repeat_timer.isActive():
+                        self.repeat_timer.stop()
+                        self.append_text("[系统]: 停止重复发送\n")
+                    self.btn_stop.setEnabled(False)
+            return True
+
         except serial.SerialException as e:
             error_msg = f"串口发送失败: {str(e)}"
             QMessageBox.warning(self, "发送失败", error_msg)
             self.append_text(f"[错误]: {error_msg}\n")
+            return False
         except ValueError as e:
             error_msg = f"数据格式错误: {str(e)}"
             QMessageBox.warning(self, "发送失败", error_msg)
             self.append_text(f"[错误]: {error_msg}\n")
+            return False
         except IOError as e:
             error_msg = f"I/O错误: {str(e)}"
             QMessageBox.warning(self, "发送失败", error_msg)
             self.append_text(f"[错误]: {error_msg}\n")
+            return False
         except Exception as e:
             error_msg = f"发送失败: {str(e)}"
             QMessageBox.warning(self, "发送失败", error_msg)
@@ -2307,6 +2480,7 @@ class SerialTool(QMainWindow):
                 self.repeat_timer.stop()
                 self.append_text("[系统]: 停止重复发送\n")
             self.btn_stop.setEnabled(False)  # 禁用停止按钮
+            return False
 
     def process_ansi_colors(self, text):
         """处理ANSI颜色转义序列，返回文本和格式信息"""
@@ -2410,7 +2584,7 @@ class SerialTool(QMainWindow):
         try:
             # 停止批量发送线程
             if hasattr(self, 'batch_thread') and self.batch_thread.isRunning():
-                self.batch_thread.stop()
+                self.batch_thread.request_stop("断开")
 
             # 停止重复发送定时器
             if hasattr(self, 'repeat_timer') and self.repeat_timer.isActive():
@@ -2433,9 +2607,8 @@ class SerialTool(QMainWindow):
             self.append_text(f"[错误]: {error_msg}\n")
             
             # 更新批量发送状态
-            if hasattr(self, 'check_cycle_send') and self.check_cycle_send.isChecked():
-                self.check_cycle_send.setChecked(False)
-                self.append_text("[系统]: 批量发送已停止\n")
+            if hasattr(self, 'btn_batch_send') and self.btn_batch_send.isChecked():
+                self.label_batch_status.setText("连接读取错误，正在停止…")
 
             # 更新重复发送状态
             if hasattr(self, 'check_repeat') and self.check_repeat.isChecked():
@@ -2480,7 +2653,8 @@ class SerialTool(QMainWindow):
         # 停止批量发送线程（在锁外停止，避免死锁）
         if hasattr(self, 'batch_thread') and self.batch_thread and self.batch_thread.isRunning():
             try:
-                self.batch_thread.stop()
+                self.batch_thread.request_stop()
+                self.batch_thread.wait(500)
             except Exception as e:
                 print(f"停止批量发送线程失败: {e}")
             finally:
@@ -3272,21 +3446,54 @@ class SerialTool(QMainWindow):
         sender = self.sender()
         if sender:
             for row in range(self.table_multi_send.rowCount()):
-                widget = self.table_multi_send.cellWidget(row, 2)
+                widget = self.table_multi_send.cellWidget(row, MULTI_COL_SEND)
                 if widget and widget.layout() and widget.layout().count() > 0:
                     if widget.layout().itemAt(0).widget() == sender:
                         self.send_multi_item(row)
                         return
 
+    def _send_with_preserved_editor(self, data, is_hex):
+        """借用主发送流程，同时完整保留草稿、选择区和历史导航状态。"""
+        original_hex_send = self.check_hex_send.isChecked()
+        original_text = self.text_send.toPlainText()
+        original_cursor = self.text_send.textCursor()
+        original_position = original_cursor.position()
+        original_anchor = original_cursor.anchor()
+        original_history_index = self.history_index
+        original_draft_text = self._draft_text
+        original_history_guard = self._setting_history_text
+        original_formatting_guard = self._formatting_text
+        try:
+            self._setting_history_text = True
+            self._formatting_text = True
+            self.check_hex_send.setChecked(is_hex)
+            self.text_send.setPlainText(data)
+            return self.send_data(manage_repeat=False, record_history=False)
+        finally:
+            self.check_hex_send.setChecked(original_hex_send)
+            self.text_send.setPlainText(original_text)
+            cursor = self.text_send.textCursor()
+            text_length = len(original_text)
+            cursor.setPosition(min(original_anchor, text_length))
+            cursor.setPosition(
+                min(original_position, text_length), QTextCursor.KeepAnchor
+            )
+            self.text_send.setTextCursor(cursor)
+            self.history_index = original_history_index
+            self._draft_text = original_draft_text
+            self._formatting_text = original_formatting_guard
+            self._setting_history_text = original_history_guard
+
     @pyqtSlot(int)
     def send_multi_item(self, row):
         """发送多字符列表中的项目"""
-        # 检查串口状态（静默检查，不显示提示框）
+        # 单行按钮使用面板内反馈，避免连续操作被弹窗打断。
         if not hasattr(self, 'transport') or not self.transport or not self.transport.is_open:
+            self.label_batch_status.setText("未连接，未发送")
             return
         
         # 获取HEX复选框状态
-        hex_widget = self.table_multi_send.cellWidget(row, 0)
+        hex_widget = self.table_multi_send.cellWidget(row, MULTI_COL_HEX)
         if not hex_widget:
             return
         
@@ -3301,93 +3508,137 @@ class SerialTool(QMainWindow):
         is_hex = hex_checkbox.isChecked()
         
         # 获取字符串
-        string_item = self.table_multi_send.item(row, 1)
+        string_item = self.table_multi_send.item(row, MULTI_COL_TEXT)
         if not string_item:
             return
         
         data = string_item.text()
         if not data.strip():
+            self.label_batch_status.setText(f"第 {row + 1} 行内容为空")
             return
         
-        # 保存当前的HEX发送设置
-        original_hex_send = self.check_hex_send.isChecked()
-        
         try:
-            # 设置HEX发送状态
-            self.check_hex_send.setChecked(is_hex)
-            
-            # 设置发送文本
-            self.text_send.setPlainText(data)
-            
-            # 发送数据
-            self.send_data()
+            self._send_with_preserved_editor(data, is_hex)
         except Exception as e:
             print(f"发送多字符项目错误: {e}")
-        finally:
-            # 恢复原始HEX发送设置
-            self.check_hex_send.setChecked(original_hex_send)
     
     def add_multi_item(self):
         """添加新的多字符项目"""
-        row = self.table_multi_send.rowCount()
+        row = self._insert_multi_item_row({"order": str(self.table_multi_send.rowCount() + 1)})
+        self.table_multi_send.setCurrentCell(row, MULTI_COL_TEXT)
+
+    def _insert_multi_item_row(self, item=None, row=None):
+        """使用统一结构创建表格行，保证新增、CSV 加载和配置恢复行为一致。"""
+        item = item or {}
+        row = self.table_multi_send.rowCount() if row is None else row
         self.table_multi_send.insertRow(row)
-        
-        # HEX复选框
-        hex_checkbox = QCheckBox()
-        hex_checkbox.setChecked(False)
+
+        hex_checkbox = FullHitCheckBox()
+        hex_checkbox.setMinimumSize(24, 24)
+        hex_checkbox.setChecked(bool(item.get("hex", False)))
+        hex_checkbox.setText("")
+        hex_checkbox.clicked.connect(
+            lambda _checked=False, widget=hex_checkbox: self._select_multi_row_for_widget(widget)
+        )
         hex_widget = QWidget()
         hex_layout = QHBoxLayout(hex_widget)
         hex_layout.addWidget(hex_checkbox)
         hex_layout.setAlignment(Qt.AlignCenter)
         hex_layout.setContentsMargins(0, 0, 0, 0)
-        self.table_multi_send.setCellWidget(row, 0, hex_widget)
-        
-        # 字符串
-        self.table_multi_send.setItem(row, 1, QTableWidgetItem(""))
-        
-        # 发送按钮（支持三击编辑）
-        send_btn = QPushButton("无注释")
-        send_btn.setFont(QFont("Microsoft YaHei", 9))
-        send_btn.setMinimumWidth(70)  # 增加按钮宽度
-        send_btn.clicked.connect(self.on_send_multi_btn_clicked)
-        send_btn.setObjectName(f"btn_{row}")
-        send_btn.installEventFilter(self)
+        self.table_multi_send.setCellWidget(row, MULTI_COL_HEX, hex_widget)
+
+        string_item = QTableWidgetItem(str(item.get("string", "")))
+        string_item.setFlags(Qt.ItemIsEditable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        self.table_multi_send.setItem(row, MULTI_COL_TEXT, string_item)
+
+        name_item = QTableWidgetItem(str(item.get("button_text", "无注释")))
+        name_item.setFlags(Qt.ItemIsEditable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        self.table_multi_send.setItem(row, MULTI_COL_NAME, name_item)
+
+        send_button = QPushButton("发送")
+        send_button.setFont(QFont("Microsoft YaHei", 9))
+        send_button.setMinimumWidth(52)
+        send_button.clicked.connect(self.on_send_multi_btn_clicked)
         send_widget = QWidget()
         send_layout = QHBoxLayout(send_widget)
-        send_layout.addWidget(send_btn)
+        send_layout.addWidget(send_button)
         send_layout.setAlignment(Qt.AlignCenter)
         send_layout.setContentsMargins(0, 0, 0, 0)
-        self.table_multi_send.setCellWidget(row, 2, send_widget)
-        
-        # 延时
+        self.table_multi_send.setCellWidget(row, MULTI_COL_SEND, send_widget)
+
         delay_spin = QSpinBox()
         delay_spin.setRange(0, 10000)
-        delay_spin.setValue(1000)
+        delay_spin.setValue(int(item.get("delay", 1000)))
+        delay_spin.setSuffix(" ms")
         delay_spin.setFont(QFont("Consolas", 9))
+        delay_spin.valueChanged.connect(
+            lambda _value, widget=delay_spin: self._select_multi_row_for_widget(widget)
+        )
         delay_widget = QWidget()
         delay_layout = QHBoxLayout(delay_widget)
         delay_layout.addWidget(delay_spin)
         delay_layout.setAlignment(Qt.AlignCenter)
         delay_layout.setContentsMargins(0, 0, 0, 0)
-        self.table_multi_send.setCellWidget(row, 3, delay_widget)
-        
-        # 顺序显示框
-        # 为新添加的项目设置默认顺序值
-        default_order = row + 1  # 默认顺序为行号+1
-        order_item = QTableWidgetItem(str(default_order))
+        self.table_multi_send.setCellWidget(row, MULTI_COL_DELAY, delay_widget)
+
+        order_item = QTableWidgetItem(str(item.get("order", row + 1)))
         order_item.setFlags(Qt.ItemIsEditable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-        order_item.setTextAlignment(Qt.AlignCenter)  # 文本居中显示
-        self.table_multi_send.setItem(row, 4, order_item)
+        order_item.setTextAlignment(Qt.AlignCenter)
+        self.table_multi_send.setItem(row, MULTI_COL_ORDER, order_item)
+        self._refresh_multi_accessibility()
+        return row
+
+    def _select_multi_row_for_widget(self, target):
+        for row in range(self.table_multi_send.rowCount()):
+            for column in (MULTI_COL_HEX, MULTI_COL_SEND, MULTI_COL_DELAY):
+                cell = self.table_multi_send.cellWidget(row, column)
+                if cell and cell.layout() and cell.layout().itemAt(0).widget() is target:
+                    self.table_multi_send.selectRow(row)
+                    return
+
+    def _refresh_multi_accessibility(self):
+        for row in range(self.table_multi_send.rowCount()):
+            name_item = self.table_multi_send.item(row, MULTI_COL_NAME)
+            name = name_item.text().strip() if name_item else ""
+            controls = (
+                (MULTI_COL_HEX, f"第 {row + 1} 行 HEX 发送"),
+                (MULTI_COL_SEND, f"第 {row + 1} 行发送：{name or '无注释'}"),
+                (MULTI_COL_DELAY, f"第 {row + 1} 行单条延时"),
+            )
+            for column, accessible_name in controls:
+                cell = self.table_multi_send.cellWidget(row, column)
+                if cell and cell.layout() and cell.layout().count():
+                    cell.layout().itemAt(0).widget().setAccessibleName(accessible_name)
+
+    def _on_multi_item_changed(self, item):
+        self.table_multi_send.blockSignals(True)
+        try:
+            item.setBackground(QColor(Qt.transparent))
+            item.setForeground(QBrush())
+            item.setToolTip("")
+        finally:
+            self.table_multi_send.blockSignals(False)
+        if item.column() == MULTI_COL_NAME:
+            self._refresh_multi_accessibility()
     
     def remove_multi_item(self):
         """删除选中的多字符项目"""
-        selected_rows = set()
-        for item in self.table_multi_send.selectedItems():
-            selected_rows.add(item.row())
-        
-        # 按降序删除，避免行索引变化
+        selected_rows = {
+            index.row() for index in self.table_multi_send.selectionModel().selectedRows()
+        }
+        if not selected_rows:
+            self.label_batch_status.setText("请先选择要删除的指令")
+            return
+        reply = QMessageBox.question(
+            self, "确认删除", f"确定删除选中的 {len(selected_rows)} 条指令吗？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
         for row in sorted(selected_rows, reverse=True):
             self.table_multi_send.removeRow(row)
+        self._refresh_multi_accessibility()
+        self.label_batch_status.setText(f"已删除 {len(selected_rows)} 条指令")
     
     def clear_all_items(self):
         """清空所有多字符项目"""
@@ -3396,6 +3647,19 @@ class SerialTool(QMainWindow):
         if reply == QMessageBox.Yes:
             self.table_multi_send.setRowCount(0)
             self.append_text("[系统]: 已清空所有列表内指令\n")
+
+    def _fit_multi_send_to_current_screen(self):
+        """展开右侧面板时，将窗口约束在它当前所在屏幕的可用区域内。"""
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        target_width = min(1080, available.width())
+        width = min(max(self.width(), target_width), available.width())
+        height = min(self.height(), available.height())
+        x = min(max(self.x(), available.left()), available.right() - width + 1)
+        y = min(max(self.y(), available.top()), available.bottom() - height + 1)
+        self.setGeometry(x, y, width, height)
     
     def toggle_multi_send(self):
         """切换多字符串发送区域的显示/隐藏状态"""
@@ -3424,7 +3688,8 @@ class SerialTool(QMainWindow):
             self.main_splitter.setStretchFactor(1, 1)
             
             # 恢复分割器大小
-            self.main_splitter.setSizes([600, 400])
+            self._fit_multi_send_to_current_screen()
+            self.main_splitter.setSizes([700, 380])
             
             # 强制刷新布局
             self.main_splitter.update()
@@ -3452,52 +3717,34 @@ class SerialTool(QMainWindow):
         # 内容
         help_text = """
         多字符串发送功能使用说明：
-        
-        1. 循环发送：
-           - 勾选"循环发送"复选框，系统将按照顺序循环发送所有有效项目
-           - 可设置发送间隔时间（毫秒）
-           - 再次点击复选框可停止循环发送
-           - 循环发送时，次数相关控件将被禁用，无法修改
-        
-        2. 循环次数：
-           - 勾选"次数:"复选框，可设置循环发送的轮数
-           - 在输入框中设置具体的循环次数（1-9999）
-           - 达到指定次数后，循环发送会自动停止
-        
-        3. 字符串：
-           - 在"字符串"列输入要发送的内容
-           - 支持普通文本和HEX格式（需要勾选HEX复选框）
-        
-        4. 单击发送：
-           - 点击"点击发送"列的按钮，可单独发送对应行的内容
-           - 按钮文本可自定义
-        
-        5. 修改内容：
-           - 双击"字符串"列可编辑发送内容
-           - 右键点击"发送"按钮可重命名按钮文字
-        
-        6. 延时设置：
-           - 在"延时(ms)"列设置每次发送后的等待时间
-        
-        7. 顺序设置：
-           - 在"顺序"列设置发送的顺序
-           - 顺序值必须大于0
-           - 系统会按照顺序值从小到大发送
-        
-        8. 保存/加载：
-           - 点击"保存"按钮可将当前配置保存到文件
-           - 点击"加载"按钮可从文件加载配置
-        
-        9. 添加/删除/清空：
-           - 点击"+"按钮添加新行
-           - 选中行后点击"-"按钮删除行
-           - 点击"清空"按钮可清空所有列表内指令
-        
-        10. 注意事项：
-           - 只有顺序值大于0的项目才会被发送
-           - 批量发送时，每个项目使用各自的延时设置
-           - 循环完成后，使用顶部的延时设置作为下一次循环的间隔
-        11. 关于作者：
+
+        1. 开始与停止：
+           - 点击“开始批量发送”，系统按“顺序”从小到大发送全部有效指令
+           - 发送期间按钮会变为“停止批量发送”，列表和批量设置会暂时锁定
+           - 默认限定为 1 轮；取消“限定轮数”后会持续发送，直到手动停止
+
+        2. 时间设置：
+           - “单条延时(ms)”是该指令发送完成后，到下一条指令之前的等待时间
+           - “轮间隔(ms)”是每轮全部指令发送完毕后，到下一轮之间的等待时间
+
+        3. 编辑与单独发送：
+           - 双击“字符串”“名称/备注”或“顺序”单元格可直接编辑
+           - 勾选 HEX 后，字符串必须是有效的十六进制字节，例如 AA 01 FF
+           - 点击“操作”列中的“发送”，只发送该行，不会覆盖主发送框草稿
+
+        4. 校验与状态：
+           - 空字符串、无效 HEX、以及非正整数顺序会在开始前统一标出
+           - 进度与停止结果显示在批量工具栏右侧
+
+        5. 保存与加载：
+           - CSV 会同时保存所有指令、轮间隔、限定轮数及轮数
+           - 加载会先确认是否覆盖当前列表；格式不正确的行会汇总提示
+
+        6. 添加、删除与清空：
+           - 点击“+”添加新行；选择行后点击“-”删除
+           - “清空”会要求二次确认
+
+        7. 关于作者：
            - 设计者:gaoxiang
            - 联系方式:770807059@qq.com
         """
@@ -3519,255 +3766,198 @@ class SerialTool(QMainWindow):
 
     @pyqtSlot()
     def stop_batch_send(self):
-        """停止批量发送（从线程调用）"""
-        # 使用互斥锁保护
-        with QMutexLocker(self.serial_mutex):
-            if hasattr(self, 'batch_thread') and self.batch_thread.isRunning():
-                self.batch_thread.stop()
-                # 使用QTimer延迟设置，避免信号循环
-                QTimer.singleShot(0, lambda: self.check_cycle_send.setChecked(False))
-                self.append_text("[系统]: 串口已关闭，批量发送已停止\n")
-                # 延迟清理线程
-                QTimer.singleShot(100, self._cleanup_batch_thread)
-    
-    def toggle_batch_send(self, state):
-        """切换批量发送状态"""
-        if state == 2:  # 勾选，开始发送
-            should_start = False
-            
-            # 使用互斥锁保护对共享资源的访问
-            with QMutexLocker(self.serial_mutex):
-                # 检查是否已经有批量发送线程在运行
-                if hasattr(self, 'batch_thread'):
-                    if self.batch_thread.isRunning():
-                        # 线程正在运行，不能启动新线程
-                        should_start = False
-                    else:
-                        # 线程已停止，删除旧线程引用
-                        del self.batch_thread
-                        should_start = True
-                else:
-                    # 没有线程，允许启动
-                    should_start = True
-            
-            # 禁用次数相关控件（在锁外执行，避免死锁）
-            self.check_cycle_count.setEnabled(False)
-            self.spin_cycle_count.setEnabled(False)
-            
-            # 如果不应该启动，恢复UI状态并返回
-            if not should_start:
-                QTimer.singleShot(0, lambda: self.check_cycle_send.setChecked(False))
-                self.check_cycle_count.setEnabled(True)
-                self.spin_cycle_count.setEnabled(self.check_cycle_count.isChecked())
-                return
-            
-            # 检查串口是否打开（在锁外执行，避免死锁）
-            if not hasattr(self, 'transport') or not self.transport or not self.transport.is_open:
-                QMessageBox.warning(self, "警告", "请先打开连接！")
-                # 使用QTimer延迟设置，避免信号循环
-                QTimer.singleShot(0, lambda: self.check_cycle_send.setChecked(False))
-                # 重新启用次数相关控件
-                QTimer.singleShot(0, lambda: self.check_cycle_count.setEnabled(True))
-                QTimer.singleShot(0, lambda: self.spin_cycle_count.setEnabled(self.check_cycle_count.isChecked()))
-                return
-            
-            # 启动批量发送
-            self.batch_send()
-        else:  # 取消勾选，停止发送
-            # 停止批量发送（在锁外检查状态，避免死锁）
-            thread_stopped = False
-            with QMutexLocker(self.serial_mutex):
-                if hasattr(self, 'batch_thread') and self.batch_thread.isRunning():
-                    self.batch_thread.stop()
-                    thread_stopped = True
-            
-            if thread_stopped:
-                # 使用QTimer延迟处理，确保线程有时间停止
-                QTimer.singleShot(100, lambda: self.append_text("[系统]: 批量发送已停止\n"))
-                QTimer.singleShot(100, self._cleanup_batch_thread)
-            else:
-                # 如果线程没有运行，直接清理
-                self._cleanup_batch_thread()
-            
-            # 重新启用次数相关控件
-            self.check_cycle_count.setEnabled(True)
+        """请求停止批量发送；真正复位由线程结束信号统一处理。"""
+        thread = getattr(self, 'batch_thread', None)
+        if thread is not None and thread.isRunning():
+            thread.request_stop()
+            self.label_batch_status.setText("正在停止…")
+
+    def toggle_batch_send(self, checked):
+        """响应明确的开始/停止按钮。"""
+        if not checked:
+            self.stop_batch_send()
+            return
+        thread = getattr(self, 'batch_thread', None)
+        if thread is not None and thread.isRunning():
+            return
+        if not hasattr(self, 'transport') or not self.transport or not self.transport.is_open:
+            QMessageBox.warning(self, "无法开始", "请先打开连接。")
+            self._set_batch_running(False)
+            self.label_batch_status.setText("未连接")
+            return
+        self.batch_send()
+
+    def _set_batch_running(self, running):
+        """集中维护批量发送期间所有可编辑控件的启用状态。"""
+        self.btn_batch_send.blockSignals(True)
+        self.btn_batch_send.setChecked(running)
+        self.btn_batch_send.setText("停止批量发送" if running else "开始批量发送")
+        self.btn_batch_send.setAccessibleName(self.btn_batch_send.text())
+        self.btn_batch_send.blockSignals(False)
+        locked_controls = (
+            self.table_multi_send, self.btn_save_multi, self.btn_load_multi,
+            self.btn_add_multi, self.btn_remove_multi, self.btn_clear_multi,
+            self.spin_delay, self.check_cycle_count, self.spin_cycle_count,
+        )
+        for control in locked_controls:
+            control.setEnabled(not running)
+        if not running:
             self.spin_cycle_count.setEnabled(self.check_cycle_count.isChecked())
+
+    @pyqtSlot(str)
+    def _finish_batch_send(self, result):
+        """无论正常完成、取消还是异常，都从同一入口恢复界面。"""
+        self._set_batch_running(False)
+        status_text = {
+            "完成": "已完成", "停止": "已停止",
+            "断开": "连接已断开", "错误": "发送失败",
+        }.get(result, result)
+        self.label_batch_status.setText(status_text)
+        self.append_text(f"[系统]: 批量发送{status_text}\n")
     
     def _cleanup_batch_thread(self):
         """清理批量发送线程"""
-        # 使用互斥锁保护
-        with QMutexLocker(self.serial_mutex):
-            # 清除batch_thread属性
-            if hasattr(self, 'batch_thread'):
-                # 检查线程是否还在运行
-                if self.batch_thread.isRunning():
-                    # 线程还在运行，不删除属性
-                    return
-                # 线程已停止，删除属性
-                del self.batch_thread
+        thread = getattr(self, 'batch_thread', None)
+        if thread is None or thread.isRunning():
+            return
+        thread.deleteLater()
+        del self.batch_thread
+
+    def _collect_multi_send_snapshot(self):
+        """校验表格并返回按顺序排列的不可变发送快照与单元格错误。"""
+        items = []
+        errors = []
+        for row in range(self.table_multi_send.rowCount()):
+            string_item = self.table_multi_send.item(row, MULTI_COL_TEXT)
+            text = string_item.text() if string_item else ""
+            if not text.strip():
+                errors.append((row, MULTI_COL_TEXT, "字符串不能为空"))
+
+            order_item = self.table_multi_send.item(row, MULTI_COL_ORDER)
+            order_text = order_item.text().strip() if order_item else ""
+            try:
+                order = int(order_text)
+                if order <= 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                errors.append((row, MULTI_COL_ORDER, "顺序必须是大于 0 的整数"))
+                continue
+            if not text.strip():
+                continue
+
+            hex_widget = self.table_multi_send.cellWidget(row, MULTI_COL_HEX)
+            hex_checkbox = (
+                hex_widget.layout().itemAt(0).widget()
+                if hex_widget and hex_widget.layout() and hex_widget.layout().count() else None
+            )
+            delay_widget = self.table_multi_send.cellWidget(row, MULTI_COL_DELAY)
+            delay_spin = (
+                delay_widget.layout().itemAt(0).widget()
+                if delay_widget and delay_widget.layout() and delay_widget.layout().count() else None
+            )
+            name_item = self.table_multi_send.item(row, MULTI_COL_NAME)
+            is_hex = bool(hex_checkbox and hex_checkbox.isChecked())
+            if is_hex:
+                normalized_hex = text.replace(" ", "").replace("\n", "").replace("\r", "")
+                try:
+                    if len(normalized_hex) % 2:
+                        raise ValueError
+                    bytes.fromhex(normalized_hex)
+                except ValueError:
+                    errors.append((row, MULTI_COL_TEXT, "HEX 格式无效"))
+                    continue
+            items.append(MultiSendPayload(
+                text=text, is_hex=is_hex,
+                delay_ms=delay_spin.value() if delay_spin else 1000,
+                order=order, name=name_item.text() if name_item else "无注释",
+                source_row=row,
+            ))
+        items.sort(key=lambda item: (item.order, item.source_row))
+        return tuple(items), errors
     
     def batch_send(self):
-        """批量发送多字符项目"""
-        # 使用互斥锁保护
-        with QMutexLocker(self.serial_mutex):
-            count = self.table_multi_send.rowCount()
-            if count == 0:
-                QMessageBox.information(self, "提示", "没有可发送的项目")
-                self.check_cycle_send.setChecked(False)
-                return
-            
-            # 获取全局循环延时设置
-            cycle_delay = self.spin_delay.value()
-            
-            # 获取循环次数设置
-            use_cycle_count = self.check_cycle_count.isChecked()
-            cycle_count = self.spin_cycle_count.value() if use_cycle_count else -1  # -1 表示无限循环
-            
-            # 收集所有有效的项目（顺序不为0）
-            valid_items = []
-            for i in range(count):
-                # 获取顺序值
-                order_item = self.table_multi_send.item(i, 4)
-                order_text = order_item.text().strip() if order_item else ""
-                
-                # 跳过空顺序和0顺序的项目
-                if not order_text:
-                    continue
-                
-                try:
-                    order = int(order_text)
-                    if order <= 0:
-                        continue
-                    
-                    # 获取当前项目的延时设置
-                    delay_widget = self.table_multi_send.cellWidget(i, 3)
-                    if delay_widget and delay_widget.layout():
-                        delay_layout = delay_widget.layout()
-                        if delay_layout:
-                            delay_spin = delay_layout.itemAt(0).widget()
-                            item_delay = delay_spin.value() if delay_spin else 1000
-                        else:
-                            item_delay = 1000
-                    else:
-                        item_delay = 1000
-                    
-                    valid_items.append((order, i, item_delay))
-                except ValueError:
-                    continue
-            
-            # 按顺序排序
-            valid_items.sort(key=lambda x: x[0])
-            sorted_items = [(index, delay) for _, index, delay in valid_items]
-            
-            if not sorted_items:
-                QMessageBox.information(self, "提示", "没有有效的发送项目（顺序必须大于0）")
-                self.check_cycle_send.setChecked(False)
-                return
-        
-        # 开始批量发送（在锁外执行，避免死锁）
-        if use_cycle_count:
-            self.append_text(f"[系统]: 开始批量发送 {len(sorted_items)} 个项目，共 {cycle_count} 轮\n")
-        else:
-            self.append_text(f"[系统]: 开始批量发送 {len(sorted_items)} 个项目\n")
-        
-        # 创建一个线程来处理批量发送
-        class BatchSendThread(QThread):
-            def __init__(self, parent, sorted_items, cycle_delay, use_cycle_count, cycle_count):
-                super().__init__(parent)
-                self.parent = parent
-                self.sorted_items = sorted_items  # 格式: [(index, delay), ...]
-                self.cycle_delay = cycle_delay  # 循环完成后的延时
-                self.use_cycle_count = use_cycle_count  # 是否使用循环次数
-                self.cycle_count = cycle_count  # 循环次数
-                self.running = True
-            
-            def run(self):
-                i = 0
-                current_cycle = 0
-                
-                while self.running:
-                    try:
-                        # 检查父对象是否仍然存在
-                        if not self.parent:
-                            self.running = False
-                            break
-                        
-                        # 使用互斥锁保护串口访问
-                        with QMutexLocker(self.parent.serial_mutex):
-                            # 检查串口状态
-                            if not hasattr(self.parent, 'transport') or not self.parent.transport or not self.parent.transport.is_open:
-                                self.running = False
-                                break
-                        
-                        # 获取当前项目的索引和延时
-                        current_index, current_delay = self.sorted_items[i]
-                        
-                        # 发送当前项目（在主线程中执行）
-                        # 发送操作本身会检查串口状态
-                        QMetaObject.invokeMethod(self.parent, "send_multi_item", Qt.QueuedConnection,
-                                                Q_ARG(int, current_index))
-                        
-                        # 添加延时（使用当前项目的延时设置）
-                        if current_delay > 0:
-                            QThread.msleep(current_delay)
-                        else:
-                            # 即使没有延时，也添加一个小的休眠，避免CPU占用过高
-                            QThread.msleep(10)
-                        
-                        # 循环发送，发送完最后一个项目后重新开始
-                        i = (i + 1) % len(self.sorted_items)
-                        
-                        # 如果刚发送完最后一个项目，添加循环延时
-                        if i == 0:
-                            # 增加循环计数
-                            current_cycle += 1
-                            
-                            # 检查是否达到循环次数
-                            if self.use_cycle_count and current_cycle >= self.cycle_count:
-                                self.running = False
-                                break
-                            
-                            # 添加循环延时
-                            if self.cycle_delay > 0:
-                                QThread.msleep(self.cycle_delay)
-                    except serial.SerialException as e:
-                        # 捕获串口异常
-                        print(f"批量发送串口错误: {e}")
-                        self.running = False
-                        try:
-                            QMetaObject.invokeMethod(self.parent, "stop_batch_send", Qt.QueuedConnection)
-                        except:
-                            pass
-                        break
-                    except RuntimeError as e:
-                        # 捕获运行时错误
-                        print(f"批量发送运行时错误: {e}")
-                        self.running = False
-                        break
-                    except Exception as e:
-                        # 捕获其他未预期的异常，记录详细信息便于调试
-                        import traceback
-                        error_details = traceback.format_exc()
-                        print(f"批量发送线程错误: {e}")
-                        print(f"错误详情: {error_details}")
-                        self.running = False
-                        break
-            
-            def stop(self):
-                """停止线程，设置超时避免无限等待"""
-                self.running = False
-                # 使用带超时的wait()，避免线程阻塞
-                if self.isRunning():
-                    if not self.wait(2000):  # 2秒超时
-                        print(f"警告: 批量发送线程停止超时")
-        
-        # 启动批量发送线程（在锁外执行，避免死锁）
-        self.batch_thread = BatchSendThread(self, sorted_items, cycle_delay, use_cycle_count, cycle_count)
-        self.batch_thread.finished.connect(lambda: self.append_text("[系统]: 批量发送完成\n"))
-        self.batch_thread.start()
-    
+        """校验并冻结当前列表，然后启动可中断的批量调度线程。"""
+        items, errors = self._collect_multi_send_snapshot()
+        self._show_multi_send_errors(errors)
+        if errors:
+            self._set_batch_running(False)
+            self.label_batch_status.setText(f"有 {len(errors)} 处需要修正")
+            first_row, first_column, _ = errors[0]
+            self.table_multi_send.setCurrentCell(first_row, first_column)
+            QMessageBox.warning(self, "无法开始", "请先修正表格中标出的无效内容。")
+            return
+        if not items:
+            self._set_batch_running(False)
+            self.label_batch_status.setText("没有可发送的指令")
+            return
 
-    
+        cycle_count = self.spin_cycle_count.value() if self.check_cycle_count.isChecked() else None
+        self.batch_thread = BatchSendThread(
+            items, cycle_delay_ms=self.spin_delay.value(),
+            cycle_count=cycle_count, parent=self,
+        )
+        self.batch_thread.send_requested.connect(self.send_multi_payload)
+        self.batch_thread.progress_changed.connect(self._update_batch_progress)
+        self.batch_thread.batch_finished.connect(self._finish_batch_send)
+        self.batch_thread.finished.connect(self._cleanup_batch_thread)
+        self._set_batch_running(True)
+        rounds = f"{cycle_count} 轮" if cycle_count is not None else "持续发送"
+        self.label_batch_status.setText(f"准备发送 · {len(items)} 条 · {rounds}")
+        self.append_text(f"[系统]: 开始批量发送 {len(items)} 条指令，{rounds}\n")
+        self.batch_thread.start()
+
+    def _show_multi_send_errors(self, errors):
+        """在对应单元格上显示校验错误，不使用会中断连续修正的多重弹窗。"""
+        self.table_multi_send.blockSignals(True)
+        try:
+            for row in range(self.table_multi_send.rowCount()):
+                for column in (MULTI_COL_TEXT, MULTI_COL_ORDER):
+                    item = self.table_multi_send.item(row, column)
+                    if item:
+                        item.setBackground(QColor(Qt.transparent))
+                        item.setForeground(QBrush())
+                        item.setToolTip("")
+            error_background = QColor("#5C2B31" if self.current_theme == "dark" else "#F8D7DA")
+            error_foreground = QColor("#FFCDD2" if self.current_theme == "dark" else "#842029")
+            for row, column, message in errors:
+                item = self.table_multi_send.item(row, column)
+                if item:
+                    item.setBackground(error_background)
+                    item.setForeground(error_foreground)
+                    item.setToolTip(message)
+        finally:
+            self.table_multi_send.blockSignals(False)
+
+    @pyqtSlot(int, int, int)
+    def _update_batch_progress(self, cycle, item_index, total):
+        self.label_batch_status.setText(f"第 {cycle} 轮 · {item_index}/{total}")
+
+    @pyqtSlot(object)
+    def send_multi_payload(self, payload):
+        """发送冻结的单条内容，不读取可能已经变化的表格行。"""
+        signal_sender = self.sender()
+        thread = (
+            signal_sender if isinstance(signal_sender, BatchSendThread)
+            else getattr(self, 'batch_thread', None)
+        )
+        if (
+            thread is None
+            or thread is not getattr(self, 'batch_thread', None)
+            or thread.is_stop_requested()
+        ):
+            return
+        if not hasattr(self, 'transport') or not self.transport or not self.transport.is_open:
+            if thread is not None:
+                thread.request_stop("断开")
+            return
+        try:
+            succeeded = self._send_with_preserved_editor(payload.text, payload.is_hex)
+        except Exception:
+            succeeded = False
+        finally:
+            if thread is not None:
+                thread.report_send_result(succeeded)
+
     def save_multi_items(self):
         """保存多字符项目到CSV文件"""
         try:
@@ -3779,14 +3969,14 @@ class SerialTool(QMainWindow):
                 return
 
             # 确保文件扩展名为.csv
-            if not file_path.endswith('.csv'):
+            if not file_path.lower().endswith('.csv'):
                 file_path += '.csv'
 
             # 收集所有项目
             items = []
             for i in range(self.table_multi_send.rowCount()):
                 # 获取HEX状态
-                hex_widget = self.table_multi_send.cellWidget(i, 0)
+                hex_widget = self.table_multi_send.cellWidget(i, MULTI_COL_HEX)
                 if hex_widget and hex_widget.layout():
                     hex_layout = hex_widget.layout()
                     hex_checkbox = hex_layout.itemAt(0).widget()
@@ -3795,11 +3985,11 @@ class SerialTool(QMainWindow):
                     is_hex = False
 
                 # 获取字符串
-                string_item = self.table_multi_send.item(i, 1)
+                string_item = self.table_multi_send.item(i, MULTI_COL_TEXT)
                 text = string_item.text() if string_item else ""
 
                 # 获取延时
-                delay_widget = self.table_multi_send.cellWidget(i, 3)
+                delay_widget = self.table_multi_send.cellWidget(i, MULTI_COL_DELAY)
                 if delay_widget and delay_widget.layout():
                     delay_layout = delay_widget.layout()
                     delay_spin = delay_layout.itemAt(0).widget()
@@ -3808,24 +3998,27 @@ class SerialTool(QMainWindow):
                     delay = 1000
 
                 # 获取按钮文本
-                button_widget = self.table_multi_send.cellWidget(i, 2)
-                button_text = "无注释"
-                if button_widget and button_widget.layout():
-                    button_layout = button_widget.layout()
-                    if button_layout and button_layout.count() > 0:
-                        btn = button_layout.itemAt(0).widget()
-                        if btn:
-                            button_text = btn.text()
+                name_item = self.table_multi_send.item(i, MULTI_COL_NAME)
+                button_text = name_item.text() if name_item else "无注释"
 
                 # 获取顺序
-                order_item = self.table_multi_send.item(i, 4)
+                order_item = self.table_multi_send.item(i, MULTI_COL_ORDER)
                 order = order_item.text().strip() if order_item else "1"
 
-                items.append({"hex": is_hex, "string": text, "button_text": button_text, "delay": delay, "order": order})
+                items.append({
+                    "hex": is_hex, "string": text, "button_text": button_text,
+                    "delay": delay, "order": order,
+                    "cycle_delay": self.spin_delay.value(),
+                    "limit_cycles": self.check_cycle_count.isChecked(),
+                    "cycle_count": self.spin_cycle_count.value(),
+                })
 
             # 保存到CSV文件
             with open(file_path, 'w', encoding='utf-8-sig', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=['hex', 'string', 'button_text', 'delay', 'order'])
+                writer = csv.DictWriter(f, fieldnames=[
+                    'hex', 'string', 'button_text', 'delay', 'order',
+                    'cycle_delay', 'limit_cycles', 'cycle_count',
+                ])
                 writer.writeheader()
                 for item in items:
                     writer.writerow(item)
@@ -3836,7 +4029,7 @@ class SerialTool(QMainWindow):
             self.append_text(f"[错误]: 保存多字符项目失败: {e}\n")
 
     def eventFilter(self, obj, event):
-        """事件过滤器：右键重命名按钮文本 / 发送栏上下键历史记录导航 / 接收区滚轮暂停跟底 / 自动给弹窗应用暗黑标题栏"""
+        """处理发送历史导航、接收区滚轮跟底和弹窗暗黑标题栏。"""
         # 自动给所有 QMessageBox/独立 QDialog 应用当前主题（标题栏暗色处理）
         # 用 WinIdChange 事件（窗口获得 hwnd 时触发，早于 Show），避免显示后再改 DWM 产生白色闪烁
         # 仅在暗黑模式下生效，一次性处理
@@ -3861,20 +4054,6 @@ class SerialTool(QMainWindow):
         # ---- 接收区滚轮：用户滚动查看时暂停自动跟底，6 秒静止后恢复 ----
         if text_recv is not None and obj is text_recv.viewport() and event.type() == QEvent.Wheel:
             self._on_recv_wheel(event)
-
-        # ---- 右键重命名多字符串发送按钮 ----
-        if event.type() == event.MouseButtonPress and event.button() == Qt.RightButton:
-            table = getattr(self, 'table_multi_send', None)
-            if table is not None and obj.objectName().startswith("btn_"):
-                for row in range(table.rowCount()):
-                    w = table.cellWidget(row, 2)
-                    if w and w.layout() and w.layout().itemAt(0).widget() == obj:
-                        new_text, ok = QInputDialog.getText(
-                            self, "重命名按钮", "按钮文字:", text=obj.text())
-                        if ok and new_text:
-                            obj.setText(new_text)
-                        break
-                return True  # 消费右键事件，不继续传播
 
         # ---- 发送栏上下键历史记录导航 ----
         if text_send is not None and obj is text_send:
@@ -4021,6 +4200,41 @@ class SerialTool(QMainWindow):
 
         return None, None
 
+    def _has_nondefault_multi_send_state(self):
+        """判断加载 CSV 是否会覆盖用户实际编辑过的列表或批量设置。"""
+        if (
+            self.spin_delay.value() != 1000
+            or not self.check_cycle_count.isChecked()
+            or self.spin_cycle_count.value() != 1
+        ):
+            return True
+        row_count = self.table_multi_send.rowCount()
+        if row_count == 0:
+            return False
+        if row_count != 1:
+            return True
+
+        hex_widget = self.table_multi_send.cellWidget(0, MULTI_COL_HEX)
+        hex_checkbox = (
+            hex_widget.layout().itemAt(0).widget()
+            if hex_widget and hex_widget.layout() and hex_widget.layout().count() else None
+        )
+        delay_widget = self.table_multi_send.cellWidget(0, MULTI_COL_DELAY)
+        delay_spin = (
+            delay_widget.layout().itemAt(0).widget()
+            if delay_widget and delay_widget.layout() and delay_widget.layout().count() else None
+        )
+        text_item = self.table_multi_send.item(0, MULTI_COL_TEXT)
+        name_item = self.table_multi_send.item(0, MULTI_COL_NAME)
+        order_item = self.table_multi_send.item(0, MULTI_COL_ORDER)
+        return any((
+            bool(hex_checkbox and hex_checkbox.isChecked()),
+            bool(text_item and text_item.text()),
+            not name_item or name_item.text() != "无注释",
+            not delay_spin or delay_spin.value() != 1000,
+            not order_item or order_item.text().strip() != "1",
+        ))
+
     def load_multi_items(self):
         """从CSV文件加载多字符项目"""
         try:
@@ -4044,80 +4258,41 @@ class SerialTool(QMainWindow):
                 )
                 return
 
-            items = []
-            reader = csv.DictReader(io.StringIO(text_content))
-            for row in reader:
-                try:
-                    item = {
-                        "hex": row['hex'].lower() == 'true',
-                        "string": row.get('string', ''),
-                        "button_text": row.get('button_text', '无注释'),
-                        "delay": int(row.get('delay', 1000)),
-                        "order": row.get('order', '1')
-                    }
-                    items.append(item)
-                except (ValueError, KeyError) as e:
-                    continue
+            items, issues, settings = parse_multi_send_csv(text_content)
 
             if not items:
-                QMessageBox.information(self, "提示", "文件中没有有效的项目")
+                details = "\n".join(issues[:8])
+                QMessageBox.warning(self, "加载失败", f"文件中没有有效的项目。\n{details}")
                 return
+
+            if self._has_nondefault_multi_send_state():
+                reply = QMessageBox.question(
+                    self, "确认替换",
+                    "加载文件会替换当前多字符串列表，尚未保存的修改将丢失。是否继续？",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+                )
+                if reply != QMessageBox.Yes:
+                    return
 
             # 清空现有项目
             self.table_multi_send.setRowCount(0)
 
-            # 添加加载的项目
-            for i, item in enumerate(items):
-                self.table_multi_send.insertRow(i)
+            for item in items:
+                self._insert_multi_item_row(item)
 
-                # HEX复选框
-                hex_checkbox = QCheckBox()
-                hex_checkbox.setChecked(item.get("hex", False))
-                hex_widget = QWidget()
-                hex_layout = QHBoxLayout(hex_widget)
-                hex_layout.addWidget(hex_checkbox)
-                hex_layout.setAlignment(Qt.AlignCenter)
-                hex_layout.setContentsMargins(0, 0, 0, 0)
-                self.table_multi_send.setCellWidget(i, 0, hex_widget)
-
-                # 字符串
-                string_value = item.get("string", "")
-                self.table_multi_send.setItem(i, 1, QTableWidgetItem(string_value))
-
-                # 发送按钮（支持三击编辑，恢复保存的按钮文本）
-                button_text = item.get("button_text", "无注释")
-                send_btn = QPushButton(button_text)
-                send_btn.setFont(QFont("Microsoft YaHei", 9))
-                send_btn.setMinimumWidth(70)
-                send_btn.clicked.connect(self.on_send_multi_btn_clicked)
-                send_btn.setObjectName(f"btn_{i}")
-                send_btn.installEventFilter(self)
-                send_widget = QWidget()
-                send_layout = QHBoxLayout(send_widget)
-                send_layout.addWidget(send_btn)
-                send_layout.setAlignment(Qt.AlignCenter)
-                send_layout.setContentsMargins(0, 0, 0, 0)
-                self.table_multi_send.setCellWidget(i, 2, send_widget)
-
-                # 延时
-                delay_spin = QSpinBox()
-                delay_spin.setRange(0, 10000)
-                delay_spin.setValue(item.get("delay", 1000))
-                delay_spin.setFont(QFont("Consolas", 9))
-                delay_widget = QWidget()
-                delay_layout = QHBoxLayout(delay_widget)
-                delay_layout.addWidget(delay_spin)
-                delay_layout.setAlignment(Qt.AlignCenter)
-                delay_layout.setContentsMargins(0, 0, 0, 0)
-                self.table_multi_send.setCellWidget(i, 3, delay_widget)
-
-                # 顺序
-                order_item = QTableWidgetItem(item.get("order", "1"))
-                order_item.setFlags(Qt.ItemIsEditable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-                order_item.setTextAlignment(Qt.AlignCenter)
-                self.table_multi_send.setItem(i, 4, order_item)
-
-            self.append_text(f"[系统]: 从 {file_path} 加载了 {len(items)} 个多字符项目\n")
+            if settings:
+                self.spin_delay.setValue(settings["cycle_delay"])
+                self.check_cycle_count.setChecked(settings["limit_cycles"])
+                self.spin_cycle_count.setValue(settings["cycle_count"])
+            self.append_text(f"[系统]: 从 {file_path} 加载了 {len(items)} 个多字符串项目\n")
+            if issues:
+                details = "\n".join(issues[:8])
+                remaining = len(issues) - min(8, len(issues))
+                suffix = f"\n另有 {remaining} 个问题未展开。" if remaining else ""
+                QMessageBox.warning(
+                    self, "部分内容未加载",
+                    f"已加载 {len(items)} 条，跳过 {len(issues)} 条或项设置。\n\n{details}{suffix}",
+                )
         except Exception as e:
             QMessageBox.critical(self, "错误", f"加载多字符项目失败: {e}")
             self.append_text(f"[错误]: 加载多字符项目失败: {e}\n")
@@ -5501,69 +5676,31 @@ class SerialTool(QMainWindow):
                 
                 # 加载多字符串发送项目
                 if 'multi_items' in config and isinstance(config['multi_items'], list):
-                    # 清空现有项目
                     self.table_multi_send.setRowCount(0)
-                    
-                    # 添加保存的项目
                     for item_data in config['multi_items']:
                         if not isinstance(item_data, dict):
                             continue
-                        
-                        row = self.table_multi_send.rowCount()
-                        self.table_multi_send.insertRow(row)
-                        
-                        # HEX复选框
-                        hex_checkbox = QCheckBox()
-                        hex_checkbox.setChecked(item_data.get('hex', False))
-                        hex_widget = QWidget()
-                        hex_layout = QHBoxLayout(hex_widget)
-                        hex_layout.setContentsMargins(0, 0, 0, 0)
-                        hex_layout.setAlignment(Qt.AlignCenter)
-                        hex_layout.addWidget(hex_checkbox)
-                        self.table_multi_send.setCellWidget(row, 0, hex_widget)
-
-                        # 字符串输入框
-                        string_item = QTableWidgetItem(item_data.get('string', ''))
-                        self.table_multi_send.setItem(row, 1, string_item)
-
-                        # 发送按钮
-                        button = QPushButton(item_data.get('button_text', '无注释'))
-                        button.setFont(QFont("Microsoft YaHei", 9))
-                        button.setMinimumWidth(70)
-                        button.clicked.connect(self.on_send_multi_btn_clicked)
-                        # 为按钮设置唯一的对象名称，用于事件过滤器
-                        button.setObjectName(f"btn_{row}")
-                        button.installEventFilter(self)
-                        button_widget = QWidget()
-                        button_layout = QHBoxLayout(button_widget)
-                        button_layout.setContentsMargins(0, 0, 0, 0)
-                        button_layout.setAlignment(Qt.AlignCenter)
-                        button_layout.addWidget(button)
-                        self.table_multi_send.setCellWidget(row, 2, button_widget)
-
-                        # 延时设置
-                        delay_spin = QSpinBox()
-                        delay_spin.setRange(0, 10000)
                         try:
                             delay = int(item_data.get('delay', 1000))
-                            if delay < 0:
-                                delay = 1000
                         except (ValueError, TypeError):
                             delay = 1000
-                        delay_spin.setValue(delay)
-                        delay_spin.setFont(QFont("Consolas", 9))
-                        delay_widget = QWidget()
-                        delay_layout = QHBoxLayout(delay_widget)
-                        delay_layout.setContentsMargins(0, 0, 0, 0)
-                        delay_layout.setAlignment(Qt.AlignCenter)
-                        delay_layout.addWidget(delay_spin)
-                        self.table_multi_send.setCellWidget(row, 3, delay_widget)
-                        
-                        # 顺序显示框
-                        order_item = QTableWidgetItem(str(item_data.get('order', row + 1)))
-                        order_item.setFlags(Qt.ItemIsEditable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-                        order_item.setTextAlignment(Qt.AlignCenter)  # 文本居中显示
-                        self.table_multi_send.setItem(row, 4, order_item)
+                        restored_item = dict(item_data)
+                        restored_item['delay'] = min(10000, max(0, delay))
+                        self._insert_multi_item_row(restored_item)
+
+                try:
+                    cycle_delay = int(config.get('multi_cycle_delay', self.spin_delay.value()))
+                except (TypeError, ValueError):
+                    cycle_delay = self.spin_delay.value()
+                self.spin_delay.setValue(min(10000, max(0, cycle_delay)))
+                self.check_cycle_count.setChecked(
+                    bool(config.get('multi_limit_cycles', self.check_cycle_count.isChecked()))
+                )
+                try:
+                    cycle_count = int(config.get('multi_cycle_count', self.spin_cycle_count.value()))
+                except (TypeError, ValueError):
+                    cycle_count = self.spin_cycle_count.value()
+                self.spin_cycle_count.setValue(min(9999, max(1, cycle_count)))
                 
                 # 加载发送历史记录
                 if 'send_history' in config and isinstance(config['send_history'], list):
@@ -5615,7 +5752,7 @@ class SerialTool(QMainWindow):
         for i in range(self.table_multi_send.rowCount()):
             try:
                 # 获取HEX复选框状态（添加空检查）
-                hex_widget = self.table_multi_send.cellWidget(i, 0)
+                hex_widget = self.table_multi_send.cellWidget(i, MULTI_COL_HEX)
                 is_hex = False
                 if hex_widget:
                     hex_layout = hex_widget.layout()
@@ -5625,22 +5762,16 @@ class SerialTool(QMainWindow):
                             is_hex = hex_checkbox.isChecked()
                 
                 # 获取字符串
-                string_item = self.table_multi_send.item(i, 1)
+                string_item = self.table_multi_send.item(i, MULTI_COL_TEXT)
                 string = string_item.text() if string_item else ""
                 
-                # 获取按钮文本（添加空检查）
-                button_text = ""
-                button_widget = self.table_multi_send.cellWidget(i, 2)
-                if button_widget:
-                    button_layout = button_widget.layout()
-                    if button_layout and button_layout.count() > 0:
-                        button = button_layout.itemAt(0).widget()
-                        if button:
-                            button_text = button.text()
+                # 名称/备注是可直接编辑的表格项。
+                name_item = self.table_multi_send.item(i, MULTI_COL_NAME)
+                button_text = name_item.text() if name_item else ""
                 
                 # 获取延时（添加空检查）
                 delay = 0
-                delay_widget = self.table_multi_send.cellWidget(i, 3)
+                delay_widget = self.table_multi_send.cellWidget(i, MULTI_COL_DELAY)
                 if delay_widget:
                     delay_layout = delay_widget.layout()
                     if delay_layout and delay_layout.count() > 0:
@@ -5649,7 +5780,7 @@ class SerialTool(QMainWindow):
                             delay = delay_spin.value()
                 
                 # 获取顺序
-                order_item = self.table_multi_send.item(i, 4)
+                order_item = self.table_multi_send.item(i, MULTI_COL_ORDER)
                 order = order_item.text() if order_item else ""
                 
                 multi_items.append({
@@ -5688,6 +5819,9 @@ class SerialTool(QMainWindow):
             'head_field_enabled': self.check_head_field.isChecked(),
             'tail_field_enabled': self.check_tail_field.isChecked(),
             'multi_items': multi_items,
+            'multi_cycle_delay': self.spin_delay.value(),
+            'multi_limit_cycles': self.check_cycle_count.isChecked(),
+            'multi_cycle_count': self.spin_cycle_count.value(),
             'send_history': list(self.send_history),  # 发送历史记录（最多30条）
             # 更多串口设置参数
             'data_bits': getattr(self, 'serial_data_bits', '8'),
@@ -5739,7 +5873,7 @@ class SerialTool(QMainWindow):
             if hasattr(self, 'batch_thread'):
                 try:
                     if self.batch_thread and self.batch_thread.isRunning():
-                        self.batch_thread.stop()
+                        self.batch_thread.request_stop()
                 except RuntimeError:
                     pass
                 except Exception:

@@ -74,7 +74,7 @@ class UIRegressionTests(unittest.TestCase):
 
     def test多字符串面板显示时获得可用宽度(self):
         source = inspect.getsource(SerialTool.toggle_multi_send)
-        self.assertIn("setSizes([600, 400])", source)
+        self.assertIn("setSizes([700, 380])", source)
         self.assertNotIn("setSizes([900, 100])", source)
 
     def test主窗口保存并恢复窗口与分割器状态(self):

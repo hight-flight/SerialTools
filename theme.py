@@ -141,8 +141,8 @@ QComboBox QAbstractItemView {
     outline: none;
 }
 QPushButton {
-    background-color: #2C313C; color: #ABB2BF;
-    border: 1px solid #3E4451; border-radius: 4px; padding: 4px 12px;
+    background-color: #2C313C; color: #E6EAF0;
+    border: 1px solid #4B5363; border-radius: 4px; padding: 4px 12px;
 }
 QPushButton:hover    { background-color: #3E4451; }
 QPushButton:pressed  { background-color: #21252B; }
@@ -164,16 +164,20 @@ QCheckBox::indicator {
 QCheckBox::indicator:hover { border-color: #528BFF; }
 QCheckBox::indicator:checked { background-color: #528BFF; border-color: #528BFF; }
 QCheckBox::indicator:disabled { background-color: #21252B; border-color: #2C313C; }
+QTableWidget QCheckBox::indicator {
+    width: 0px; height: 0px; border: none; background: transparent;
+}
+QTableWidget QCheckBox { spacing: 0px; background: transparent; }
 QLabel      { color: #ABB2BF; }
 QSpinBox {
-    background-color: #2C313C; color: #ABB2BF;
-    border: 1px solid #3E4451; border-radius: 4px; padding: 4px 4px;
+    background-color: #2C313C; color: #E6EAF0;
+    border: 1px solid #4B5363; border-radius: 4px; padding: 4px 4px;
 }
 QSpinBox:focus { border-color: #528BFF; }
 QSpinBox:disabled { background-color: #21252B; color: #9AA2B4; }
 QTableView, QTableWidget {
-    background-color: #2C313C; color: #ABB2BF;
-    border: 1px solid #3E4451; gridline-color: #3E4451;
+    background-color: #2C313C; color: #E6EAF0;
+    border: 1px solid #4B5363; gridline-color: #4B5363;
     selection-background-color: #3E4451;
     alternate-background-color: rgba(44, 49, 60, 180);
 }
@@ -186,8 +190,8 @@ QTableView::item:hover, QTableWidget::item:hover {
 }
 QHeaderView { background-color: #21252B; }
 QHeaderView::section {
-    background-color: #21252B; color: #ABB2BF;
-    border: 1px solid #3E4451; padding: 4px;
+    background-color: #21252B; color: #E6EAF0;
+    border: 1px solid #4B5363; padding: 4px;
 }
 QHeaderView::section:hover { background-color: #2C313C; }
 QTableCornerButton::section {
@@ -318,6 +322,10 @@ QCheckBox::indicator {
 QCheckBox::indicator:hover { border-color: #0078D4; }
 QCheckBox::indicator:checked { background-color: #0078D4; border-color: #0078D4; }
 QCheckBox::indicator:disabled { background-color: #F0F0F0; border-color: #CCCCCC; }
+QTableWidget QCheckBox::indicator {
+    width: 0px; height: 0px; border: none; background: transparent;
+}
+QTableWidget QCheckBox { spacing: 0px; background: transparent; }
 QLabel      { color: #333333; }
 QSpinBox {
     background-color: rgba(255, 255, 255, 230); color: #333333;
