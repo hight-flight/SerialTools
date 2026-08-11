@@ -8,7 +8,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QMutex, Qt
+from PyQt5.QtCore import QMutex, QRect, Qt
 from PyQt5.QtGui import QColor
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QHeaderView, QWidget
@@ -175,6 +175,20 @@ class DataViewerTests(unittest.TestCase):
         self.assertFalse(dialog.btn_clear.isEnabled())
         self.assertTrue(dialog.edit_search.accessibleName())
         self.assertTrue(dialog.capture_list.table.accessibleName())
+
+    def test数据分析面板每次打开时位于当前屏幕中央(self):
+        dialog = self._dialog()
+        available = QRect(100, 50, 1600, 900)
+        dialog.resize(1000, 700)
+        dialog.move(0, 0)
+
+        dialog._center_in_available_geometry(available)
+
+        screen_center = available.center()
+        dialog_center = dialog.frameGeometry().center()
+
+        self.assertLessEqual(abs(dialog_center.x() - screen_center.x()), 1)
+        self.assertLessEqual(abs(dialog_center.y() - screen_center.y()), 1)
 
     def test错误行颜色随明暗主题变化(self):
         model = CaptureTableModel(is_dark=False)

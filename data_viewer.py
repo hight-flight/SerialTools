@@ -3209,20 +3209,23 @@ class JsonViewerDialog(QDialog):
 
         self._init_ui()
         self._restore_layout()
-        self._fit_to_available_screen()
+        self.center_on_current_screen()
 
-    def _fit_to_available_screen(self):
-        """把恢复后的窗口限制在当前屏幕可用区域内。"""
-        screen = self.screen() or QApplication.primaryScreen()
+    def center_on_current_screen(self):
+        """在主窗口所在屏幕居中，避免多屏环境下定位到错误屏幕。"""
+        parent = self.parentWidget()
+        screen = None
+        if parent is not None:
+            screen = QApplication.screenAt(parent.window().frameGeometry().center())
+        screen = screen or self.screen() or QApplication.primaryScreen()
         if not screen:
             return
-        available = screen.availableGeometry()
-        geometry = self.frameGeometry()
-        geometry.setWidth(min(geometry.width(), available.width()))
-        geometry.setHeight(min(geometry.height(), available.height()))
-        geometry.moveLeft(max(available.left(), min(geometry.left(), available.right() - geometry.width() + 1)))
-        geometry.moveTop(max(available.top(), min(geometry.top(), available.bottom() - geometry.height() + 1)))
-        self.setGeometry(geometry)
+        self._center_in_available_geometry(screen.availableGeometry())
+
+    def _center_in_available_geometry(self, available):
+        self.resize(min(self.width(), available.width()), min(self.height(), available.height()))
+        top_left = available.center() - self.rect().center()
+        self.move(top_left)
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)

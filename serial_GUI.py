@@ -4997,6 +4997,7 @@ class SerialTool(QMainWindow):
         if hasattr(self, '_json_viewer_dlg') and self._json_viewer_dlg is not None:
             try:
                 self._json_viewer_dlg.set_theme(is_dark=(self.current_theme == 'dark'))
+                self._json_viewer_dlg.center_on_current_screen()
                 self._json_viewer_dlg.show()
                 self._json_viewer_dlg.raise_()
                 self._json_viewer_dlg.activateWindow()
@@ -5030,6 +5031,7 @@ class SerialTool(QMainWindow):
         dlg.set_theme(is_dark=(self.current_theme == 'dark'))
         self._apply_dialog_theme(dlg)
         dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.center_on_current_screen()
         dlg.show()
 
     def show_usage(self):
