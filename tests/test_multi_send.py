@@ -488,6 +488,26 @@ class MultiSendTests(unittest.TestCase):
 
         self.assertEqual(self.tool.label_batch_status.text(), "第 1 行内容为空")
 
+    def test单行发送重连成功后覆盖之前的未连接状态(self):
+        writes = []
+        transport = SimpleNamespace(
+            is_open=False,
+            write=lambda data: writes.append(bytes(data)) or len(data),
+            close=lambda: None,
+        )
+        self.tool.transport = transport
+        self.tool.table_multi_send.item(0, 1).setText("AT+CSQ")
+        send_button = self.tool.table_multi_send.cellWidget(0, 3).layout().itemAt(0).widget()
+
+        send_button.click()
+        self.assertEqual(self.tool.label_batch_status.text(), "未连接，未发送")
+
+        transport.is_open = True
+        send_button.click()
+
+        self.assertEqual(writes, [b"AT+CSQ"])
+        self.assertEqual(self.tool.label_batch_status.text(), "第 1 行发送成功")
+
     def test批量勾选hex接受普通字符串并在发送时转换(self):
         hex_checkbox = self.tool.table_multi_send.cellWidget(0, 0).layout().itemAt(0).widget()
         hex_checkbox.setChecked(True)

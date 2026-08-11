@@ -3511,8 +3511,13 @@ class SerialTool(QMainWindow):
             return
         
         try:
-            self._send_with_preserved_editor(data, is_hex)
+            success = self._send_with_preserved_editor(data, is_hex)
+            if success:
+                self.label_batch_status.setText(f"第 {row + 1} 行发送成功")
+            else:
+                self.label_batch_status.setText(f"第 {row + 1} 行发送失败")
         except Exception as e:
+            self.label_batch_status.setText(f"第 {row + 1} 行发送失败")
             print(f"发送多字符项目错误: {e}")
     
     def add_multi_item(self):
