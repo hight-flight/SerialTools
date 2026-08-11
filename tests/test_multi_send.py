@@ -444,23 +444,16 @@ class MultiSendTests(unittest.TestCase):
         hex_checkbox.click()
         self.assertEqual(self.tool.table_multi_send.currentRow(), 1)
 
-    def test删除指令需要确认并可取消(self):
+    def test删除选中指令不弹确认框(self):
         self.tool.add_multi_item()
         self.tool.table_multi_send.selectRow(1)
 
-        with mock.patch(
-            "serial_GUI.QMessageBox.question",
-            return_value=QMessageBox.No,
-        ):
+        with mock.patch("serial_GUI.QMessageBox.question") as question:
             self.tool.remove_multi_item()
-        self.assertEqual(self.tool.table_multi_send.rowCount(), 2)
 
-        with mock.patch(
-            "serial_GUI.QMessageBox.question",
-            return_value=QMessageBox.Yes,
-        ):
-            self.tool.remove_multi_item()
+        question.assert_not_called()
         self.assertEqual(self.tool.table_multi_send.rowCount(), 1)
+        self.assertEqual(self.tool.label_batch_status.text(), "已删除 1 条指令")
 
     def test单行发送在未连接或内容为空时给出面板反馈(self):
         self.tool.transport = SimpleNamespace(is_open=False, close=lambda: None)

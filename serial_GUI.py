@@ -3629,12 +3629,6 @@ class SerialTool(QMainWindow):
         if not selected_rows:
             self.label_batch_status.setText("请先选择要删除的指令")
             return
-        reply = QMessageBox.question(
-            self, "确认删除", f"确定删除选中的 {len(selected_rows)} 条指令吗？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
         for row in sorted(selected_rows, reverse=True):
             self.table_multi_send.removeRow(row)
         self._refresh_multi_accessibility()
