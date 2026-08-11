@@ -17,7 +17,7 @@ import serial_GUI
 from gsm_debugger import GSMDebuggerDialog
 from ota_center import OTAControlCenter
 from serial_GUI import SerialTool
-from theme import DARK_QSS, LIGHT_QSS
+from theme import DARK_QSS, LIGHT_QSS, VERSION
 
 
 class _DialogParent(QWidget):
@@ -46,6 +46,9 @@ class _DialogParent(QWidget):
 
 
 class UIRegressionTests(unittest.TestCase):
+    def test应用版本号为1_3_7(self):
+        self.assertEqual(VERSION, "1.3.7")
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
