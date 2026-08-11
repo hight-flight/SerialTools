@@ -2020,6 +2020,27 @@ class DetailViewerWidget(QWidget):
         # 原始文本：始终展示全文
         self.raw_view.setPlainText(raw_text)
 
+    def clear_data(self):
+        """恢复详情区空状态，避免清空捕获列表后仍显示旧数据。"""
+        self._current_obj = None
+        self._current_raw = ""
+        self._current_path = ""
+        self.lbl_current.setText("当前查看: —")
+
+        self.tree_model.removeRows(0, self.tree_model.rowCount())
+        hint_key = QStandardItem("← 点击左侧列表项查看详情")
+        hint_key.setForeground(QColor(0x88, 0x88, 0x88))
+        hint_key.setEditable(False)
+        hint_val = QStandardItem("树形/表格/原始文本/统计 四视图切换")
+        hint_val.setForeground(QColor(0x88, 0x88, 0x88))
+        hint_val.setEditable(False)
+        self.tree_model.appendRow([hint_key, hint_val])
+
+        self.table_view.clear()
+        self.table_view.setRowCount(0)
+        self.table_view.setColumnCount(0)
+        self.raw_view.clear()
+
     def _build_table(self, obj):
         """将 JSON 对象/数组扁平化为表格"""
         self.table_view.clear()
@@ -3804,6 +3825,7 @@ class JsonViewerDialog(QDialog):
         self._seq_counter = 0
         self._rate_window.clear()
         self.capture_list.clear()
+        self.detail_viewer.clear_data()
         self.chart_tracker.clear_all_data()
         # 清空告警
         self.chart_tracker._alerts.clear()

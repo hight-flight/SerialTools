@@ -12,6 +12,7 @@ from PyQt5.QtCore import QMutex, QRect, Qt
 from PyQt5.QtGui import QColor
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QHeaderView, QWidget
+from PyQt5.QtWidgets import QMessageBox
 
 from app_paths import AppPaths
 from data_viewer import CaptureListWidget, CaptureTableModel, JsonCaptureThread, JsonViewerDialog
@@ -199,6 +200,29 @@ class DataViewerTests(unittest.TestCase):
 
         self.assertIsInstance(light_bg, QColor)
         self.assertNotEqual(light_bg.name(), dark_bg.name())
+
+    def test清空全部会同步清除右侧键值详情(self):
+        dialog = self._dialog()
+        dialog.detail_viewer.set_data(
+            '{"temperature":25}', {"temperature": 25}, seq=1
+        )
+        self.assertTrue(
+            dialog.detail_viewer.tree_model.findItems(
+                "temperature", Qt.MatchExactly | Qt.MatchRecursive
+            )
+        )
+
+        with mock.patch.object(QMessageBox, "exec_", return_value=QMessageBox.Yes):
+            dialog._clear_all()
+
+        self.assertEqual(dialog.detail_viewer.lbl_current.text(), "当前查看: —")
+        self.assertEqual(dialog.detail_viewer.raw_view.toPlainText(), "")
+        self.assertEqual(dialog.detail_viewer.table_view.rowCount(), 0)
+        self.assertFalse(
+            dialog.detail_viewer.tree_model.findItems(
+                "temperature", Qt.MatchExactly | Qt.MatchRecursive
+            )
+        )
 
 
 if __name__ == "__main__":
