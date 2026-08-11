@@ -31,9 +31,11 @@ class AutoReplyDialog(QDialog):
         self._data_receiver = DataReceiver()
         self._data_receiver.data_received.connect(self._process_receive_data)
         self._response_timers = set()
+        self._closing = False
         import os
         self._last_rules_dir = os.path.join(os.path.expanduser('~'), '.serial_GUI')
         self._init_ui()
+        self._clean_state = self._serialize_persistent_state()
         self.setAttribute(Qt.WA_DeleteOnClose)
 
     def _init_ui(self):
@@ -66,12 +68,13 @@ class AutoReplyDialog(QDialog):
             section_layout.setContentsMargins(0, 0, 0, 0)
             builder(section_layout)
             self.reply_sections_splitter.addWidget(section)
-        self.reply_sections_splitter.setSizes([220, 180, 140])
+        self.reply_sections_splitter.setSizes([220, 135, 205])
         layout.addWidget(self.reply_sections_splitter, 1)
 
         self._build_buttons_bar(layout)
         self.scroll_area.setWidget(content)
         outer_layout.addWidget(self.scroll_area)
+        self._refresh_rules_table()
 
     def _build_global_options(self, parent_layout):
         global_group = QGroupBox("全局设置")
@@ -88,7 +91,16 @@ class AutoReplyDialog(QDialog):
         self.spin_delay.setValue(100)
         self.spin_delay.setSuffix(" ms")
         self.spin_delay.setMaximumWidth(120)
+        self.spin_delay.setAccessibleName("响应延迟")
         global_layout.addWidget(self.spin_delay, 0, 2)
+
+        self.lbl_connection_status = QLabel()
+        self.lbl_connection_status.setAccessibleName("自动应答连接状态")
+        global_layout.addWidget(self.lbl_connection_status, 0, 3)
+        self._connection_timer = QTimer(self)
+        self._connection_timer.timeout.connect(self._refresh_connection_status)
+        self._connection_timer.start(500)
+        self._refresh_connection_status()
 
         self.check_case_ignore = QCheckBox("忽略大小写")
         global_layout.addWidget(self.check_case_ignore, 1, 0)
@@ -108,42 +120,40 @@ class AutoReplyDialog(QDialog):
         table_layout.setSpacing(6)
 
         self.table_rules = QTableWidget()
+        self.table_rules.setAccessibleName("自动应答规则列表")
         self.table_rules.setColumnCount(4)
+        self.table_rules.verticalHeader().setVisible(False)
         self.table_rules.setHorizontalHeaderLabels(["序号", "触发条件", "匹配模式", "响应内容"])
         self.table_rules.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table_rules.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table_rules.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_rules.setMinimumHeight(150)
         self.table_rules.itemSelectionChanged.connect(self._on_rule_selected)
+        self.table_rules.itemDoubleClicked.connect(lambda _item: self._edit_rule())
         table_layout.addWidget(self.table_rules)
 
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
 
-        btn_add = QPushButton("添加规则")
-        btn_add.setMinimumWidth(80)
-        btn_add.clicked.connect(self._add_rule)
-        btn_layout.addWidget(btn_add)
+        self.btn_edit_rule = QPushButton("编辑规则")
+        self.btn_edit_rule.setMinimumWidth(80)
+        self.btn_edit_rule.clicked.connect(self._edit_rule)
+        btn_layout.addWidget(self.btn_edit_rule)
 
-        btn_edit = QPushButton("编辑规则")
-        btn_edit.setMinimumWidth(80)
-        btn_edit.clicked.connect(self._edit_rule)
-        btn_layout.addWidget(btn_edit)
+        self.btn_delete_rule = QPushButton("删除规则")
+        self.btn_delete_rule.setMinimumWidth(80)
+        self.btn_delete_rule.clicked.connect(self._delete_rule)
+        btn_layout.addWidget(self.btn_delete_rule)
 
-        btn_delete = QPushButton("删除规则")
-        btn_delete.setMinimumWidth(80)
-        btn_delete.clicked.connect(self._delete_rule)
-        btn_layout.addWidget(btn_delete)
+        self.btn_move_up = QPushButton("上移")
+        self.btn_move_up.setMinimumWidth(60)
+        self.btn_move_up.clicked.connect(self._move_rule_up)
+        btn_layout.addWidget(self.btn_move_up)
 
-        btn_up = QPushButton("上移")
-        btn_up.setMinimumWidth(60)
-        btn_up.clicked.connect(self._move_rule_up)
-        btn_layout.addWidget(btn_up)
-
-        btn_down = QPushButton("下移")
-        btn_down.setMinimumWidth(60)
-        btn_down.clicked.connect(self._move_rule_down)
-        btn_layout.addWidget(btn_down)
+        self.btn_move_down = QPushButton("下移")
+        self.btn_move_down.setMinimumWidth(60)
+        self.btn_move_down.clicked.connect(self._move_rule_down)
+        btn_layout.addWidget(self.btn_move_down)
 
         btn_layout.addStretch()
         table_layout.addLayout(btn_layout)
@@ -153,25 +163,21 @@ class AutoReplyDialog(QDialog):
     def _build_rule_editor(self, parent_layout):
         editor_group = QGroupBox("规则编辑")
         editor_layout = QVBoxLayout(editor_group)
-        editor_layout.setSpacing(6)
+        editor_layout.setContentsMargins(8, 6, 8, 6)
+        editor_layout.setSpacing(4)
 
         # 模式指示器 + 操作按钮
         mode_layout = QHBoxLayout()
         mode_layout.setSpacing(8)
         self.lbl_edit_mode = QLabel("")
         self.lbl_edit_mode.setStyleSheet("color: #528BFF; font-weight: bold;")
+        self.lbl_edit_mode.setVisible(False)
         mode_layout.addWidget(self.lbl_edit_mode)
+        self.lbl_validation = QLabel("")
+        self.lbl_validation.setAccessibleName("规则输入校验结果")
+        self.lbl_validation.setVisible(False)
+        mode_layout.addWidget(self.lbl_validation)
         mode_layout.addStretch()
-        self.btn_save_edit = QPushButton("保存修改")
-        self.btn_save_edit.setMinimumWidth(80)
-        self.btn_save_edit.clicked.connect(self._save_edit)
-        self.btn_save_edit.setVisible(False)
-        mode_layout.addWidget(self.btn_save_edit)
-        self.btn_cancel_edit = QPushButton("取消编辑")
-        self.btn_cancel_edit.setMinimumWidth(80)
-        self.btn_cancel_edit.clicked.connect(self._cancel_edit)
-        self.btn_cancel_edit.setVisible(False)
-        mode_layout.addWidget(self.btn_cancel_edit)
         editor_layout.addLayout(mode_layout)
 
         row1_layout = QHBoxLayout()
@@ -223,10 +229,28 @@ class AutoReplyDialog(QDialog):
         self.spin_max_count.setValue(0)
         self.spin_max_count.setSuffix(" (0=不限)")
         self.spin_max_count.setMaximumWidth(150)
+        self.spin_max_count.setAccessibleName("最大响应次数")
         row3_layout.addWidget(self.spin_max_count)
 
         row3_layout.addStretch()
+
+        self.btn_save_edit = QPushButton("添加到列表")
+        self.btn_save_edit.setMinimumWidth(80)
+        self.btn_save_edit.clicked.connect(self._add_rule)
+        row3_layout.addWidget(self.btn_save_edit)
+
+        self.btn_cancel_edit = QPushButton("取消编辑")
+        self.btn_cancel_edit.setMinimumWidth(80)
+        self.btn_cancel_edit.clicked.connect(self._cancel_edit)
+        self.btn_cancel_edit.setVisible(False)
+        row3_layout.addWidget(self.btn_cancel_edit)
         editor_layout.addLayout(row3_layout)
+
+        self.edit_trigger.textChanged.connect(self._validate_editor)
+        self.edit_response.textChanged.connect(self._validate_editor)
+        self.combo_match_mode.currentTextChanged.connect(self._validate_editor)
+        self.combo_response_format.currentTextChanged.connect(self._validate_editor)
+        self._validate_editor()
 
         parent_layout.addWidget(editor_group)
 
@@ -238,7 +262,7 @@ class AutoReplyDialog(QDialog):
         self.text_log = QTextEdit()
         self.text_log.setFont(QFont("Consolas", 9))
         self.text_log.setReadOnly(True)
-        self.text_log.setMinimumHeight(100)
+        self.text_log.setMinimumHeight(160)
         log_layout.addWidget(self.text_log)
 
         log_btn_layout = QHBoxLayout()
@@ -264,12 +288,12 @@ class AutoReplyDialog(QDialog):
 
         btn_layout.addStretch()
 
-        btn_save = QPushButton("保存规则")
+        btn_save = QPushButton("导出规则")
         btn_save.setMinimumWidth(80)
         btn_save.clicked.connect(self._save_rules)
         btn_layout.addWidget(btn_save)
 
-        btn_load = QPushButton("加载规则")
+        btn_load = QPushButton("导入规则")
         btn_load.setMinimumWidth(80)
         btn_load.clicked.connect(self._load_rules)
         btn_layout.addWidget(btn_load)
@@ -281,28 +305,103 @@ class AutoReplyDialog(QDialog):
 
         parent_layout.addLayout(btn_layout)
 
-    def _add_rule(self):
-        """添加新规则（或编辑模式下保存修改）。"""
+    def _refresh_connection_status(self):
+        transport = getattr(self.parent_window, "transport", None)
+        connected = bool(transport and getattr(transport, "is_open", False))
+        self.lbl_connection_status.setText(
+            "连接状态：已连接" if connected else "连接状态：未连接"
+        )
+
+    @staticmethod
+    def _persistent_rule(rule):
+        return {
+            "trigger": rule.get("trigger", ""),
+            "match_mode": rule.get("match_mode", "文本包含"),
+            "response": rule.get("response", ""),
+            "response_format": rule.get("response_format", "文本"),
+            "enabled": rule.get("enabled", True),
+            "max_count": rule.get("max_count", 0),
+            "newline": rule.get("newline", False),
+        }
+
+    def _serialize_persistent_state(self):
+        return {
+            "rules": [self._persistent_rule(rule) for rule in self._rules],
+            "global": {
+                "delay": self.spin_delay.value(),
+                "case_ignore": self.check_case_ignore.isChecked(),
+                "stop_after_match": self.check_stop_after_match.isChecked(),
+                "log_to_receive": self.check_log_to_receive.isChecked(),
+            },
+        }
+
+    def _editor_rule(self):
+        return {
+            "trigger": self.edit_trigger.text().strip(),
+            "match_mode": self.combo_match_mode.currentText(),
+            "response": self.edit_response.text().strip(),
+            "response_format": self.combo_response_format.currentText(),
+            "enabled": self.check_enabled.isChecked(),
+            "max_count": self.spin_max_count.value(),
+            "newline": self.check_newline.isChecked(),
+        }
+
+    def _has_pending_editor(self):
+        current = self._editor_rule()
+        if self._editing_index is not None and 0 <= self._editing_index < len(self._rules):
+            return current != self._persistent_rule(self._rules[self._editing_index])
+        default = {
+            "trigger": "", "match_mode": "文本包含", "response": "",
+            "response_format": "文本", "enabled": True, "max_count": 0,
+            "newline": False,
+        }
+        return current != default
+
+    def _has_unsaved_changes(self):
+        clean_state = getattr(self, "_clean_state", self._serialize_persistent_state())
+        return self._serialize_persistent_state() != clean_state or self._has_pending_editor()
+
+    @staticmethod
+    def _is_valid_hex(value):
+        try:
+            compact = "".join(value.split())
+            return bool(compact) and len(compact) % 2 == 0 and bool(bytes.fromhex(compact))
+        except ValueError:
+            return False
+
+    def _validate_editor(self, *_args):
         trigger = self.edit_trigger.text().strip()
         response = self.edit_response.text().strip()
+        error = ""
+        if trigger and self.combo_match_mode.currentText() == "HEX匹配":
+            if not self._is_valid_hex(trigger):
+                error = "⚠ 触发条件不是有效的 HEX 数据"
+        if not error and response and self.combo_response_format.currentText() == "HEX":
+            if not self._is_valid_hex(response):
+                error = "⚠ 响应内容不是有效的 HEX 数据"
+        self.lbl_validation.setText(error)
+        self.lbl_validation.setVisible(bool(error))
+        valid = bool(trigger and response and not error)
+        self.btn_save_edit.setEnabled(valid)
+        return valid
 
-        if not trigger:
-            QMessageBox.warning(self, "输入错误", "请输入触发条件")
-            return
-        if not response:
-            QMessageBox.warning(self, "输入错误", "请输入响应内容")
+    def _update_rule_action_states(self):
+        row = self.table_rules.currentRow()
+        has_rule = 0 <= row < len(self._rules)
+        self.btn_edit_rule.setEnabled(has_rule)
+        self.btn_delete_rule.setEnabled(has_rule)
+        self.btn_move_up.setEnabled(has_rule and row > 0)
+        self.btn_move_down.setEnabled(has_rule and row < len(self._rules) - 1)
+
+
+    def _add_rule(self):
+        """添加新规则（或编辑模式下保存修改）。"""
+        if not self._validate_editor():
             return
 
-        rule = {
-            'trigger': trigger,
-            'match_mode': self.combo_match_mode.currentText(),
-            'response': response,
-            'response_format': self.combo_response_format.currentText(),
-            'enabled': self.check_enabled.isChecked(),
-            'max_count': self.spin_max_count.value(),
-            'newline': self.check_newline.isChecked(),
-            'count': 0
-        }
+        rule = self._editor_rule()
+        rule["count"] = 0
+        trigger = rule["trigger"]
 
         if self._editing_index is not None:
             # 编辑模式：更新已有规则
@@ -317,10 +416,6 @@ class AutoReplyDialog(QDialog):
 
         self._refresh_rules_table()
         self._clear_editor()
-
-    def _save_edit(self):
-        """编辑模式下点击「保存修改」按钮。"""
-        self._add_rule()
 
     def _cancel_edit(self):
         """退出编辑模式，清空编辑器。"""
@@ -345,11 +440,15 @@ class AutoReplyDialog(QDialog):
         """根据编辑状态切换编辑器 UI。"""
         if self._editing_index is not None:
             self.lbl_edit_mode.setText(f"● 编辑模式 — 正在修改规则 #{self._editing_index + 1}")
+            self.lbl_edit_mode.setVisible(True)
+            self.btn_save_edit.setText("保存修改")
             self.btn_save_edit.setVisible(True)
             self.btn_cancel_edit.setVisible(True)
         else:
             self.lbl_edit_mode.setText("")
-            self.btn_save_edit.setVisible(False)
+            self.lbl_edit_mode.setVisible(False)
+            self.btn_save_edit.setText("添加到列表")
+            self.btn_save_edit.setVisible(True)
             self.btn_cancel_edit.setVisible(False)
 
     def _edit_rule(self):
@@ -358,6 +457,14 @@ class AutoReplyDialog(QDialog):
         if row < 0:
             QMessageBox.warning(self, "操作错误", "请先选中要编辑的规则")
             return
+        if self._editing_index != row and self._has_pending_editor():
+            reply = QMessageBox.question(
+                self, "放弃当前编辑",
+                "规则编辑区有尚未提交的内容，是否放弃并编辑所选规则？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
         self._enter_edit_mode(row)
 
     def _delete_rule(self):
@@ -375,9 +482,15 @@ class AutoReplyDialog(QDialog):
         if reply != QMessageBox.Yes:
             return
 
+        editing_index = self._editing_index
         del self._rules[row]
         self._refresh_rules_table()
-        self._clear_editor()
+        if editing_index == row:
+            self._clear_editor()
+        elif editing_index is not None:
+            if editing_index > row:
+                self._editing_index -= 1
+            self._update_edit_mode_ui()
         self._append_log(f"规则删除: {rule['trigger']}")
 
     def _move_rule_up(self):
@@ -385,23 +498,31 @@ class AutoReplyDialog(QDialog):
         if row <= 0:
             return
 
+        if self._editing_index == row:
+            self._editing_index = row - 1
+        elif self._editing_index == row - 1:
+            self._editing_index = row
         self._rules[row], self._rules[row-1] = self._rules[row-1], self._rules[row]
         self._refresh_rules_table()
         self.table_rules.selectRow(row-1)
+        self._update_edit_mode_ui()
 
     def _move_rule_down(self):
         row = self.table_rules.currentRow()
         if row < 0 or row >= len(self._rules) - 1:
             return
 
+        if self._editing_index == row:
+            self._editing_index = row + 1
+        elif self._editing_index == row + 1:
+            self._editing_index = row
         self._rules[row], self._rules[row+1] = self._rules[row+1], self._rules[row]
         self._refresh_rules_table()
         self.table_rules.selectRow(row+1)
+        self._update_edit_mode_ui()
 
     def _on_rule_selected(self):
-        row = self.table_rules.currentRow()
-        if row >= 0 and row < len(self._rules):
-            self._enter_edit_mode(row)
+        self._update_rule_action_states()
 
     def _on_match_mode_changed(self, mode):
         if mode == "HEX匹配":
@@ -415,12 +536,13 @@ class AutoReplyDialog(QDialog):
         # 空状态提示
         if not self._rules:
             self.table_rules.setRowCount(1)
-            empty_item = QTableWidgetItem("暂无规则，请在下方编辑器中填写条件后点击「添加规则」")
+            empty_item = QTableWidgetItem("暂无规则，请在下方编辑器中填写条件后点击「添加到列表」")
             empty_item.setForeground(Qt.gray)
             empty_item.setTextAlignment(Qt.AlignCenter)
             self.table_rules.setItem(0, 0, empty_item)
             # 合并单元格显示提示
             self.table_rules.setSpan(0, 0, 1, 4)
+            self._update_rule_action_states()
             return
 
         for i, rule in enumerate(self._rules):
@@ -450,6 +572,8 @@ class AutoReplyDialog(QDialog):
                     item = self.table_rules.item(row, col)
                     if item:
                         item.setForeground(Qt.gray)
+
+        self._update_rule_action_states()
 
     def _clear_editor(self):
         self._editing_index = None
@@ -507,11 +631,11 @@ class AutoReplyDialog(QDialog):
             "• [+\\r\\n]：启用了回车换行。\n"
             "• [HEX +\\r\\n]：同时启用以上两项。\n\n"
             "▎规则管理\n"
-            "• 在规则列表中点击可编辑已有规则。\n"
+            "• 选中规则后点击「编辑规则」，或双击规则进入编辑模式。\n"
             "• 上移/下移按钮调整规则的匹配优先级（从上到下依次匹配）。\n"
-            "• 保存规则：弹出文件选择对话框，可自定义保存路径和文件名（.json格式）。\n"
-            "• 加载规则：弹出文件选择对话框，可选择任意规则文件导入。\n"
-            "  注：加载规则会覆盖当前规则列表，请谨慎操作。\n\n"
+            "• 导出规则：弹出文件选择对话框，可自定义保存路径和文件名（.json格式）。\n"
+            "• 导入规则：弹出文件选择对话框，可选择任意规则文件导入。\n"
+            "  注：导入规则会覆盖当前未保存内容，请谨慎操作。\n\n"
             "▎提示\n"
             "• 规则日志显示所有匹配和响应记录，便于调试。\n"
             "• 触发条件和响应内容支持转义序列：\\r、\\n、\\t、\\\\。\n"
@@ -563,6 +687,7 @@ class AutoReplyDialog(QDialog):
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
+            self._clean_state = self._serialize_persistent_state()
             self._last_rules_dir = os.path.dirname(file_path)
             self._append_log(f"规则已保存到: {os.path.basename(file_path)}")
         except Exception as e:
@@ -592,6 +717,12 @@ class AutoReplyDialog(QDialog):
                 return False, f"第{i+1}条规则的匹配模式无效"
             if rule.get('response_format', '文本') not in ('文本', 'HEX'):
                 return False, f"第{i+1}条规则的响应格式无效"
+            if (rule.get('match_mode', '文本包含') == 'HEX匹配'
+                    and not AutoReplyDialog._is_valid_hex(rule['trigger'])):
+                return False, f"第{i+1}条规则的触发条件不是有效的 HEX 数据"
+            if (rule.get('response_format', '文本') == 'HEX'
+                    and not AutoReplyDialog._is_valid_hex(rule['response'])):
+                return False, f"第{i+1}条规则的响应内容不是有效的 HEX 数据"
             if not isinstance(rule.get('enabled', True), bool):
                 return False, f"第{i+1}条规则的 enabled 必须是布尔值"
             max_count = rule.get('max_count', 0)
@@ -616,10 +747,10 @@ class AutoReplyDialog(QDialog):
         if not file_path:
             return
 
-        if self._rules:
+        if self._has_unsaved_changes():
             reply = QMessageBox.question(
                 self, "确认加载",
-                "加载规则将覆盖当前规则列表，是否继续？",
+                "导入规则将覆盖当前未保存的规则、设置或编辑草稿，是否继续？",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No
             )
             if reply != QMessageBox.Yes:
@@ -665,6 +796,7 @@ class AutoReplyDialog(QDialog):
             self._last_rules_dir = os.path.dirname(file_path)
             self._refresh_rules_table()
             self._clear_editor()
+            self._clean_state = self._serialize_persistent_state()
             self._append_log(f"规则已加载（{len(new_rules)} 条）: {os.path.basename(file_path)}")
         except json.JSONDecodeError:
             QMessageBox.warning(self, "加载失败", "文件不是有效的JSON格式")
@@ -804,7 +936,17 @@ class AutoReplyDialog(QDialog):
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
+        if self.isVisible() and self._has_unsaved_changes():
+            reply = QMessageBox.question(
+                self, "未保存的更改",
+                "自动应答规则、设置或编辑草稿尚未导出，确定关闭吗？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
         self._closing = True
+        self._connection_timer.stop()
         if hasattr(self.parent_window, '_auto_reply_dialog'):
             self.parent_window._auto_reply_dialog = None
         event.accept()

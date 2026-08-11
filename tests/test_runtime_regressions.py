@@ -9,8 +9,9 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import QMutex
+from PyQt5.QtGui import QCloseEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QComboBox, QWidget
+from PyQt5.QtWidgets import QApplication, QComboBox, QMessageBox, QWidget
 
 from auto_reply import AutoReplyDialog
 from data_viewer import JsonCaptureThread
@@ -108,6 +109,123 @@ class RuntimeRegressionTests(unittest.TestCase):
             with self.subTest(rule=rule):
                 valid, _message = AutoReplyDialog._validate_rules_data(None, [rule])
                 self.assertFalse(valid)
+
+    def test自动回复拒绝无效十六进制规则(self):
+        invalid_cases = [
+            {"trigger": "GG", "match_mode": "HEX匹配", "response": "OK"},
+            {"trigger": "0", "match_mode": "HEX匹配", "response": "OK"},
+            {"trigger": "A", "response": "GG", "response_format": "HEX"},
+            {"trigger": "A", "response": "0", "response_format": "HEX"},
+        ]
+        for rule in invalid_cases:
+            with self.subTest(rule=rule):
+                valid, message = AutoReplyDialog._validate_rules_data(None, [rule])
+                self.assertFalse(valid)
+                self.assertIn("HEX", message)
+
+    def test自动回复选择规则不会覆盖尚未提交的草稿(self):
+        parent = _AutoReplyParent()
+        dialog = AutoReplyDialog(parent)
+        self.addCleanup(parent.close)
+        self.addCleanup(dialog.close)
+        dialog._rules = [{
+            "trigger": "OLD", "match_mode": "文本包含", "response": "OLD-REPLY",
+            "response_format": "文本", "enabled": True, "max_count": 0,
+            "newline": False, "count": 0,
+        }]
+        dialog._refresh_rules_table()
+        dialog.edit_trigger.setText("NEW")
+        dialog.edit_response.setText("NEW-REPLY")
+
+        dialog.table_rules.selectRow(0)
+        self.app.processEvents()
+
+        self.assertEqual(dialog.edit_trigger.text(), "NEW")
+        self.assertEqual(dialog.edit_response.text(), "NEW-REPLY")
+        self.assertIsNone(dialog._editing_index)
+
+    def test自动回复删除列表规则时保留新增草稿(self):
+        parent = _AutoReplyParent()
+        dialog = AutoReplyDialog(parent)
+        self.addCleanup(parent.close)
+        self.addCleanup(dialog.close)
+        dialog._rules = [{
+            "trigger": "OLD", "match_mode": "文本包含", "response": "OLD-REPLY",
+            "response_format": "文本", "enabled": True, "max_count": 0,
+            "newline": False, "count": 0,
+        }]
+        dialog._refresh_rules_table()
+        dialog.edit_trigger.setText("NEW")
+        dialog.edit_response.setText("NEW-REPLY")
+        dialog.table_rules.selectRow(0)
+
+        with mock.patch(
+            "auto_reply.QMessageBox.question", return_value=QMessageBox.Yes
+        ):
+            dialog._delete_rule()
+
+        self.assertEqual(dialog.edit_trigger.text(), "NEW")
+        self.assertEqual(dialog.edit_response.text(), "NEW-REPLY")
+        self.assertIsNone(dialog._editing_index)
+
+    def test自动回复移动规则后保持正在编辑的规则(self):
+        parent = _AutoReplyParent()
+        dialog = AutoReplyDialog(parent)
+        self.addCleanup(parent.close)
+        self.addCleanup(dialog.close)
+        dialog._rules = [
+            {
+                "trigger": trigger, "match_mode": "文本包含",
+                "response": response, "response_format": "文本",
+                "enabled": True, "max_count": 0, "newline": False, "count": 0,
+            }
+            for trigger, response in (("A", "RA"), ("B", "RB"))
+        ]
+        dialog._refresh_rules_table()
+        dialog._enter_edit_mode(1)
+        dialog.table_rules.selectRow(1)
+
+        dialog._move_rule_up()
+
+        self.assertEqual(dialog._editing_index, 0)
+        self.assertEqual(dialog.edit_trigger.text(), "B")
+        self.assertEqual(dialog._rules[0]["trigger"], "B")
+
+    def test自动回复能够识别未保存规则与编辑草稿(self):
+        parent = _AutoReplyParent()
+        dialog = AutoReplyDialog(parent)
+        self.addCleanup(parent.close)
+        self.addCleanup(dialog.close)
+
+        self.assertFalse(dialog._has_unsaved_changes())
+        dialog.edit_trigger.setText("A")
+        self.assertTrue(dialog._has_unsaved_changes())
+
+    def test自动回复关闭时保护未保存草稿(self):
+        parent = _AutoReplyParent()
+        dialog = AutoReplyDialog(parent)
+        dialog.show()
+        dialog.edit_trigger.setText("DRAFT")
+        event = QCloseEvent()
+
+        with mock.patch(
+            "auto_reply.QMessageBox.question", return_value=QMessageBox.No
+        ) as question:
+            dialog.closeEvent(event)
+
+        self.assertFalse(event.isAccepted())
+        question.assert_called_once()
+        dialog.hide()
+        dialog.edit_trigger.clear()
+        dialog.close()
+        parent.close()
+        dialog.edit_trigger.clear()
+        dialog._rules.append({
+            "trigger": "A", "match_mode": "文本包含", "response": "B",
+            "response_format": "文本", "enabled": True, "max_count": 0,
+            "newline": False, "count": 0,
+        })
+        self.assertTrue(dialog._has_unsaved_changes())
 
     def test自动回复定时器触发后释放(self):
         parent = _AutoReplyParent()

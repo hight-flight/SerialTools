@@ -130,6 +130,80 @@ class UIRegressionTests(unittest.TestCase):
         self.assertEqual(splitter.orientation(), Qt.Vertical)
         self.assertEqual(splitter.count(), 3)
 
+    def test自动应答编辑区紧凑且日志获得更多高度(self):
+        dialog = AutoReplyDialog(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+        dialog.show()
+        self.app.processEvents()
+
+        splitter = dialog.findChild(QSplitter, "replySectionsSplitter")
+        table_height, editor_height, log_height = splitter.sizes()
+        self.assertGreater(log_height, editor_height)
+        self.assertGreaterEqual(dialog.text_log.minimumHeight(), 150)
+        self.assertLessEqual(
+            abs(
+                dialog.btn_save_edit.geometry().center().y()
+                - dialog.check_enabled.geometry().center().y()
+            ),
+            4,
+        )
+
+    def test自动应答默认布局压缩编辑区并增大日志区(self):
+        dialog = AutoReplyDialog(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+        dialog.show()
+        self.app.processEvents()
+
+        sizes = dialog.reply_sections_splitter.sizes()
+        self.assertLess(sizes[1], sizes[2])
+        self.assertGreaterEqual(sizes[2], 180)
+
+    def test自动应答初始空状态与规则按钮状态明确(self):
+        dialog = AutoReplyDialog(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+
+        self.assertEqual(dialog.table_rules.rowCount(), 1)
+        self.assertIn("暂无规则", dialog.table_rules.item(0, 0).text())
+        self.assertTrue(dialog.table_rules.verticalHeader().isHidden())
+        self.assertFalse(dialog.btn_edit_rule.isEnabled())
+        self.assertFalse(dialog.btn_delete_rule.isEnabled())
+        self.assertFalse(dialog.btn_move_up.isEnabled())
+        self.assertFalse(dialog.btn_move_down.isEnabled())
+
+    def test自动应答主要操作名称与位置清晰(self):
+        dialog = AutoReplyDialog(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+        labels = {button.text() for button in dialog.findChildren(QPushButton)}
+
+        self.assertIn("添加到列表", labels)
+        self.assertIn("导出规则", labels)
+        self.assertIn("导入规则", labels)
+        self.assertNotIn("添加规则", labels)
+        self.assertNotIn("保存规则", labels)
+        self.assertNotIn("加载规则", labels)
+
+    def test自动应答关键输入具有明确无障碍名称(self):
+        dialog = AutoReplyDialog(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+
+        self.assertEqual(dialog.spin_delay.accessibleName(), "响应延迟")
+        self.assertEqual(dialog.spin_max_count.accessibleName(), "最大响应次数")
+        self.assertEqual(dialog.table_rules.accessibleName(), "自动应答规则列表")
+
+    def test自动应答无效十六进制输入即时阻止提交(self):
+        dialog = AutoReplyDialog(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+        dialog.edit_trigger.setText("GG")
+        dialog.edit_response.setText("OK")
+        dialog.combo_match_mode.setCurrentText("HEX匹配")
+
+        self.assertFalse(dialog.btn_save_edit.isEnabled())
+        self.assertIn("触发条件", dialog.lbl_validation.text())
+
+        dialog.edit_trigger.setText("01 03")
+        self.assertTrue(dialog.btn_save_edit.isEnabled())
+        self.assertEqual(dialog.lbl_validation.text(), "")
+
     def test_gsm危险操作具有明确视觉与无障碍标记(self):
         dialog = GSMDebuggerDialog(self.parent)
         self.addCleanup(self._close_dialog, dialog)

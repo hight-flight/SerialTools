@@ -406,12 +406,21 @@ class CaptureTableModel(QAbstractTableModel):
 
     HEADERS = ["序号", "时间", "摘要", "长度"]
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, is_dark=True):
         super().__init__(parent)
+        self._is_dark = is_dark
         self._items: list[dict] = []          # 全量数据
         self._filtered: list[int] = []        # 筛选后的索引列表
         self._filter_text = ""                # 当前搜索文本
         self._filter_enabled = False
+
+    def set_theme(self, is_dark: bool):
+        self._is_dark = is_dark
+        if self.rowCount() > 0:
+            self.dataChanged.emit(
+                self.index(0, 0), self.index(self.rowCount() - 1, self.columnCount() - 1),
+                [Qt.ForegroundRole, Qt.BackgroundRole],
+            )
 
     # --- 数据管理 ---
     def append_items(self, new_items: list[dict]):
@@ -547,12 +556,12 @@ class CaptureTableModel(QAbstractTableModel):
 
         elif role == Qt.ForegroundRole:
             if item.get('parse_error'):
-                return QColor(0xE0, 0x6C, 0x75)  # 解析失败：红色文字（更醒目）
+                return QColor('#FF9A9F' if self._is_dark else '#A1262E')
             return None
 
         elif role == Qt.BackgroundRole:
             if item.get('parse_error'):
-                return QColor(0x3A, 0x28, 0x28)  # 暗红背景标记错误行
+                return QColor('#3A2828' if self._is_dark else '#FDE7E9')
             return None
 
         elif role == Qt.UserRole:
@@ -2198,6 +2207,7 @@ class CaptureListWidget(QWidget):
     """左侧捕获列表面板：TableView + 底栏 + 右键菜单"""
 
     item_selected = pyqtSignal(int)     # 选中条目序号（用于详情查看）
+    count_changed = pyqtSignal(int)
 
     def __init__(self, parent=None, is_dark=True):
         super().__init__(parent)
@@ -2212,17 +2222,19 @@ class CaptureListWidget(QWidget):
         layout.addWidget(lbl)
 
         # ── 表格 ──
-        self.model = CaptureTableModel()
+        self.model = CaptureTableModel(is_dark=is_dark)
         self.table = QTableView()
+        self.table.setAccessibleName("捕获数据列表")
         self.table.setModel(self.model)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(0, 50)
-        self.table.setColumnWidth(1, 110)
-        self.table.setColumnWidth(2, 180)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.table.setAlternatingRowColors(True)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_context_menu)
@@ -2252,6 +2264,7 @@ class CaptureListWidget(QWidget):
     def set_theme(self, is_dark: bool):
         """响应主题切换，更新表格配色"""
         self._is_dark = is_dark
+        self.model.set_theme(is_dark)
         self._apply_table_style(is_dark)
 
     def _apply_table_style(self, is_dark=True):
@@ -2282,6 +2295,7 @@ class CaptureListWidget(QWidget):
     # --- 数据操作 ---
     def append_items(self, items: list[dict]):
         self.model.append_items(items)
+        self.count_changed.emit(self.model.total_count)
         self.lbl_stats.setText(
             f"显示 {self.model.visible_count}/{self.model.total_count} 条"
             + ("（已筛选）" if self.model._filter_enabled else "")
@@ -2291,6 +2305,7 @@ class CaptureListWidget(QWidget):
 
     def clear(self):
         self.model.clear()
+        self.count_changed.emit(0)
         self.lbl_stats.setText("共 0 条")
 
     def set_filter(self, text: str):
@@ -2312,6 +2327,7 @@ class CaptureListWidget(QWidget):
     def remove_selected(self):
         indices = [idx.row() for idx in self.table.selectionModel().selectedRows()]
         self.model.remove_rows(indices)
+        self.count_changed.emit(self.model.total_count)
         self.lbl_stats.setText(
             f"显示 {self.model.visible_count}/{self.model.total_count} 条"
             + ("（已筛选）" if self.model._filter_enabled else "")
@@ -2399,16 +2415,32 @@ class CaptureListWidget(QWidget):
             return
         path, _ = QFileDialog.getSaveFileName(self, "导出选中 JSON", "selected.json", "JSON (*.json)")
         if path:
-            objs = [it.get('obj') or it.get('raw', '') for it in items]
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(objs if len(objs) > 1 else objs[0], f, indent=2, ensure_ascii=False)
+            try:
+                objs = [self._json_value(it) for it in items]
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(objs if len(objs) > 1 else objs[0], f, indent=2, ensure_ascii=False)
+            except OSError as exc:
+                QMessageBox.warning(self, "导出失败", f"无法写入文件：\n{exc}")
 
     def _export_all(self):
         path, _ = QFileDialog.getSaveFileName(self, "导出全部 JSONL", "all_data.jsonl", "JSONL (*.jsonl)")
         if path:
-            with open(path, 'w', encoding='utf-8') as f:
-                for item in self.model._items:
-                    f.write(item.get('raw', '') + '\n')
+            try:
+                self._write_jsonl(path, self.model._items)
+            except OSError as exc:
+                QMessageBox.warning(self, "导出失败", f"无法写入文件：\n{exc}")
+
+    @staticmethod
+    def _json_value(item: dict):
+        """保留 0/false/空容器等合法 JSON 值，仅 None 回退为原文。"""
+        obj = item.get('obj')
+        return item.get('raw', '') if obj is None else obj
+
+    @classmethod
+    def _write_jsonl(cls, path, items: list[dict]):
+        with open(path, 'w', encoding='utf-8') as file:
+            for item in items:
+                file.write(json.dumps(cls._json_value(item), ensure_ascii=False) + '\n')
 
 
 # ──────────────────────────────────────────────
@@ -2433,6 +2465,7 @@ class JsonCaptureThread(QThread):
         self._queue: deque[bytes] = deque()
         self._queued_bytes = 0
         self._queue_mutex = QMutex()
+        self._state_mutex = QMutex()
         self._byte_buffer = bytearray()
         self.bytes_scanned = 0          # 已扫描字节数（主线程可读）
 
@@ -2450,8 +2483,16 @@ class JsonCaptureThread(QThread):
             while self._queued_bytes > MAX_CAPTURE_QUEUE_BYTES and len(self._queue) > 1:
                 self._queued_bytes -= len(self._queue.popleft())
 
+    def update_config(self, filter_mode: int, custom_regex="", protocol_template=None):
+        """原子更新解析配置；模式变化时丢弃旧模式遗留的半包。"""
+        with QMutexLocker(self._state_mutex):
+            self.filter_mode = filter_mode
+            self.custom_regex = custom_regex
+            self.protocol_template = protocol_template
+            self._byte_buffer.clear()
+
     def run(self):
-        while self.running:
+        while True:
             with QMutexLocker(self._queue_mutex):
                 if self._queue:
                     data = self._queue.popleft()
@@ -2459,20 +2500,24 @@ class JsonCaptureThread(QThread):
                 else:
                     data = None
 
+            if data is None and not self.running:
+                break
+
             if data is not None:
                 self.bytes_scanned += len(data)
-                self._byte_buffer.extend(data)
-                if len(self._byte_buffer) > 2 * 1024 * 1024:
-                    del self._byte_buffer[:len(self._byte_buffer) - 1024 * 1024]
+                with QMutexLocker(self._state_mutex):
+                    self._byte_buffer.extend(data)
+                    if len(self._byte_buffer) > 2 * 1024 * 1024:
+                        del self._byte_buffer[:len(self._byte_buffer) - 1024 * 1024]
 
-                if self.filter_mode == self.MODE_JSON_OBJECT:
-                    batch = self._extract_json_objects()
-                elif self.filter_mode == self.MODE_LINE_BY_LINE:
-                    batch = self._extract_lines()
-                elif self.filter_mode == self.MODE_BINARY:
-                    batch = self._extract_binary()
-                else:
-                    batch = self._extract_regex()
+                    if self.filter_mode == self.MODE_JSON_OBJECT:
+                        batch = self._extract_json_objects()
+                    elif self.filter_mode == self.MODE_LINE_BY_LINE:
+                        batch = self._extract_lines()
+                    elif self.filter_mode == self.MODE_BINARY:
+                        batch = self._extract_binary()
+                    else:
+                        batch = self._extract_regex()
                 if batch:
                     self.items_ready.emit(batch)
                 # 有数据时快速轮询（5ms），提高实时性
@@ -2615,8 +2660,8 @@ class JsonCaptureThread(QThread):
             elif len(self._byte_buffer) > 256 * 1024:
                 self._byte_buffer = self._byte_buffer[-65536:]
         except re.error:
-            # 正则无效，回退到 JSON 对象提取
-            return self._extract_json_objects()
+            # UI 会阻止无效配置启动；线程侧仍保持数据不被错误模式消费。
+            return []
 
         return batch
 
@@ -3125,7 +3170,7 @@ class JsonViewerDialog(QDialog):
         self._capture_running = False
         self._capture_count = 0
         self._capture_rate = 0
-        self._rate_window = deque(maxlen=20)       # 速率滑动窗口（每秒）
+        self._rate_window = deque()                # (时间戳, 条数) 的 10 秒滑动窗口
         self._last_data_ts = 0                     # 最后收到原始数据的时间戳
         self._seq_counter = 0
         self._protocol_template: ProtocolTemplate | None = None  # 二进制协议模板
@@ -3145,8 +3190,15 @@ class JsonViewerDialog(QDialog):
                 pass
 
         self.setWindowTitle("数据分析面板")
-        self.resize(1200, 800)
-        self.setMinimumSize(900, 600)
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        width = min(1200, available.width()) if available else 1200
+        height = min(800, available.height()) if available else 800
+        self.resize(width, height)
+        self.setMinimumSize(
+            min(900, available.width()) if available else 900,
+            min(600, available.height()) if available else 600,
+        )
         # 作为独立工具窗口：允许最小化/最大化，不强制置顶
         self.setWindowFlags(
             Qt.Window |
@@ -3157,6 +3209,20 @@ class JsonViewerDialog(QDialog):
 
         self._init_ui()
         self._restore_layout()
+        self._fit_to_available_screen()
+
+    def _fit_to_available_screen(self):
+        """把恢复后的窗口限制在当前屏幕可用区域内。"""
+        screen = self.screen() or QApplication.primaryScreen()
+        if not screen:
+            return
+        available = screen.availableGeometry()
+        geometry = self.frameGeometry()
+        geometry.setWidth(min(geometry.width(), available.width()))
+        geometry.setHeight(min(geometry.height(), available.height()))
+        geometry.moveLeft(max(available.left(), min(geometry.left(), available.right() - geometry.width() + 1)))
+        geometry.moveTop(max(available.top(), min(geometry.top(), available.bottom() - geometry.height() + 1)))
+        self.setGeometry(geometry)
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -3174,6 +3240,7 @@ class JsonViewerDialog(QDialog):
         flt_label.setFont(QFont("Microsoft YaHei", 9))
         ctrl_layout.addWidget(flt_label)
         self.combo_filter_mode = QComboBox()
+        self.combo_filter_mode.setAccessibleName("数据解析模式")
         self.combo_filter_mode.addItems(["所有行尝试解析", "提取 JSON 对象", "自定义正则", "二进制协议解析"])
         self.combo_filter_mode.setFont(QFont("Microsoft YaHei", 9))
         self.combo_filter_mode.setToolTip("选择数据解析策略")
@@ -3195,6 +3262,7 @@ class JsonViewerDialog(QDialog):
 
         # 正则输入框（自定义正则模式可见）
         self.edit_regex = QLineEdit()
+        self.edit_regex.setAccessibleName("自定义正则表达式")
         self.edit_regex.setPlaceholderText("正则表达式，如: value=(\\d+\\.\\d+)")
         self.edit_regex.setFont(QFont("Consolas", 9))
         self.edit_regex.setMaximumWidth(260)
@@ -3206,8 +3274,14 @@ class JsonViewerDialog(QDialog):
         self.edit_regex.textChanged.connect(self._on_regex_changed)
         ctrl_layout.addWidget(self.edit_regex)
 
+        self.lbl_validation = QLabel()
+        self.lbl_validation.setAccessibleName("解析配置错误")
+        self.lbl_validation.setVisible(False)
+        ctrl_layout.addWidget(self.lbl_validation)
+
         # 搜索
         self.edit_search = QLineEdit()
+        self.edit_search.setAccessibleName("搜索捕获列表")
         self.edit_search.setPlaceholderText("搜索列表…")
         self.edit_search.setFont(QFont("Microsoft YaHei", 9))
         self.edit_search.setMaximumWidth(160)
@@ -3218,12 +3292,14 @@ class JsonViewerDialog(QDialog):
 
         # ─ 操作按钮 ─
         self.btn_start = QPushButton("开始监听")
+        self.btn_start.setAccessibleName("开始监听")
         self.btn_start.setFont(QFont("Microsoft YaHei", 9))
         self.btn_start.setToolTip("开始从数据源捕获 (Ctrl+Enter)")
         self.btn_start.clicked.connect(self._start_capture)
         ctrl_layout.addWidget(self.btn_start)
 
         self.btn_stop = QPushButton("停止捕获")
+        self.btn_stop.setAccessibleName("停止捕获")
         self.btn_stop.setFont(QFont("Microsoft YaHei", 9))
         self.btn_stop.setEnabled(False)
         self.btn_stop.setToolTip("停止捕获 (Ctrl+Enter)")
@@ -3231,9 +3307,11 @@ class JsonViewerDialog(QDialog):
         ctrl_layout.addWidget(self.btn_stop)
 
         self.btn_clear = QPushButton("清空全部")
+        self.btn_clear.setAccessibleName("清空全部捕获数据")
         self.btn_clear.setFont(QFont("Microsoft YaHei", 9))
         self.btn_clear.setToolTip("清空所有捕获数据和图表")
         self.btn_clear.clicked.connect(self._clear_all)
+        self.btn_clear.setEnabled(False)
         ctrl_layout.addWidget(self.btn_clear)
 
         # ─ 帮助 ─
@@ -3257,6 +3335,7 @@ class JsonViewerDialog(QDialog):
         left_panel_layout.setSpacing(2)
 
         self.lbl_status = QLabel("状态: 就绪 | 捕获 0 条 | 速率 0/s")
+        self.lbl_status.setAccessibleName("捕获状态")
         self.lbl_status.setFont(QFont("Consolas", 10))
         self.lbl_status.setTextFormat(Qt.PlainText)
         self.lbl_status.setStyleSheet(
@@ -3269,6 +3348,9 @@ class JsonViewerDialog(QDialog):
         left_panel_layout.addWidget(self.lbl_status)
 
         self.capture_list = CaptureListWidget(is_dark=self._is_dark)
+        self.capture_list.count_changed.connect(
+            lambda count: self.btn_clear.setEnabled(count > 0)
+        )
         left_panel_layout.addWidget(self.capture_list, stretch=1)
 
         self.splitter_h.addWidget(left_panel)
@@ -3297,7 +3379,7 @@ class JsonViewerDialog(QDialog):
         self.splitter_h.addWidget(self.splitter_v)
 
         # 初始比例 左:右 = 35:65
-        self.splitter_h.setSizes([420, 780])
+        self.splitter_h.setSizes([360, 840])
         self.splitter_v.setSizes([250, 500])
 
         main_layout.addWidget(self.splitter_h, stretch=1)
@@ -3348,6 +3430,7 @@ class JsonViewerDialog(QDialog):
         self.detail_viewer.set_theme(is_dark)
         if hasattr(self, 'data_table') and self.data_table:
             self.data_table.set_theme(is_dark)
+        self._validate_capture_configuration()
 
     # --- 数据接入 ---
     def _set_status_style(self, color=None, bold=False):
@@ -3408,7 +3491,7 @@ class JsonViewerDialog(QDialog):
         self.capture_list.append_items(items)
 
         # 速率统计
-        self._rate_window.append(time.time())
+        self._rate_window.append((time.time(), len(items)))
 
         # 图表数据喂养
         for it in items:
@@ -3498,9 +3581,20 @@ class JsonViewerDialog(QDialog):
         """导出全部已捕获的 JSON 为 .jsonl 文件"""
         path, _ = QFileDialog.getSaveFileName(self, "导出全部 JSONL", "all_data.jsonl", "JSONL (*.jsonl)")
         if path:
-            with open(path, 'w', encoding='utf-8') as f:
-                for item in self.capture_list.model._items:
-                    f.write(item.get('raw', '') + '\n')
+            try:
+                CaptureListWidget._write_jsonl(path, self.capture_list.model._items)
+                self.lbl_status.setText(
+                    f"导出完成: {len(self.capture_list.model._items)} 条 | {path}"
+                )
+            except OSError as exc:
+                QMessageBox.warning(self, "导出失败", f"无法写入文件：\n{exc}")
+
+    def _calculate_capture_rate(self, now=None) -> float:
+        """返回最近 10 秒的实际条目速率。"""
+        now = time.time() if now is None else now
+        while self._rate_window and now - self._rate_window[0][0] > 10:
+            self._rate_window.popleft()
+        return sum(count for _timestamp, count in self._rate_window) / 10.0
 
     def _update_rate(self):
         """每秒更新速率显示 + 诊断提示（保留告警样式不覆盖）"""
@@ -3509,9 +3603,7 @@ class JsonViewerDialog(QDialog):
             return
 
         now = time.time()
-        while self._rate_window and now - self._rate_window[0] > 10:
-            self._rate_window.popleft()
-        rate = len(self._rate_window) / 10.0 if self._rate_window else 0
+        rate = self._calculate_capture_rate(now)
 
         # 如果告警活跃，保留告警样式和文本（由 _on_alert_changed 管理）
         if self.chart_tracker._alert_active_global:
@@ -3540,10 +3632,11 @@ class JsonViewerDialog(QDialog):
 
     def _on_regex_changed(self, text: str):
         """正则表达式文本变更 → 实时同步到运行中的捕获线程"""
+        self._validate_capture_configuration()
         if hasattr(self, '_capture_thread') and self._capture_thread.isRunning():
-            self._capture_thread.custom_regex = text.strip()
-            # 切换正则后清空缓冲区重新匹配
-            self._capture_thread._byte_buffer = bytearray()
+            self._capture_thread.update_config(
+                self.combo_filter_mode.currentIndex(), text.strip(), self._protocol_template
+            )
 
     def _on_filter_mode_changed(self, idx: int):
         """捕获中切换过滤模式时实时更新后台线程"""
@@ -3557,14 +3650,40 @@ class JsonViewerDialog(QDialog):
         if is_binary:
             self._update_protocol_label()
 
+        self._validate_capture_configuration()
+
         if hasattr(self, '_capture_thread') and self._capture_thread.isRunning():
-            self._capture_thread.filter_mode = idx
-            self._capture_thread.custom_regex = self.edit_regex.text().strip() if is_regex else ""
-            self._capture_thread.protocol_template = (
-                self._protocol_template if is_binary else None
+            self._capture_thread.update_config(
+                idx,
+                self.edit_regex.text().strip() if is_regex else "",
+                self._protocol_template if is_binary else None,
             )
-            # 清空字节缓冲区，因为不同模式的解析逻辑不同
-            self._capture_thread._byte_buffer = bytearray()
+
+    def _validate_capture_configuration(self) -> bool:
+        if not hasattr(self, 'lbl_validation'):
+            return True
+        mode = self.combo_filter_mode.currentIndex()
+        message = ""
+        if mode == JsonCaptureThread.MODE_REGEX:
+            regex = self.edit_regex.text().strip()
+            if not regex:
+                message = "请输入正则表达式"
+            else:
+                try:
+                    re.compile(regex)
+                except re.error as exc:
+                    message = f"正则表达式无效: {exc}"
+        elif mode == JsonCaptureThread.MODE_BINARY:
+            if not self._protocol_template or not self._protocol_template.fields:
+                message = "请先配置二进制协议"
+
+        self.lbl_validation.setText(message)
+        self.lbl_validation.setVisible(bool(message))
+        t = _VIEWER_TOKENS['dark' if self._is_dark else 'light']
+        self.lbl_validation.setStyleSheet(f"color: {t['danger']};")
+        if not self._capture_running:
+            self.btn_start.setEnabled(not message)
+        return not message
 
     def _update_protocol_label(self):
         """更新协议状态标签"""
@@ -3584,7 +3703,7 @@ class JsonViewerDialog(QDialog):
         dlg = ProtocolEditorDialog(
             self, template=self._protocol_template,
             theme_callback=self._theme_callback,
-            is_dark=(self.current_theme if hasattr(self, 'current_theme') else True),
+            is_dark=self._is_dark,
         )
         # 应用主题
         if self._theme_callback:
@@ -3593,13 +3712,28 @@ class JsonViewerDialog(QDialog):
         if dlg.exec_() == QDialog.Accepted:
             self._protocol_template = dlg.get_template()
             self._update_protocol_label()
+            self._validate_capture_configuration()
             # 同步到后台线程
             if hasattr(self, '_capture_thread') and self._capture_thread.isRunning():
-                self._capture_thread.protocol_template = self._protocol_template
-                self._capture_thread._byte_buffer = bytearray()
+                self._capture_thread.update_config(
+                    self.combo_filter_mode.currentIndex(),
+                    self.edit_regex.text().strip(),
+                    self._protocol_template,
+                )
 
     # --- 捕获控制 ---
     def _start_capture(self):
+        if not self._validate_capture_configuration():
+            self._set_status_style(color=_VIEWER_TOKENS['dark' if self._is_dark else 'light']['danger'], bold=True)
+            self.lbl_status.setText(f"状态: 无法开始 | {self.lbl_validation.text()}")
+            return
+        parent = self.parent()
+        transport = getattr(parent, 'transport', None)
+        if parent is not None and (transport is None or not getattr(transport, 'is_open', False)):
+            self._set_status_style(color=_VIEWER_TOKENS['dark' if self._is_dark else 'light']['danger'], bold=True)
+            self.lbl_status.setText("状态: 未连接 | 请先在主窗口打开连接")
+            return
+
         # QThread 只能 start 一次，每次开始捕获都创建新线程
         old_thread = self._capture_thread
         if old_thread.isRunning():
@@ -3613,11 +3747,12 @@ class JsonViewerDialog(QDialog):
 
         self._capture_thread = JsonCaptureThread()
         self._capture_thread.items_ready.connect(self._on_items_ready)
-        self._capture_thread.filter_mode = self.combo_filter_mode.currentIndex()
-        if self._capture_thread.filter_mode == JsonCaptureThread.MODE_BINARY:
-            self._capture_thread.protocol_template = self._protocol_template
-        elif self._capture_thread.filter_mode == JsonCaptureThread.MODE_REGEX:
-            self._capture_thread.custom_regex = self.edit_regex.text().strip()
+        mode = self.combo_filter_mode.currentIndex()
+        self._capture_thread.update_config(
+            mode,
+            self.edit_regex.text().strip() if mode == JsonCaptureThread.MODE_REGEX else "",
+            self._protocol_template if mode == JsonCaptureThread.MODE_BINARY else None,
+        )
         self._capture_thread.set_running(True)
         self._capture_thread.start()
 
@@ -3627,21 +3762,31 @@ class JsonViewerDialog(QDialog):
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.edit_search.setEnabled(True)
+        self._set_status_style()
+        self.lbl_status.setText(
+            f"状态: 正在捕获 | 捕获 {self._capture_count} 条 | 速率 0.0/s"
+        )
 
     def _stop_capture(self):
         self._capture_running = False
         self._batch_timer.stop()
-        self._flush_pending()
 
         # 通知线程停止并等待结束
         if self._capture_thread.isRunning():
             self._capture_thread.set_running(False)
             self._capture_thread.wait(2000)
+            QApplication.processEvents()
+
+        # 线程退出后再刷新，避免停止过程产生的最后一批数据被遗留。
+        self._flush_pending()
 
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
+        self._validate_capture_configuration()
         self._set_status_style()
-        self.lbl_status.setText("状态: 就绪 | 捕获 0 条 | 速率 0/s")
+        self.lbl_status.setText(
+            f"状态: 已停止 | 捕获 {self._capture_count} 条 | 速率 0/s"
+        )
 
     def _clear_all(self):
         _msg = QMessageBox(QMessageBox.Question, "确认清空",
@@ -3763,6 +3908,18 @@ class JsonViewerDialog(QDialog):
         if event.key() == Qt.Key_Escape:
             self.close()
             return
+        if event.key() == Qt.Key_F and event.modifiers() == Qt.ControlModifier:
+            self.edit_search.setFocus(Qt.ShortcutFocusReason)
+            self.edit_search.selectAll()
+            return
+        if event.key() == Qt.Key_Delete and event.modifiers() == Qt.NoModifier:
+            self.capture_list.remove_selected()
+            return
+        if event.key() == Qt.Key_Space and event.modifiers() == Qt.NoModifier:
+            focus = QApplication.focusWidget()
+            if not isinstance(focus, (QLineEdit, QPlainTextEdit)):
+                self.chart_tracker.btn_pause.click()
+                return
         super().keyPressEvent(event)
 
     # --- 生命周期 ---
