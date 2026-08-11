@@ -1190,13 +1190,11 @@ class SerialTool(QMainWindow):
         
         # 设置初始列宽
         self.table_multi_send.setColumnWidth(MULTI_COL_HEX, 38)
+        self.table_multi_send.setColumnWidth(MULTI_COL_TEXT, 100)
         self.table_multi_send.setColumnWidth(MULTI_COL_NAME, 72)
         self.table_multi_send.setColumnWidth(MULTI_COL_SEND, 54)
         self.table_multi_send.setColumnWidth(MULTI_COL_DELAY, 90)
         self.table_multi_send.setColumnWidth(MULTI_COL_ORDER, 46)
-        # 字符串列自动填充剩余空间，避免窗口拉宽后右侧空白
-        header.setSectionResizeMode(MULTI_COL_TEXT, QHeaderView.Stretch)
-
         # 确保表格充满可用空间
         self.table_multi_send.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.table_multi_send.setMinimumWidth(360)

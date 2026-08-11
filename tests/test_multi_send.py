@@ -11,7 +11,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import QRect, Qt
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QMessageBox, QAbstractItemView, QCheckBox
+from PyQt5.QtWidgets import (
+    QApplication, QMessageBox, QAbstractItemView, QCheckBox, QHeaderView,
+)
 
 from app_paths import AppPaths
 from serial_GUI import SerialTool
@@ -516,6 +518,18 @@ class MultiSendTests(unittest.TestCase):
 
     def test多字符串表格使用紧凑宽度(self):
         self.assertEqual(self.tool.table_multi_send.minimumWidth(), 360)
+
+    def test多字符串的字符串列允许用户拖动调整宽度(self):
+        header = self.tool.table_multi_send.horizontalHeader()
+        self.assertEqual(header.sectionResizeMode(1), QHeaderView.Interactive)
+
+        initial_width = self.tool.table_multi_send.columnWidth(1)
+        header.resizeSection(1, initial_width + 40)
+        self.app.processEvents()
+
+        self.assertEqual(
+            self.tool.table_multi_send.columnWidth(1), initial_width + 40
+        )
 
     def test主窗口默认宽度为1080并受屏幕可用宽度限制(self):
         available_width = QApplication.primaryScreen().availableGeometry().width()

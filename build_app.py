@@ -406,7 +406,7 @@ def find_icon():
             if not found_png and all_pngs:
                 found_png = os.path.join(dir_path, all_pngs[0])
             if found_png:
-                break
+                break"""  """
     
     # 检查是否可以使用PNG图标
     try:
