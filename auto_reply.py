@@ -124,7 +124,12 @@ class AutoReplyDialog(QDialog):
         self.table_rules.setColumnCount(4)
         self.table_rules.verticalHeader().setVisible(False)
         self.table_rules.setHorizontalHeaderLabels(["序号", "触发条件", "匹配模式", "响应内容"])
-        self.table_rules.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        header = self.table_rules.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        self.table_rules.setColumnWidth(0, 42)
         self.table_rules.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table_rules.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_rules.setMinimumHeight(150)
@@ -144,6 +149,12 @@ class AutoReplyDialog(QDialog):
         self.btn_delete_rule.setMinimumWidth(80)
         self.btn_delete_rule.clicked.connect(self._delete_rule)
         btn_layout.addWidget(self.btn_delete_rule)
+
+        self.btn_clear_rules = QPushButton("清空规则")
+        self.btn_clear_rules.setMinimumWidth(80)
+        self.btn_clear_rules.setAccessibleName("清空全部自动应答规则")
+        self.btn_clear_rules.clicked.connect(self._clear_rules)
+        btn_layout.addWidget(self.btn_clear_rules)
 
         self.btn_move_up = QPushButton("上移")
         self.btn_move_up.setMinimumWidth(60)
@@ -390,6 +401,7 @@ class AutoReplyDialog(QDialog):
         has_rule = 0 <= row < len(self._rules)
         self.btn_edit_rule.setEnabled(has_rule)
         self.btn_delete_rule.setEnabled(has_rule)
+        self.btn_clear_rules.setEnabled(bool(self._rules))
         self.btn_move_up.setEnabled(has_rule and row > 0)
         self.btn_move_down.setEnabled(has_rule and row < len(self._rules) - 1)
 
@@ -492,6 +504,25 @@ class AutoReplyDialog(QDialog):
                 self._editing_index -= 1
             self._update_edit_mode_ui()
         self._append_log(f"规则删除: {rule['trigger']}")
+
+    def _clear_rules(self):
+        if not self._rules:
+            return
+        reply = QMessageBox.question(
+            self, "确认清空规则",
+            f"确定要清空全部 {len(self._rules)} 条自动应答规则吗？\n此操作不可撤销。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        count = len(self._rules)
+        was_editing = self._editing_index is not None
+        self._rules.clear()
+        self._refresh_rules_table()
+        if was_editing:
+            self._clear_editor()
+        self._append_log(f"已清空全部规则，共 {count} 条")
 
     def _move_rule_up(self):
         row = self.table_rules.currentRow()

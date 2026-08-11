@@ -168,6 +168,32 @@ class RuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(dialog.edit_response.text(), "NEW-REPLY")
         self.assertIsNone(dialog._editing_index)
 
+    def test自动回复清空规则需要确认并清空整个列表(self):
+        parent = _AutoReplyParent()
+        dialog = AutoReplyDialog(parent)
+        self.addCleanup(parent.close)
+        self.addCleanup(dialog.close)
+        dialog._rules = [
+            {
+                "trigger": trigger, "match_mode": "文本包含",
+                "response": response, "response_format": "文本",
+                "enabled": True, "max_count": 0, "newline": False,
+                "count": 0,
+            }
+            for trigger, response in (("ONE", "1"), ("TWO", "2"))
+        ]
+        dialog._refresh_rules_table()
+
+        with mock.patch(
+            "auto_reply.QMessageBox.question", return_value=QMessageBox.Yes
+        ) as question:
+            dialog._clear_rules()
+
+        question.assert_called_once()
+        self.assertEqual(dialog._rules, [])
+        self.assertIn("暂无规则", dialog.table_rules.item(0, 0).text())
+        self.assertFalse(dialog.btn_clear_rules.isEnabled())
+
     def test自动回复移动规则后保持正在编辑的规则(self):
         parent = _AutoReplyParent()
         dialog = AutoReplyDialog(parent)

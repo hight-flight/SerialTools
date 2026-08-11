@@ -8,7 +8,9 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import QMutex, Qt
-from PyQt5.QtWidgets import QApplication, QPushButton, QScrollArea, QSplitter, QWidget
+from PyQt5.QtWidgets import (
+    QApplication, QHeaderView, QPushButton, QScrollArea, QSplitter, QWidget,
+)
 
 from app_paths import AppPaths
 from auto_reply import AutoReplyDialog
@@ -173,14 +175,29 @@ class UIRegressionTests(unittest.TestCase):
     def test自动应答主要操作名称与位置清晰(self):
         dialog = AutoReplyDialog(self.parent)
         self.addCleanup(self._close_dialog, dialog)
+        dialog.show()
+        self.app.processEvents()
         labels = {button.text() for button in dialog.findChildren(QPushButton)}
 
         self.assertIn("添加到列表", labels)
         self.assertIn("导出规则", labels)
         self.assertIn("导入规则", labels)
+        self.assertIn("清空规则", labels)
         self.assertNotIn("添加规则", labels)
         self.assertNotIn("保存规则", labels)
         self.assertNotIn("加载规则", labels)
+        self.assertGreater(
+            dialog.btn_clear_rules.geometry().left(),
+            dialog.btn_delete_rule.geometry().left(),
+        )
+
+    def test自动应答规则序号列使用紧凑固定宽度(self):
+        dialog = AutoReplyDialog(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+        header = dialog.table_rules.horizontalHeader()
+
+        self.assertEqual(header.sectionResizeMode(0), QHeaderView.Fixed)
+        self.assertLessEqual(dialog.table_rules.columnWidth(0), 48)
 
     def test自动应答关键输入具有明确无障碍名称(self):
         dialog = AutoReplyDialog(self.parent)
