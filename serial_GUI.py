@@ -192,16 +192,6 @@ def parse_multi_send_csv(text_content):
         if not command_text.strip():
             issues.append(f"第 {line_number} 行：字符串不能为空")
             continue
-        if hex_text == "true":
-            normalized_hex = command_text.replace(" ", "").replace("\n", "").replace("\r", "")
-            try:
-                if len(normalized_hex) % 2:
-                    raise ValueError
-                bytes.fromhex(normalized_hex)
-            except ValueError:
-                issues.append(f"第 {line_number} 行：HEX 格式无效")
-                continue
-
         items.append({
             "hex": hex_text == "true",
             "string": command_text,
@@ -3467,7 +3457,12 @@ class SerialTool(QMainWindow):
             self._setting_history_text = True
             self._formatting_text = True
             self.check_hex_send.setChecked(is_hex)
-            self.text_send.setPlainText(data)
+            editor_data = data
+            if is_hex:
+                encoding = self.combo_encoding.currentText()
+                encoded = data.encode(encoding, errors="replace")
+                editor_data = " ".join(f"{byte:02X}" for byte in encoded)
+            self.text_send.setPlainText(editor_data)
             return self.send_data(manage_repeat=False, record_history=False)
         finally:
             self.check_hex_send.setChecked(original_hex_send)
@@ -3723,11 +3718,11 @@ class SerialTool(QMainWindow):
 
         3. 编辑与单独发送：
            - 双击“字符串”“名称/备注”或“顺序”单元格可直接编辑
-           - 勾选 HEX 后，字符串必须是有效的十六进制字节，例如 AA 01 FF
+           - 勾选 HEX 后，会按当前编码将字符串转换为十六进制字节后发送
            - 点击“操作”列中的“发送”，只发送该行，不会覆盖主发送框草稿
 
         4. 校验与状态：
-           - 空字符串、无效 HEX、以及非正整数顺序会在开始前统一标出
+           - 空字符串以及非正整数顺序会在开始前统一标出
            - 进度与停止结果显示在批量工具栏右侧
 
         5. 保存与加载：
@@ -3851,15 +3846,6 @@ class SerialTool(QMainWindow):
             )
             name_item = self.table_multi_send.item(row, MULTI_COL_NAME)
             is_hex = bool(hex_checkbox and hex_checkbox.isChecked())
-            if is_hex:
-                normalized_hex = text.replace(" ", "").replace("\n", "").replace("\r", "")
-                try:
-                    if len(normalized_hex) % 2:
-                        raise ValueError
-                    bytes.fromhex(normalized_hex)
-                except ValueError:
-                    errors.append((row, MULTI_COL_TEXT, "HEX 格式无效"))
-                    continue
             items.append(MultiSendPayload(
                 text=text, is_hex=is_hex,
                 delay_ms=delay_spin.value() if delay_spin else 1000,

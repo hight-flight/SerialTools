@@ -88,6 +88,22 @@ class MultiSendTests(unittest.TestCase):
         self.assertTrue(self.tool.check_repeat.isChecked())
         self.assertFalse(self.tool.repeat_timer.isActive())
 
+    def test单行勾选hex后将字符串编码为十六进制字节发送(self):
+        writes = []
+        self.tool.transport = SimpleNamespace(
+            is_open=True,
+            write=lambda data: writes.append(data) or len(data),
+            close=lambda: None,
+        )
+        self.tool.combo_encoding.setCurrentText("UTF-8")
+        checkbox = self.tool.table_multi_send.cellWidget(0, 0).layout().itemAt(0).widget()
+        checkbox.setChecked(True)
+        self.tool.table_multi_send.item(0, 1).setText("AB")
+
+        self.tool.send_multi_item(0)
+
+        self.assertEqual(writes, [b"AB"])
+
     def test浏览历史时单行发送后仍可返回原草稿(self):
         self.tool.transport = SimpleNamespace(
             is_open=True, write=lambda data: len(data), close=lambda: None,
@@ -304,17 +320,18 @@ class MultiSendTests(unittest.TestCase):
             "false,AT+CSQ,信号质量,100,1,500,true,3\n"
             "true,AA55,握手,错误,2,500,true,3\n"
             "false,,空指令,100,3,500,true,3\n"
-            "true,GG,坏HEX,100,4,500,true,3\n"
+            "true,GG,普通字符串转HEX,100,4,500,true,3\n"
         )
 
         items, issues, settings = parse_multi_send_csv(content)
 
-        self.assertEqual(len(items), 1)
+        self.assertEqual(len(items), 2)
         self.assertEqual(items[0]["string"], "AT+CSQ")
+        self.assertEqual(items[1]["string"], "GG")
+        self.assertTrue(items[1]["hex"])
         self.assertEqual(issues, [
             "第 3 行：延时必须是 0–10000 的整数",
             "第 4 行：字符串不能为空",
-            "第 5 行：HEX 格式无效",
         ])
         self.assertEqual(settings, {
             "cycle_delay": 500,
@@ -469,7 +486,7 @@ class MultiSendTests(unittest.TestCase):
 
         self.assertEqual(self.tool.label_batch_status.text(), "第 1 行内容为空")
 
-    def test批量校验拒绝无效hex内容(self):
+    def test批量勾选hex接受普通字符串并在发送时转换(self):
         hex_checkbox = self.tool.table_multi_send.cellWidget(0, 0).layout().itemAt(0).widget()
         hex_checkbox.setChecked(True)
         self.tool.table_multi_send.item(0, 1).setText("GG")
@@ -477,8 +494,10 @@ class MultiSendTests(unittest.TestCase):
 
         items, errors = self.tool._collect_multi_send_snapshot()
 
-        self.assertEqual(items, ())
-        self.assertIn((0, 1, "HEX 格式无效"), errors)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].text, "GG")
+        self.assertTrue(items[0].is_hex)
 
     def test批量发送默认限定为一轮以避免误触无限发送(self):
         self.assertTrue(self.tool.check_cycle_count.isChecked())
@@ -618,6 +637,7 @@ class MultiSendTests(unittest.TestCase):
         source = inspect.getsource(SerialTool.show_multi_send_help)
         self.assertIn("开始批量发送", source)
         self.assertIn("名称/备注", source)
+        self.assertIn("按当前编码将字符串转换为十六进制字节后发送", source)
         self.assertIn("轮间隔", source)
         self.assertNotIn('勾选"循环发送"', source)
         self.assertNotIn("右键点击", source)
