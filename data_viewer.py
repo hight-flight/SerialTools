@@ -3233,15 +3233,24 @@ class JsonViewerDialog(QDialog):
         self.center_on_current_screen()
 
     def center_on_current_screen(self):
-        """在主窗口所在屏幕居中，避免多屏环境下定位到错误屏幕。"""
+        """在主窗口中央显示，并按主窗口所在屏幕限制面板尺寸。"""
         parent = self.parentWidget()
         screen = None
         if parent is not None:
             screen = QApplication.screenAt(parent.window().frameGeometry().center())
         screen = screen or self.screen() or QApplication.primaryScreen()
-        if not screen:
+        if screen:
+            available = screen.availableGeometry()
+            self.resize(
+                min(self.width(), available.width()),
+                min(self.height(), available.height()),
+            )
+        if parent is not None:
+            top_left = parent.window().frameGeometry().center() - self.rect().center()
+            self.move(top_left)
             return
-        self._center_in_available_geometry(screen.availableGeometry())
+        if screen:
+            self._center_in_available_geometry(screen.availableGeometry())
 
     def _center_in_available_geometry(self, available):
         self.resize(min(self.width(), available.width()), min(self.height(), available.height()))

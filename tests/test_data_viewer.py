@@ -177,19 +177,18 @@ class DataViewerTests(unittest.TestCase):
         self.assertTrue(dialog.edit_search.accessibleName())
         self.assertTrue(dialog.capture_list.table.accessibleName())
 
-    def test数据分析面板每次打开时位于当前屏幕中央(self):
+    def test数据分析面板每次打开时位于主窗口中央(self):
+        self.parent.setGeometry(QRect(120, 80, 560, 420))
         dialog = self._dialog()
-        available = QRect(100, 50, 1600, 900)
-        dialog.resize(1000, 700)
         dialog.move(0, 0)
 
-        dialog._center_in_available_geometry(available)
+        dialog.center_on_current_screen()
 
-        screen_center = available.center()
+        parent_center = self.parent.frameGeometry().center()
         dialog_center = dialog.frameGeometry().center()
 
-        self.assertLessEqual(abs(dialog_center.x() - screen_center.x()), 1)
-        self.assertLessEqual(abs(dialog_center.y() - screen_center.y()), 1)
+        self.assertLessEqual(abs(dialog_center.x() - parent_center.x()), 1)
+        self.assertLessEqual(abs(dialog_center.y() - parent_center.y()), 1)
 
     def test错误行颜色随明暗主题变化(self):
         model = CaptureTableModel(is_dark=False)
