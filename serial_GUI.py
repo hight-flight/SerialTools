@@ -182,14 +182,14 @@ def parse_multi_send_csv(text_content):
             continue
         try:
             order = int((row.get("order") or "").strip())
-            if order <= 0:
+            if order < 0:
                 raise ValueError
         except ValueError:
-            issues.append(f"第 {line_number} 行：顺序必须是大于 0 的整数")
+            issues.append(f"第 {line_number} 行：顺序必须是大于等于 0 的整数")
             continue
 
         command_text = row.get("string", "")
-        if not command_text.strip():
+        if order > 0 and not command_text.strip():
             issues.append(f"第 {line_number} 行：字符串不能为空")
             continue
         items.append({
@@ -3730,6 +3730,7 @@ class SerialTool(QMainWindow):
 
         1. 开始与停止：
            - 点击“开始批量发送”，系统按“顺序”从小到大发送全部有效指令
+           - 顺序为 0 的行不参与批量发送，可用于临时停用指令
            - 发送期间按钮会变为“停止批量发送”，列表和批量设置会暂时锁定
            - 默认限定为 1 轮；取消“限定轮数”后会持续发送，直到手动停止
 
@@ -3743,7 +3744,7 @@ class SerialTool(QMainWindow):
            - 点击“操作”列中的“发送”，只发送该行，不会覆盖主发送框草稿
 
         4. 校验与状态：
-           - 空字符串以及非正整数顺序会在开始前统一标出
+           - 参与发送的行不能为空；负数或非整数顺序会在开始前统一标出
            - 进度与停止结果显示在批量工具栏右侧
 
         5. 保存与加载：
@@ -3840,19 +3841,20 @@ class SerialTool(QMainWindow):
         for row in range(self.table_multi_send.rowCount()):
             string_item = self.table_multi_send.item(row, MULTI_COL_TEXT)
             text = string_item.text() if string_item else ""
-            if not text.strip():
-                errors.append((row, MULTI_COL_TEXT, "字符串不能为空"))
 
             order_item = self.table_multi_send.item(row, MULTI_COL_ORDER)
             order_text = order_item.text().strip() if order_item else ""
             try:
                 order = int(order_text)
-                if order <= 0:
+                if order < 0:
                     raise ValueError
             except (TypeError, ValueError):
-                errors.append((row, MULTI_COL_ORDER, "顺序必须是大于 0 的整数"))
+                errors.append((row, MULTI_COL_ORDER, "顺序必须是大于等于 0 的整数"))
+                continue
+            if order == 0:
                 continue
             if not text.strip():
+                errors.append((row, MULTI_COL_TEXT, "字符串不能为空"))
                 continue
 
             hex_widget = self.table_multi_send.cellWidget(row, MULTI_COL_HEX)

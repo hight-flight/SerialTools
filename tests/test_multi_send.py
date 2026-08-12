@@ -165,13 +165,25 @@ class MultiSendTests(unittest.TestCase):
         self.tool.table_multi_send.item(0, 5).setText("1")
         self.tool.add_multi_item()
         self.tool.table_multi_send.item(1, 1).setText("AT+CSQ")
-        self.tool.table_multi_send.item(1, 5).setText("0")
+        self.tool.table_multi_send.item(1, 5).setText("-1")
 
         items, errors = self.tool._collect_multi_send_snapshot()
 
         self.assertEqual(items, ())
         self.assertIn((0, 1, "字符串不能为空"), errors)
-        self.assertIn((1, 5, "顺序必须是大于 0 的整数"), errors)
+        self.assertIn((1, 5, "顺序必须是大于等于 0 的整数"), errors)
+
+    def test顺序为零的行不参与批量发送且不标记为错误(self):
+        self.tool.table_multi_send.item(0, 1).setText("")
+        self.tool.table_multi_send.item(0, 5).setText("0")
+        self.tool.add_multi_item()
+        self.tool.table_multi_send.item(1, 1).setText("AT+SEND")
+        self.tool.table_multi_send.item(1, 5).setText("2")
+
+        items, errors = self.tool._collect_multi_send_snapshot()
+
+        self.assertEqual(errors, [])
+        self.assertEqual([item.text for item in items], ["AT+SEND"])
 
     def test批量发送使用明确的开始停止按钮并在完成后复位(self):
         self.assertEqual(self.tool.btn_batch_send.text(), "开始批量发送")
@@ -340,6 +352,21 @@ class MultiSendTests(unittest.TestCase):
             "limit_cycles": True,
             "cycle_count": 3,
         })
+
+    def test_csv允许顺序为零的停用行(self):
+        from serial_GUI import parse_multi_send_csv
+
+        content = (
+            "hex,string,button_text,delay,order\n"
+            "false,,暂不发送,100,0\n"
+        )
+
+        items, issues, _settings = parse_multi_send_csv(content)
+
+        self.assertEqual(issues, [])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["order"], "0")
+        self.assertEqual(items[0]["string"], "")
 
     def test加载csv前拒绝覆盖时保留当前列表(self):
         csv_path = Path(self.temp_dir.name) / "commands.csv"
@@ -691,6 +718,7 @@ class MultiSendTests(unittest.TestCase):
         self.assertIn("名称/备注", source)
         self.assertIn("按当前编码将字符串转换为十六进制字节后发送", source)
         self.assertIn("轮间隔", source)
+        self.assertIn("顺序为 0 的行不参与批量发送", source)
         self.assertNotIn('勾选"循环发送"', source)
         self.assertNotIn("右键点击", source)
 
