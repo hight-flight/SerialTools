@@ -18,14 +18,14 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog, QSizePolicy,
                              QAction, QTabWidget, QRadioButton, QButtonGroup, QStackedWidget)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint, QEvent, QByteArray
-from PyQt5.QtGui import QBrush, QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon, QPen
+from PyQt5.QtGui import QBrush, QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon, QPen, QIcon
 
 from dialogs import (show_crc_calculator, show_hex_converter,
                          show_serial_monitor, show_usage_dialog,
                          show_about_dialog)
 from theme import THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, VERSION, unescape_text
 from transport import TransportWrapper, TransportReadThread
-from app_paths import ensure_user_dirs, migrate_legacy_user_data, resolve_app_paths
+from app_paths import ensure_user_dirs, migrate_legacy_user_data, resolve_app_paths, resource_path
 # 注意：JsonViewerDialog 和 AutoReplyDialog 保持延迟导入（懒加载），
 # 因为它们依赖 pyqtgraph/numpy 等重型模块，懒加载可显著加快 exe 首次启动速度。
 # OTAControlCenter 和 GSMDebuggerDialog 只依赖轻量 stdlib 模块，改为顶层导入，
@@ -448,6 +448,7 @@ class SerialTool(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("hight-flight串口工具")
+        self.setWindowIcon(QIcon(os.fspath(resource_path("图标.png"))))
         primary_screen = QApplication.primaryScreen()
         if primary_screen is not None:
             available = primary_screen.availableGeometry()

@@ -74,6 +74,9 @@ class MultiSendTests(unittest.TestCase):
         for _ in range(3):
             self.app.processEvents()
 
+    def test主窗口标题栏显示应用图标(self):
+        self.assertFalse(self.tool.windowIcon().isNull())
+
     def test单行发送保留主发送草稿且不启动普通重复发送(self):
         self.tool.transport = SimpleNamespace(
             is_open=True,
