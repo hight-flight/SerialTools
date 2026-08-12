@@ -1295,6 +1295,9 @@ class SerialTool(QMainWindow):
         ok_color = self.theme_colors['ansi_fg']['32'].name()
         self.status_msg = QLabel(f'<span style="color: {ok_color};">就绪</span>')
         self.status_msg.setFont(QFont("Microsoft YaHei", 9))
+        status_left_gap = QWidget()
+        status_left_gap.setFixedWidth(10)
+        self.statusBar().addWidget(status_left_gap)
         self.statusBar().addWidget(self.status_msg)
 
         # 添加状态栏组件
