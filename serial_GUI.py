@@ -1189,12 +1189,13 @@ class SerialTool(QMainWindow):
             header.setSectionResizeMode(column, QHeaderView.Interactive)
         
         # 设置初始列宽
-        self.table_multi_send.setColumnWidth(MULTI_COL_HEX, 38)
-        self.table_multi_send.setColumnWidth(MULTI_COL_TEXT, 100)
-        self.table_multi_send.setColumnWidth(MULTI_COL_NAME, 72)
-        self.table_multi_send.setColumnWidth(MULTI_COL_SEND, 54)
-        self.table_multi_send.setColumnWidth(MULTI_COL_DELAY, 90)
-        self.table_multi_send.setColumnWidth(MULTI_COL_ORDER, 46)
+        self.table_multi_send.setColumnWidth(MULTI_COL_HEX, 36)
+        self.table_multi_send.setColumnWidth(MULTI_COL_TEXT, 72)
+        self.table_multi_send.setColumnWidth(MULTI_COL_NAME, 66)
+        self.table_multi_send.setColumnWidth(MULTI_COL_SEND, 52)
+        self.table_multi_send.setColumnWidth(MULTI_COL_DELAY, 84)
+        self.table_multi_send.setColumnWidth(MULTI_COL_ORDER, 48)
+        self._multi_columns_fitted = False
         # 确保表格充满可用空间
         self.table_multi_send.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.table_multi_send.setMinimumWidth(360)
@@ -3682,10 +3683,27 @@ class SerialTool(QMainWindow):
             # 恢复分割器大小
             self._fit_multi_send_to_current_screen()
             self.main_splitter.setSizes([700, 380])
+            if not self._multi_columns_fitted:
+                QTimer.singleShot(0, self._fit_multi_send_default_columns)
             
             # 强制刷新布局
             self.main_splitter.update()
             self.main_splitter.repaint()
+
+    def _fit_multi_send_default_columns(self):
+        """首次展开时用字符串列吸收剩余宽度，同时保留手动拖动能力。"""
+        viewport_width = self.table_multi_send.viewport().width()
+        fixed_width = sum(
+            self.table_multi_send.columnWidth(column)
+            for column in range(self.table_multi_send.columnCount())
+            if column != MULTI_COL_TEXT
+        )
+        text_width = max(70, viewport_width - fixed_width)
+        self.table_multi_send.horizontalHeader().resizeSection(
+            MULTI_COL_TEXT, text_width
+        )
+        self.table_multi_send.horizontalScrollBar().setValue(0)
+        self._multi_columns_fitted = True
     
     def toggle_cycle_count(self, state):
         """切换循环次数输入框的启用状态"""

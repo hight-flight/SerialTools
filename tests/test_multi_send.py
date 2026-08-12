@@ -551,6 +551,24 @@ class MultiSendTests(unittest.TestCase):
             self.tool.table_multi_send.columnWidth(1), initial_width + 40
         )
 
+    def test多字符串面板首次展开时顺序列完整可见(self):
+        self.tool.show()
+        self.tool.toggle_multi_send()
+        self.app.processEvents()
+
+        header = self.tool.table_multi_send.horizontalHeader()
+        order_right = (
+            header.sectionViewportPosition(5) + header.sectionSize(5)
+        )
+
+        self.assertLessEqual(
+            order_right, self.tool.table_multi_send.viewport().width()
+        )
+        self.assertGreaterEqual(self.tool.table_multi_send.columnWidth(1), 70)
+        self.assertLessEqual(
+            abs(order_right - self.tool.table_multi_send.viewport().width()), 1
+        )
+
     def test主窗口默认宽度为1080并受屏幕可用宽度限制(self):
         available_width = QApplication.primaryScreen().availableGeometry().width()
         self.assertEqual(self.tool.width(), min(1080, available_width))
