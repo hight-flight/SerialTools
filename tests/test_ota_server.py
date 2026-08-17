@@ -36,9 +36,160 @@ class OTAServerTests(unittest.TestCase):
     def test发送ota命令前已经启用所有进度跟踪(self):
         source = inspect.getsource(OTAControlCenter._start_ota)
 
-        write_at = source.index("self.main_window.transport.write")
-        self.assertLess(source.index("self._start_http_tracking"), write_at)
-        self.assertLess(source.index("self._start_serial_tracking"), write_at)
+        send_at = source.index("self._send_ota_command(cmd_bytes")
+        self.assertLess(source.index("self._start_http_tracking"), send_at)
+        self.assertLess(source.index("self._start_serial_tracking"), send_at)
+
+    def test开始升级按钮始终可以点击(self):
+        class _Widget:
+            def __init__(self):
+                self.enabled = None
+                self.label = None
+                self.tooltip = None
+                self.visible = None
+
+            def setEnabled(self, value):
+                self.enabled = value
+
+            def setToolTip(self, value):
+                self.tooltip = value
+
+            def setText(self, value):
+                self.label = value
+
+            def setVisible(self, value):
+                self.visible = value
+
+        button = _Widget()
+        precondition_label = _Widget()
+        controller = SimpleNamespace(
+            _btn_start_ota=button,
+            _precondition_label=precondition_label,
+            _start_button_block_reason=lambda: "请先选择固件文件",
+            _ota_in_progress=False,
+            _last_ota_command=b"",
+        )
+
+        OTAControlCenter._update_start_button_state(controller)
+
+        self.assertTrue(button.enabled)
+        self.assertEqual(button.label, "▶ 开始升级")
+        self.assertEqual(button.tooltip, "请先选择固件文件")
+        self.assertTrue(precondition_label.visible)
+
+        controller._ota_in_progress = True
+        OTAControlCenter._update_start_button_state(controller)
+        self.assertEqual(button.label, "… 正在准备")
+
+        controller._last_ota_command = b"AT+OTA"
+        OTAControlCenter._update_start_button_state(controller)
+        self.assertEqual(button.label, "↻ 重新下发")
+
+    def test升级进行中不再作为重复下发的阻断原因(self):
+        controller = SimpleNamespace(
+            _ota_in_progress=True,
+            firmware_path="firmware.bin",
+            main_window=SimpleNamespace(
+                transport=SimpleNamespace(is_open=True),
+            ),
+            _ip_combo=SimpleNamespace(currentText=lambda: "192.168.1.2"),
+        )
+
+        with mock.patch("ota_center.os.path.isfile", return_value=True):
+            reason = OTAControlCenter._start_button_block_reason(controller)
+
+        self.assertEqual(reason, "")
+
+    def test升级进行中再次点击只走重发分支(self):
+        resend = mock.Mock()
+        controller = SimpleNamespace(
+            _ota_in_progress=True,
+            _last_ota_command=b"AT+OTA",
+            _resend_ota_command=resend,
+        )
+
+        OTAControlCenter._start_ota(controller)
+
+        resend.assert_called_once_with()
+
+    def test指令准备期间重复点击不会启动第二套流程(self):
+        logs = []
+        controller = SimpleNamespace(
+            _ota_in_progress=True,
+            _last_ota_command=b"",
+            _log=logs.append,
+        )
+
+        OTAControlCenter._start_ota(controller)
+
+        self.assertTrue(any("正在准备" in message for message in logs))
+
+    def test重发只写缓存指令且不清空串口缓冲区(self):
+        transport = mock.Mock(is_open=True)
+        transport.write.return_value = len(b"AT+OTA")
+        timeout_timer = mock.Mock()
+        logs = []
+        controller = SimpleNamespace(
+            _last_ota_command=b"AT+OTA",
+            _last_ota_send_at=0.0,
+            _ota_send_count=1,
+            main_window=SimpleNamespace(
+                transport=transport,
+                serial_mutex=object(),
+                tx_bytes=0,
+                label_tx_bytes=SimpleNamespace(setText=lambda _text: None),
+                append_text=lambda _text: None,
+            ),
+            _timeout_timer=timeout_timer,
+            _timeout_spin=SimpleNamespace(value=lambda: 30),
+            _log=logs.append,
+            _set_state=lambda _state, _message: None,
+            STATE_DOWNLOADING="downloading",
+            _update_start_button_state=lambda: None,
+        )
+        mutex_locker = mock.MagicMock()
+        mutex_locker.return_value.__enter__.return_value = None
+
+        with mock.patch("ota_center.QMutexLocker", mutex_locker), \
+                mock.patch("ota_center.time.monotonic", return_value=10.0):
+            OTAControlCenter._resend_ota_command(controller)
+
+        transport.write.assert_called_once_with(b"AT+OTA")
+        transport.reset_input_buffer.assert_not_called()
+        transport.reset_output_buffer.assert_not_called()
+        timeout_timer.start.assert_called_once_with(30000)
+        self.assertEqual(controller._ota_send_count, 2)
+        self.assertTrue(any("第 2 次" in message for message in logs))
+
+    def test短时间双击不会重复下发(self):
+        transport = mock.Mock(is_open=True)
+        controller = SimpleNamespace(
+            _last_ota_command=b"AT+OTA",
+            _last_ota_send_at=10.0,
+            _ota_send_count=1,
+            main_window=SimpleNamespace(transport=transport),
+            _log=lambda _message: None,
+        )
+
+        with mock.patch("ota_center.time.monotonic", return_value=10.2):
+            OTAControlCenter._resend_ota_command(controller)
+
+        transport.write.assert_not_called()
+
+    def test重复下发不会重复绑定串口回调(self):
+        signal = mock.Mock()
+        controller = SimpleNamespace(
+            _serial_data_connected=False,
+            main_window=SimpleNamespace(
+                read_thread=SimpleNamespace(receive_data_signal=signal),
+            ),
+            _on_serial_progress=lambda _data: None,
+        )
+
+        OTAControlCenter._start_serial_tracking(controller)
+        OTAControlCenter._start_serial_tracking(controller)
+
+        signal.connect.assert_called_once_with(controller._on_serial_progress)
 
     def test设备未确认时不能把ota标记为成功(self):
         class _Timer:
@@ -69,11 +220,12 @@ class OTAServerTests(unittest.TestCase):
         with OTARequestHandler._lock:
             OTARequestHandler._bytes_sent = 10
 
-        with mock.patch("ota_center.QMessageBox.warning"):
+        with mock.patch("ota_center.QMessageBox.warning") as warning:
             OTAControlCenter._on_ota_timeout(controller)
 
         self.assertEqual(state["value"], "unconfirmed")
         self.assertIn("未确认", state["message"])
+        warning.assert_not_called()
 
 
 if __name__ == "__main__":

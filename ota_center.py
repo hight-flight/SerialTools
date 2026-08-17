@@ -187,6 +187,7 @@ class OTAControlCenter(QDialog):
     STATE_CANCELLED = 'cancelled'
 
     MAX_FIRMWARE_HISTORY = 5
+    OTA_RESEND_DEBOUNCE_SECONDS = 0.5
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -198,6 +199,9 @@ class OTAControlCenter(QDialog):
         self._last_ip = ''  # 上次使用的 IP，用于恢复
         self._ota_stop_flag = False
         self._ota_in_progress = False
+        self._last_ota_command = b''
+        self._ota_send_count = 0
+        self._last_ota_send_at = 0.0
         # 进度模式（兼容"上报进度"与"不上报进度"两类设备）：
         #   'waiting' —— 初始，等待设备上报 Progress 或 HTTP 开始发送
         #   'device'  —— 设备上报模式，进度条以设备 ota: Progress:XX% 为准
@@ -886,8 +890,6 @@ class OTAControlCenter(QDialog):
 
     def _start_button_block_reason(self):
         """返回不能开始 OTA 的首个前置条件，空字符串表示可以开始。"""
-        if self._ota_in_progress:
-            return "升级正在进行中"
         if not self.firmware_path or not os.path.isfile(self.firmware_path):
             return "请先选择固件文件"
         transport = getattr(self.main_window, 'transport', None)
@@ -903,8 +905,18 @@ class OTAControlCenter(QDialog):
         if not hasattr(self, '_btn_start_ota'):
             return
         reason = self._start_button_block_reason()
-        self._btn_start_ota.setEnabled(not reason)
-        self._btn_start_ota.setToolTip(reason or "开始 OTA 升级")
+        can_resend = self._ota_in_progress and bool(self._last_ota_command)
+        is_preparing = self._ota_in_progress and not self._last_ota_command
+        button_text = (
+            "↻ 重新下发" if can_resend
+            else "… 正在准备" if is_preparing
+            else "▶ 开始升级"
+        )
+        self._btn_start_ota.setEnabled(True)
+        self._btn_start_ota.setText(button_text)
+        self._btn_start_ota.setToolTip(
+            reason or ("重新下发上一次 OTA 指令" if can_resend else "开始 OTA 升级")
+        )
         self._precondition_label.setText(reason)
         self._precondition_label.setVisible(bool(reason))
 
@@ -999,10 +1011,16 @@ class OTAControlCenter(QDialog):
         raise IOError(f"固件复制失败: {last_err}")
 
     def _start_ota(self):
-        """一键启动 OTA 流程。"""
+        """一键启动 OTA 流程；执行期间再次点击只重发指令。"""
         if self._ota_in_progress:
-            self._log("OTA 正在执行中，请等待完成或点击停止")
+            if self._last_ota_command:
+                self._resend_ota_command()
+            else:
+                self._log("OTA 指令正在准备中，请稍候")
             return
+
+        self._last_ota_command = b''
+        self._ota_send_count = 0
         self._ota_in_progress = True
         self._ota_stop_flag = False  # 清除上一次的取消标志（必须在 HTTP 等待循环前）
 
@@ -1080,6 +1098,7 @@ class OTAControlCenter(QDialog):
             if self._check_cmd_newline.isChecked():
                 cmd = cmd.rstrip('\r\n') + '\r\n'
             cmd_bytes = cmd.encode('utf-8')
+            self._last_ota_command = cmd_bytes
 
             # 设备可能在收到命令后立即发起 GET 或返回结果，因此必须先启用追踪。
             self._start_http_tracking(fw_filename, dst_size)
@@ -1088,25 +1107,10 @@ class OTAControlCenter(QDialog):
             self._set_state(self.STATE_DOWNLOADING, "等待设备下载（可能重启）...")
             self._log("等待设备下载固件（设备可能重启，串口暂时断开属正常现象）...")
 
-            # 通过连接发送（清空串口缓冲；网络模式下为空操作）
-            try:
-                with QMutexLocker(self.main_window.serial_mutex):
-                    self.main_window.transport.reset_input_buffer()
-                    self.main_window.transport.reset_output_buffer()
-                    n = self.main_window.transport.write(cmd_bytes)
-                    if n != len(cmd_bytes):
-                        raise IOError(f"OTA 指令部分写入: {n}/{len(cmd_bytes)} 字节")
-                    self.main_window.transport.flush()
-                    self.main_window.tx_bytes += n
-                    self.main_window.label_tx_bytes.setText(
-                        f"发送字节: {self.main_window.tx_bytes}")
-                # 同步到主窗口日志，方便和手动发送对比
-                self.main_window.append_text(f"[发送]: {cmd.strip()}\n")
-                self.main_window.append_text(f"[系统]: 已发送 {n} 字节\n")
-            except Exception as e:
-                raise IOError(f"串口发送失败: {e}")
-
-            self._log(f"已发送 OTA 指令 ({n} 字节)")
+            n = self._send_ota_command(cmd_bytes, clear_buffers=True)
+            self._ota_send_count = 1
+            self._last_ota_send_at = time.monotonic()
+            self._log(f"已发送 OTA 指令（第 1 次，{n} 字节）")
 
         except Exception as e:
             self._log(f"OTA 流程错误: {e}")
@@ -1116,6 +1120,56 @@ class OTAControlCenter(QDialog):
             self._on_ota_finished()
             QMessageBox.critical(self, "OTA 失败", str(e))
 
+    def _send_ota_command(self, cmd_bytes, clear_buffers=False):
+        """写入 OTA 指令；仅首次下发时清空串口缓冲区。"""
+        transport = getattr(self.main_window, 'transport', None)
+        if not transport or not transport.is_open:
+            raise IOError("连接未打开")
+
+        try:
+            with QMutexLocker(self.main_window.serial_mutex):
+                if clear_buffers:
+                    transport.reset_input_buffer()
+                    transport.reset_output_buffer()
+                n = transport.write(cmd_bytes)
+                if n != len(cmd_bytes):
+                    raise IOError(f"OTA 指令部分写入: {n}/{len(cmd_bytes)} 字节")
+                transport.flush()
+                self.main_window.tx_bytes += n
+                self.main_window.label_tx_bytes.setText(
+                    f"发送字节: {self.main_window.tx_bytes}")
+            cmd_text = cmd_bytes.decode('utf-8', errors='replace').strip()
+            self.main_window.append_text(f"[发送]: {cmd_text}\n")
+            self.main_window.append_text(f"[系统]: 已发送 {n} 字节\n")
+            return n
+        except Exception as e:
+            raise IOError(f"串口发送失败: {e}") from e
+
+    def _resend_ota_command(self):
+        """重发已缓存的 OTA 指令，不重置下载跟踪或串口输入缓冲区。"""
+        if not self._last_ota_command:
+            return
+
+        now = time.monotonic()
+        if now - self._last_ota_send_at < OTAControlCenter.OTA_RESEND_DEBOUNCE_SECONDS:
+            self._log("操作过快，已忽略本次 OTA 指令重发")
+            return
+
+        try:
+            n = OTAControlCenter._send_ota_command(
+                self, self._last_ota_command, clear_buffers=False
+            )
+        except Exception as e:
+            self._log(f"OTA 指令重发失败: {e}")
+            QMessageBox.warning(self, "OTA 重发失败", str(e))
+            return
+
+        self._ota_send_count += 1
+        self._last_ota_send_at = now
+        self._timeout_timer.start(self._timeout_spin.value() * 1000)
+        self._set_state(self.STATE_DOWNLOADING, "已重新下发，等待设备响应...")
+        self._log(f"已重新下发 OTA 指令（第 {self._ota_send_count} 次，{n} 字节）")
+
     def _start_http_tracking(self, filename, total_size):
         """HTTP 进度模式：定时轮询服务器已发送字节。"""
         OTARequestHandler.setup_progress(filename, total_size)
@@ -1124,6 +1178,8 @@ class OTAControlCenter(QDialog):
 
     def _start_serial_tracking(self):
         """监听串口数据，解析设备主动上报的进度/完成消息。"""
+        if self._serial_data_connected:
+            return
         self._serial_data_connected = True
         if self.main_window and hasattr(self.main_window, 'read_thread') and \
                 self.main_window.read_thread:
@@ -1277,12 +1333,6 @@ class OTAControlCenter(QDialog):
                     "⚠ 固件传输完成，但设备未确认升级结果",
                 )
                 self._on_ota_finished()
-                QMessageBox.warning(
-                    self,
-                    "OTA 结果未确认",
-                    "固件已通过 HTTP 发送完成，但没有收到设备升级成功确认。\n"
-                    "请检查设备日志、版本号或重启状态后再判断升级结果。",
-                )
                 return
 
         # 无 HTTP 进度数据，判定超时
@@ -1296,6 +1346,8 @@ class OTAControlCenter(QDialog):
     def _on_ota_finished(self):
         """OTA 流程结束（成功/失败/取消）后的统一清理。"""
         self._ota_in_progress = False
+        self._last_ota_command = b''
+        self._ota_send_count = 0
         # 注意：不在此重置 _ota_stop_flag。
         # _start_ota 的 HTTP 启动等待循环通过 processEvents() 响应 UI，
         # 若此处重置为 False，用户点"停止"后 _stop_ota 设置的 True 会被覆盖，
