@@ -350,6 +350,8 @@ class OTAControlCenter(QDialog):
         self._state_label = QLabel("就绪")
         self._state_label.setAlignment(Qt.AlignCenter)
         self._state_label.setFont(QFont("Microsoft YaHei", 10))
+        self._state_label.setWordWrap(True)
+        self._state_label.setMinimumWidth(0)
         ota_layout.addWidget(self._state_label)
 
         # 进度条
@@ -1114,11 +1116,10 @@ class OTAControlCenter(QDialog):
 
         except Exception as e:
             self._log(f"OTA 流程错误: {e}")
-            self._set_state(self.STATE_FAILED, f"错误: {e}")
+            self._set_state(self.STATE_FAILED, "OTA 流程失败，请查看日志错误详情")
             self._progress_bar.setValue(0)
             self._suppress_serial_errors(False)
             self._on_ota_finished()
-            QMessageBox.critical(self, "OTA 失败", str(e))
 
     def _send_ota_command(self, cmd_bytes, clear_buffers=False):
         """写入 OTA 指令；仅首次下发时清空串口缓冲区。"""

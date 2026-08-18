@@ -85,6 +85,25 @@ class OTAServerTests(unittest.TestCase):
         OTAControlCenter._update_start_button_state(controller)
         self.assertEqual(button.label, "↻ 重新下发")
 
+    def test_ota状态提示不会被长异常撑宽(self):
+        init_source = inspect.getsource(OTAControlCenter.init_ui)
+        start_source = inspect.getsource(OTAControlCenter._start_ota)
+
+        self.assertIn("self._state_label.setWordWrap(True)", init_source)
+        self.assertIn("self._state_label.setMinimumWidth(0)", init_source)
+        self.assertIn(
+            'self._set_state(self.STATE_FAILED, "OTA 流程失败，请查看日志错误详情")',
+            start_source,
+        )
+        self.assertNotIn(
+            'self._set_state(self.STATE_FAILED, f"错误: {e}")',
+            start_source,
+        )
+        self.assertNotIn(
+            'QMessageBox.critical(self, "OTA 失败", str(e))',
+            start_source,
+        )
+
     def test升级进行中不再作为重复下发的阻断原因(self):
         controller = SimpleNamespace(
             _ota_in_progress=True,
