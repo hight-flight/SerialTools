@@ -77,6 +77,26 @@ class MultiSendTests(unittest.TestCase):
     def test主窗口标题栏显示应用图标(self):
         self.assertFalse(self.tool.windowIcon().isNull())
 
+    def test主界面勾选自动应答时后台启用且不弹出配置窗口(self):
+        self.assertFalse(self.tool.check_auto_reply.isChecked())
+
+        self.tool.check_auto_reply.setChecked(True)
+        self.app.processEvents()
+
+        dialog = getattr(self.tool, "_auto_reply_dialog", None)
+        self.assertIsNotNone(dialog)
+        self.assertTrue(dialog.check_enable.isChecked())
+        self.assertFalse(dialog.isVisible())
+
+    def test配置窗口自动应答开关同步到主界面(self):
+        self.tool.check_auto_reply.setChecked(True)
+        dialog = self.tool._auto_reply_dialog
+
+        dialog.check_enable.setChecked(False)
+        self.app.processEvents()
+
+        self.assertFalse(self.tool.check_auto_reply.isChecked())
+
     def test单行发送保留主发送草稿且不启动普通重复发送(self):
         self.tool.transport = SimpleNamespace(
             is_open=True,

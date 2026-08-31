@@ -9,6 +9,8 @@
 - 全局开关和响应延迟控制
 """
 
+from collections import deque
+
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QComboBox, QPushButton, QLineEdit, QTextEdit,
                              QMessageBox, QTableWidget, QTableWidgetItem,
@@ -32,11 +34,14 @@ class AutoReplyDialog(QDialog):
         self._data_receiver.data_received.connect(self._process_receive_data)
         self._response_timers = set()
         self._closing = False
+        self._force_close = False
         import os
         self._last_rules_dir = os.path.join(os.path.expanduser('~'), '.serial_GUI')
         self._init_ui()
+        self.check_enable.toggled.connect(self._on_enable_toggled)
         self._clean_state = self._serialize_persistent_state()
-        self.setAttribute(Qt.WA_DeleteOnClose)
+        # 关闭配置界面时仅隐藏，自动应答需要继续在后台运行。
+        self.setAttribute(Qt.WA_DeleteOnClose, False)
 
     def _init_ui(self):
         self.setWindowTitle("自动应答配置")
@@ -274,7 +279,14 @@ class AutoReplyDialog(QDialog):
         self.text_log.setFont(QFont("Consolas", 9))
         self.text_log.setReadOnly(True)
         self.text_log.setMinimumHeight(160)
+        self.text_log.document().setMaximumBlockCount(2000)
         log_layout.addWidget(self.text_log)
+
+        self._pending_log_lines = deque(maxlen=2000)
+        self._log_flush_timer = QTimer(self)
+        self._log_flush_timer.setSingleShot(True)
+        self._log_flush_timer.setInterval(100)
+        self._log_flush_timer.timeout.connect(self._flush_logs)
 
         log_btn_layout = QHBoxLayout()
         self.check_pause_scroll = QCheckBox("暂停自动滚动")
@@ -622,13 +634,27 @@ class AutoReplyDialog(QDialog):
     def _append_log(self, text):
         from datetime import datetime
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.text_log.append(f"[{timestamp}] {text}")
+        self._pending_log_lines.append(f"[{timestamp}] {text}")
+        if not self._log_flush_timer.isActive():
+            self._log_flush_timer.start()
+
+    def _flush_logs(self):
+        if not self._pending_log_lines:
+            return
+
+        lines = list(self._pending_log_lines)
+        self._pending_log_lines.clear()
+        cursor = self.text_log.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        prefix = "" if self.text_log.document().isEmpty() else "\n"
+        cursor.insertText(prefix + "\n".join(lines))
         if not self.check_pause_scroll.isChecked():
-            cursor = self.text_log.textCursor()
             cursor.movePosition(QTextCursor.End)
             self.text_log.setTextCursor(cursor)
 
     def _clear_log(self):
+        self._log_flush_timer.stop()
+        self._pending_log_lines.clear()
         self.text_log.clear()
 
     def _show_help(self):
@@ -942,9 +968,24 @@ class AutoReplyDialog(QDialog):
         except ValueError:
             self._append_log(f"响应格式错误: {rule['response']}")
 
+    def _on_enable_toggled(self, checked):
+        if not checked:
+            self.reset_runtime_state()
+
+    def reset_runtime_state(self):
+        """清除不能跨开关或连接会话保留的运行时状态。"""
+        self._data_buffer = b''
+        self._cancel_pending_responses()
+
+    def _cancel_pending_responses(self):
+        for timer in tuple(self._response_timers):
+            timer.stop()
+            timer.deleteLater()
+        self._response_timers.clear()
+
     def _do_send(self, data):
         # 对话框已关闭或正在关闭时不再发送，避免访问已销毁的 C++ 对象
-        if getattr(self, '_closing', False):
+        if getattr(self, '_closing', False) or not self.check_enable.isChecked():
             return
         try:
             with QMutexLocker(self.parent_window.serial_mutex):
@@ -966,8 +1007,28 @@ class AutoReplyDialog(QDialog):
         else:
             super().keyPressEvent(event)
 
+    def shutdown(self):
+        """在主窗口退出时停止自动应答并允许对话框销毁。"""
+        if self._has_unsaved_changes():
+            reply = QMessageBox.question(
+                self, "未保存的更改",
+                "自动应答规则、设置或编辑草稿尚未导出，确定退出程序吗？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return False
+        self._closing = True
+        self._force_close = True
+        self._connection_timer.stop()
+        self._log_flush_timer.stop()
+        self._pending_log_lines.clear()
+        self.reset_runtime_state()
+        self.close()
+        return True
+
     def closeEvent(self, event):
-        if self.isVisible() and self._has_unsaved_changes():
+        if (not self._force_close and self.isVisible()
+                and self._has_unsaved_changes()):
             reply = QMessageBox.question(
                 self, "未保存的更改",
                 "自动应答规则、设置或编辑草稿尚未导出，确定关闭吗？",
@@ -976,8 +1037,12 @@ class AutoReplyDialog(QDialog):
             if reply != QMessageBox.Yes:
                 event.ignore()
                 return
-        self._closing = True
-        self._connection_timer.stop()
-        if hasattr(self.parent_window, '_auto_reply_dialog'):
-            self.parent_window._auto_reply_dialog = None
+        if self._force_close:
+            if hasattr(self.parent_window, '_auto_reply_dialog'):
+                self.parent_window._auto_reply_dialog = None
+            event.accept()
+            return
+
+        # 未设置 WA_DeleteOnClose 时，接受关闭只会隐藏窗口；实例及其
+        # 串口信号连接会保留，因此已启用的规则继续在后台生效。
         event.accept()

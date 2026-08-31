@@ -58,6 +58,14 @@ class RuntimeRegressionTests(unittest.TestCase):
         source = inspect.getsource(SerialTool.cleanup_resources)
         self.assertLess(source.index("read_thread.stop"), source.index("with QMutexLocker"))
 
+    def test连接切换时重置自动应答运行状态(self):
+        source = inspect.getsource(SerialTool.toggle_connection)
+        self.assertIn("self._reset_auto_reply_runtime()", source)
+
+    def test读取错误时重置自动应答运行状态(self):
+        source = inspect.getsource(SerialTool.handle_read_error)
+        self.assertIn("self._reset_auto_reply_runtime()", source)
+
     def test日志备份worker接受signals并完成备份(self):
         self.assertIn("signals", inspect.signature(SerialTool.backup_current_file).parameters)
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -258,6 +266,7 @@ class RuntimeRegressionTests(unittest.TestCase):
         dialog = AutoReplyDialog(parent)
         self.addCleanup(parent.close)
         self.addCleanup(dialog.close)
+        dialog.check_enable.setChecked(True)
         dialog.spin_delay.setValue(1)
         rule = {"response_format": "文本", "response": "OK", "newline": False}
 
@@ -269,6 +278,44 @@ class RuntimeRegressionTests(unittest.TestCase):
 
         self.assertEqual(len(dialog._response_timers), 0)
         self.assertEqual(parent.transport.writes, [b"OK"])
+
+    def test关闭自动应答时取消待发送响应(self):
+        parent = _AutoReplyParent()
+        dialog = AutoReplyDialog(parent)
+        self.addCleanup(parent.close)
+        self.addCleanup(dialog.close)
+        dialog.check_enable.setChecked(True)
+        dialog.spin_delay.setValue(1000)
+        rule = {"response_format": "文本", "response": "OK", "newline": False}
+
+        dialog._send_response(rule)
+        timer = next(iter(dialog._response_timers))
+        dialog.check_enable.setChecked(False)
+        timer.timeout.emit()
+
+        self.assertFalse(timer.isActive())
+        self.assertEqual(dialog._response_timers, set())
+        self.assertEqual(parent.transport.writes, [])
+
+    def test重新启用自动应答时不拼接关闭前半包(self):
+        parent = _AutoReplyParent()
+        dialog = AutoReplyDialog(parent)
+        self.addCleanup(parent.close)
+        self.addCleanup(dialog.close)
+        dialog._rules = [{
+            "trigger": "ABC", "match_mode": "文本包含", "response": "OK",
+            "response_format": "文本", "enabled": True, "max_count": 0,
+            "newline": False, "count": 0,
+        }]
+        dialog.check_enable.setChecked(True)
+
+        dialog.handle_receive_data(b"AB")
+        dialog.check_enable.setChecked(False)
+        dialog.check_enable.setChecked(True)
+        dialog.handle_receive_data(b"C")
+
+        self.assertEqual(dialog._rules[0]["count"], 0)
+        self.assertEqual(dialog._data_buffer, b"C")
 
     def test自动回复保留缓冲区末尾以支持跨边界匹配(self):
         parent = _AutoReplyParent()

@@ -952,6 +952,11 @@ class SerialTool(QMainWindow):
         self.spin_interval.setEnabled(False)  # 默认禁用
         repeat_layout.addWidget(self.spin_interval)
 
+        self.check_auto_reply = QCheckBox("自动应答")
+        self.check_auto_reply.setFont(QFont("Microsoft YaHei", 9))
+        self.check_auto_reply.setToolTip("无需打开配置窗口即可启用或停用自动应答")
+        repeat_layout.addWidget(self.check_auto_reply)
+
         send_settings_layout.addLayout(repeat_layout)
         send_settings_layout.addStretch()
 
@@ -1290,6 +1295,7 @@ class SerialTool(QMainWindow):
 
         # 连接信号
         self.check_repeat.stateChanged.connect(self.toggle_repeat)
+        self.check_auto_reply.toggled.connect(self.toggle_auto_reply)
         
         # --- 状态栏 ---
         ok_color = self.theme_colors['ansi_fg']['32'].name()
@@ -1336,7 +1342,8 @@ class SerialTool(QMainWindow):
             self.combo_filter_mode, self.combo_encoding, self.check_timestamp,
             self.btn_clear_recv, self.check_hex_send, self.check_newline,
             self.check_rts, self.check_dtr, self.combo_checksum,
-            self.check_repeat, self.spin_interval, self.check_head_field,
+            self.check_repeat, self.spin_interval, self.check_auto_reply,
+            self.check_head_field,
             self.text_ota, self.check_tail_field, self.text_tail,
             self.btn_select_file, self.btn_send_file, self.text_send,
             self.btn_send, self.btn_stop, self.btn_clear_send,
@@ -1865,6 +1872,7 @@ class SerialTool(QMainWindow):
 
     def toggle_connection(self):
         """打开或关闭通信连接（支持串口 / UDP / TCP Client / TCP Server）"""
+        self._reset_auto_reply_runtime()
         # 同步两套按钮的选中状态
         s = self.sender()
         if s is self.btn_switch_serial:
@@ -2550,6 +2558,7 @@ class SerialTool(QMainWindow):
 
     def handle_read_error(self, error_msg):
         """处理传输读取错误"""
+        self._reset_auto_reply_runtime()
         # 先保存错误信息，后续在UI线程中显示
         self.error_state = True  # 设置错误状态标志
         
@@ -2709,6 +2718,15 @@ class SerialTool(QMainWindow):
     
     def closeEvent(self, event):
         """窗口关闭事件"""
+        # 关闭自动应答对话框
+        if hasattr(self, '_auto_reply_dialog') and self._auto_reply_dialog is not None:
+            try:
+                if not self._auto_reply_dialog.shutdown():
+                    event.ignore()
+                    return
+            except RuntimeError:
+                pass
+            self._auto_reply_dialog = None
         # 关闭数据分析面板（独立窗口，需显式关闭）
         if hasattr(self, '_json_viewer_dlg') and self._json_viewer_dlg is not None:
             try:
@@ -2736,13 +2754,6 @@ class SerialTool(QMainWindow):
             except RuntimeError:
                 pass
             self._gsm_dialog = None
-        # 关闭自动应答对话框
-        if hasattr(self, '_auto_reply_dialog') and self._auto_reply_dialog is not None:
-            try:
-                self._auto_reply_dialog.close()
-            except RuntimeError:
-                pass
-            self._auto_reply_dialog = None
         # 保存配置
         self.save_config()
         # 清理 PID 配置文件（已同步到基础配置，PID 文件可删除）
@@ -4358,37 +4369,56 @@ class SerialTool(QMainWindow):
         """CRC 计算器弹窗"""
         show_crc_calculator(self, is_dark=(self.current_theme == 'dark'))
 
-    def show_auto_reply(self):
-        """自动应答：当接收到特定数据时自动发送预设响应"""
+    def _reset_auto_reply_runtime(self):
+        """连接会话改变时清除自动应答的半包和待发送响应。"""
+        dialog = getattr(self, '_auto_reply_dialog', None)
+        if dialog is None:
+            return
+        try:
+            dialog.reset_runtime_state()
+        except RuntimeError:
+            self._auto_reply_dialog = None
+
+    def _ensure_auto_reply_dialog(self):
+        """创建或返回自动应答实例，不显示配置窗口。"""
         from auto_reply import AutoReplyDialog
-        if hasattr(self, '_auto_reply_dialog') and self._auto_reply_dialog is not None:
+        dialog = getattr(self, '_auto_reply_dialog', None)
+        if dialog is not None:
             try:
-                self._auto_reply_dialog.show()
-                self._auto_reply_dialog.raise_()
-                self._auto_reply_dialog.activateWindow()
-                return
+                dialog.check_enable.isChecked()
+                return dialog
             except RuntimeError:
                 self._auto_reply_dialog = None
 
-        self._auto_reply_dialog = AutoReplyDialog(self)
-        dlg = self._auto_reply_dialog
-
+        dialog = AutoReplyDialog(self)
+        self._auto_reply_dialog = dialog
+        dialog.check_enable.toggled.connect(self._sync_auto_reply_checkbox)
         if hasattr(self, 'read_thread') and self.read_thread:
-            self.read_thread.receive_data_signal.connect(dlg.handle_receive_data)
+            self.read_thread.receive_data_signal.connect(dialog.handle_receive_data)
+        dialog.check_enable.setChecked(self.check_auto_reply.isChecked())
+        return dialog
 
-        def on_finished():
-            if hasattr(self, 'read_thread') and self.read_thread:
-                try:
-                    self.read_thread.receive_data_signal.disconnect(dlg.handle_receive_data)
-                except (TypeError, RuntimeError):
-                    pass
-            if self._auto_reply_dialog is dlg:
-                self._auto_reply_dialog = None
+    def _sync_auto_reply_checkbox(self, checked):
+        """将配置窗口的自动应答状态同步到主界面。"""
+        was_blocked = self.check_auto_reply.blockSignals(True)
+        self.check_auto_reply.setChecked(checked)
+        self.check_auto_reply.blockSignals(was_blocked)
 
-        dlg.finished.connect(on_finished)
-        self._apply_dialog_theme(dlg)
-        dlg.setAttribute(Qt.WA_DeleteOnClose)
-        dlg.show()
+    def toggle_auto_reply(self, checked):
+        """从主界面启用或停用自动应答，不弹出配置窗口。"""
+        dialog = getattr(self, '_auto_reply_dialog', None)
+        if dialog is None and not checked:
+            return
+        dialog = self._ensure_auto_reply_dialog()
+        dialog.check_enable.setChecked(checked)
+
+    def show_auto_reply(self):
+        """显示自动应答配置窗口。"""
+        dialog = self._ensure_auto_reply_dialog()
+        self._apply_dialog_theme(dialog)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def hex_converter(self):
         """HEX 转换器弹窗：HEX ↔ ASCII ↔ Decimal 互转"""

@@ -4,12 +4,15 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import QMutex, Qt
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
-    QApplication, QHeaderView, QPushButton, QScrollArea, QSplitter, QWidget,
+    QApplication, QCheckBox, QHeaderView, QMessageBox, QPushButton, QScrollArea,
+    QSplitter, QWidget,
 )
 
 from app_paths import AppPaths
@@ -19,7 +22,7 @@ import serial_GUI
 from gsm_debugger import GSMDebuggerDialog
 from ota_center import OTAControlCenter
 from serial_GUI import SerialTool
-from theme import DARK_QSS, LIGHT_QSS, VERSION
+from theme import DARK_QSS, LIGHT_QSS, VERSION, apply_dialog_theme
 
 
 class _DialogParent(QWidget):
@@ -39,12 +42,19 @@ class _DialogParent(QWidget):
         self.transport = SimpleNamespace(is_open=False)
         self.serial_mutex = QMutex()
         self.combo_encoding = SimpleNamespace(currentText=lambda: "UTF-8")
+        self.check_auto_reply = QCheckBox("自动应答")
 
     def append_text(self, _text):
         pass
 
     def _apply_dialog_theme(self, _dialog):
         pass
+
+    def _ensure_auto_reply_dialog(self):
+        return SerialTool._ensure_auto_reply_dialog(self)
+
+    def _sync_auto_reply_checkbox(self, checked):
+        SerialTool._sync_auto_reply_checkbox(self, checked)
 
 
 class UIRegressionTests(unittest.TestCase):
@@ -81,6 +91,16 @@ class UIRegressionTests(unittest.TestCase):
         source = inspect.getsource(SerialTool.toggle_multi_send)
         self.assertIn("setSizes([700, 380])", source)
         self.assertNotIn("setSizes([900, 100])", source)
+
+    def test主界面自动应答勾选框位于重复发送间隔之后(self):
+        source = inspect.getsource(SerialTool.init_ui)
+        repeat_pos = source.index("repeat_layout.addWidget(self.check_repeat)")
+        auto_reply_pos = source.find("repeat_layout.addWidget(self.check_auto_reply)")
+        interval_pos = source.index("repeat_layout.addWidget(self.spin_interval)")
+
+        self.assertGreaterEqual(auto_reply_pos, 0)
+        self.assertLess(repeat_pos, interval_pos)
+        self.assertLess(interval_pos, auto_reply_pos)
 
     def test主窗口保存并恢复窗口与分割器状态(self):
         save_source = inspect.getsource(SerialTool.save_config)
@@ -164,6 +184,7 @@ class UIRegressionTests(unittest.TestCase):
         dialog = AutoReplyDialog(self.parent)
         self.addCleanup(self._close_dialog, dialog)
 
+        self.assertFalse(dialog.check_enable.isChecked())
         self.assertEqual(dialog.table_rules.rowCount(), 1)
         self.assertIn("暂无规则", dialog.table_rules.item(0, 0).text())
         self.assertTrue(dialog.table_rules.verticalHeader().isHidden())
@@ -171,6 +192,105 @@ class UIRegressionTests(unittest.TestCase):
         self.assertFalse(dialog.btn_delete_rule.isEnabled())
         self.assertFalse(dialog.btn_move_up.isEnabled())
         self.assertFalse(dialog.btn_move_down.isEnabled())
+
+    def test自动应答窗口关闭后仍处理已启用的规则(self):
+        dialog = AutoReplyDialog(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+        dialog._send_response = mock.Mock()
+        dialog._rules = [{
+            "trigger": "PING", "match_mode": "文本完全", "response": "PONG",
+            "response_format": "文本", "enabled": True, "max_count": 0,
+            "newline": False, "count": 0,
+        }]
+        dialog._clean_state = dialog._serialize_persistent_state()
+        dialog.check_enable.setChecked(True)
+
+        dialog.show()
+        self.app.processEvents()
+        dialog.close()
+        self.app.processEvents()
+        dialog.handle_receive_data(b"PING")
+
+        self.assertFalse(dialog.isVisible())
+        self.assertFalse(dialog._closing)
+        dialog._send_response.assert_called_once_with(dialog._rules[0])
+
+    def test自动应答隐藏期间切换主题后重新打开使用当前主题(self):
+        self.addCleanup(self.app.setStyleSheet, "")
+        self.app.setStyleSheet(DARK_QSS)
+        self.parent._apply_dialog_theme = lambda dialog: apply_dialog_theme(
+            dialog, is_dark=(self.parent.current_theme == "dark")
+        )
+
+        SerialTool.show_auto_reply(self.parent)
+        dialog = self.parent._auto_reply_dialog
+        self.addCleanup(dialog.shutdown)
+        self.assertTrue(dialog.styleSheet())
+        dialog.close()
+        self.app.processEvents()
+
+        self.parent.current_theme = "light"
+        SerialTool.show_auto_reply(self.parent)
+
+        self.assertEqual(dialog.styleSheet(), "")
+
+    def test自动应答存在未保存修改时可以取消主窗口退出(self):
+        dialog = AutoReplyDialog(self.parent)
+        dialog.show()
+        self.app.processEvents()
+        dialog.spin_delay.setValue(dialog.spin_delay.value() + 1)
+
+        def cleanup():
+            dialog._clean_state = dialog._serialize_persistent_state()
+            dialog.shutdown()
+
+        self.addCleanup(cleanup)
+        with mock.patch.object(
+                serial_GUI.QMessageBox, "question", return_value=QMessageBox.No):
+            result = dialog.shutdown()
+
+        self.assertIs(result, False)
+        self.assertTrue(dialog.isVisible())
+        self.assertFalse(dialog._closing)
+
+    def test自动应答窗口隐藏后退出仍保护未保存修改(self):
+        dialog = AutoReplyDialog(self.parent)
+        dialog.show()
+        self.app.processEvents()
+        dialog.spin_delay.setValue(dialog.spin_delay.value() + 1)
+
+        def cleanup():
+            dialog._clean_state = dialog._serialize_persistent_state()
+            dialog.shutdown()
+
+        self.addCleanup(cleanup)
+        with mock.patch.object(
+                serial_GUI.QMessageBox, "question", return_value=QMessageBox.Yes):
+            dialog.close()
+        self.assertFalse(dialog.isVisible())
+
+        with mock.patch.object(
+                serial_GUI.QMessageBox, "question", return_value=QMessageBox.No):
+            result = dialog.shutdown()
+
+        self.assertIs(result, False)
+        self.assertFalse(dialog._closing)
+
+    def test主窗口在自动应答取消退出时停止后续关闭流程(self):
+        auto_reply_dialog = SimpleNamespace(shutdown=lambda: False)
+        window = SimpleNamespace(
+            _auto_reply_dialog=auto_reply_dialog,
+            save_config=mock.Mock(), cleanup_resources=mock.Mock(),
+            config_file=str(Path(self.temp_dir.name) / "missing.json"),
+        )
+        event = mock.Mock()
+
+        SerialTool.closeEvent(window, event)
+
+        event.ignore.assert_called_once_with()
+        event.accept.assert_not_called()
+        window.save_config.assert_not_called()
+        window.cleanup_resources.assert_not_called()
 
     def test自动应答主要操作名称与位置清晰(self):
         dialog = AutoReplyDialog(self.parent)
@@ -206,6 +326,57 @@ class UIRegressionTests(unittest.TestCase):
         self.assertEqual(dialog.spin_delay.accessibleName(), "响应延迟")
         self.assertEqual(dialog.spin_max_count.accessibleName(), "最大响应次数")
         self.assertEqual(dialog.table_rules.accessibleName(), "自动应答规则列表")
+
+    def test自动应答日志最多保留2000行(self):
+        dialog = AutoReplyDialog(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+
+        self.assertEqual(dialog.text_log.document().maximumBlockCount(), 2000)
+
+    def test自动应答日志在100毫秒内批量刷新(self):
+        dialog = AutoReplyDialog(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+
+        dialog._append_log("第一条")
+        dialog._append_log("第二条")
+        self.assertEqual(dialog.text_log.toPlainText(), "")
+
+        QTest.qWait(150)
+
+        log_text = dialog.text_log.toPlainText()
+        self.assertIn("第一条", log_text)
+        self.assertIn("第二条", log_text)
+
+    def test清空自动应答日志同时丢弃待刷新内容(self):
+        dialog = AutoReplyDialog(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+
+        dialog._append_log("不应重新出现")
+        dialog._clear_log()
+        QTest.qWait(150)
+
+        self.assertEqual(dialog.text_log.toPlainText(), "")
+
+    def test自动应答退出时释放待刷新日志(self):
+        dialog = AutoReplyDialog(self.parent)
+        dialog._append_log("退出时丢弃")
+
+        self.assertTrue(dialog.shutdown())
+
+        self.assertFalse(dialog._log_flush_timer.isActive())
+        self.assertEqual(len(dialog._pending_log_lines), 0)
+
+    def test自动应答待刷新日志最多保留2000条(self):
+        dialog = AutoReplyDialog(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+
+        for index in range(2500):
+            dialog._append_log(f"日志{index}")
+        dialog._log_flush_timer.stop()
+
+        self.assertEqual(len(dialog._pending_log_lines), 2000)
+        self.assertNotIn("日志0", dialog._pending_log_lines[0])
+        self.assertIn("日志2499", dialog._pending_log_lines[-1])
 
     def test自动应答无效十六进制输入即时阻止提交(self):
         dialog = AutoReplyDialog(self.parent)
