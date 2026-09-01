@@ -40,7 +40,7 @@ class OTAServerTests(unittest.TestCase):
         self.assertLess(source.index("self._start_http_tracking"), send_at)
         self.assertLess(source.index("self._start_serial_tracking"), send_at)
 
-    def test开始升级按钮始终可以点击(self):
+    def test开始升级按钮根据前置条件和运行状态启用(self):
         class _Widget:
             def __init__(self):
                 self.enabled = None
@@ -62,27 +62,31 @@ class OTAServerTests(unittest.TestCase):
 
         button = _Widget()
         precondition_label = _Widget()
+        block_reason = ["请先选择固件文件"]
         controller = SimpleNamespace(
             _btn_start_ota=button,
             _precondition_label=precondition_label,
-            _start_button_block_reason=lambda: "请先选择固件文件",
+            _start_button_block_reason=lambda: block_reason[0],
             _ota_in_progress=False,
             _last_ota_command=b"",
         )
 
         OTAControlCenter._update_start_button_state(controller)
 
-        self.assertTrue(button.enabled)
+        self.assertFalse(button.enabled)
         self.assertEqual(button.label, "▶ 开始升级")
         self.assertEqual(button.tooltip, "请先选择固件文件")
         self.assertTrue(precondition_label.visible)
 
+        block_reason[0] = ""
         controller._ota_in_progress = True
         OTAControlCenter._update_start_button_state(controller)
+        self.assertFalse(button.enabled)
         self.assertEqual(button.label, "… 正在准备")
 
         controller._last_ota_command = b"AT+OTA"
         OTAControlCenter._update_start_button_state(controller)
+        self.assertTrue(button.enabled)
         self.assertEqual(button.label, "↻ 重新下发")
 
     def test_ota状态提示不会被长异常撑宽(self):

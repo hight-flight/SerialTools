@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTextEdit, QCheckBox, QMessageBox, QSplitter, QSpinBox, QLineEdit, QGroupBox, QDialog, QFormLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog, QSizePolicy,
                              QAction, QTabWidget, QRadioButton, QButtonGroup, QStackedWidget)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint, QEvent, QByteArray
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint, QRect, QEvent, QByteArray
 from PyQt5.QtGui import QBrush, QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon, QPen, QIcon
 
 from dialogs import (show_crc_calculator, show_hex_converter,
@@ -1202,6 +1202,11 @@ class SerialTool(QMainWindow):
         self.table_multi_send.setColumnWidth(MULTI_COL_DELAY, 84)
         self.table_multi_send.setColumnWidth(MULTI_COL_ORDER, 48)
         self._multi_columns_fitted = False
+        self._multi_send_collapsed_geometry = None
+        self._multi_send_expanded_geometry = None
+        self._multi_send_collapsed_window_state = None
+        self._multi_send_collapsed_window_geometry = None
+        self._multi_send_collapsed_splitter_state = None
         # 确保表格充满可用空间
         self.table_multi_send.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.table_multi_send.setMinimumWidth(360)
@@ -3657,51 +3662,155 @@ class SerialTool(QMainWindow):
             self.append_text("[系统]: 已清空所有列表内指令\n")
 
     def _fit_multi_send_to_current_screen(self):
-        """展开右侧面板时，将窗口约束在它当前所在屏幕的可用区域内。"""
+        """展开右侧面板时，将普通窗口约束在当前屏幕可用区域内。"""
         screen = self.screen() or QApplication.primaryScreen()
         if screen is None:
             return
         available = screen.availableGeometry()
-        target_width = min(1080, available.width())
-        width = min(max(self.width(), target_width), available.width())
-        height = min(self.height(), available.height())
+        width = min(self.width() + 380 + self.main_splitter.handleWidth(), available.width())
+        height = self.height()
         x = min(max(self.x(), available.left()), available.right() - width + 1)
-        y = min(max(self.y(), available.top()), available.bottom() - height + 1)
+        max_y = max(available.top(), available.bottom() - height + 1)
+        y = min(max(self.y(), available.top()), max_y)
         self.setGeometry(x, y, width, height)
-    
-    def toggle_multi_send(self):
-        """切换多字符串发送区域的显示/隐藏状态"""
+
+    def _keep_multi_send_expanded_height(self, expected_height):
+        """仅在面板刚展开时恢复原高度，后续仍允许用户手动调整高度。"""
         right_content = self.main_splitter.widget(1)
-        if right_content.isVisible():
+        if (not right_content.isHidden()
+                and self._multi_send_collapsed_geometry is not None
+                and not self._is_special_window_state(
+                    self._multi_send_collapsed_window_state
+                )):
+            self.resize(self.width(), expected_height)
+
+    @staticmethod
+    def _is_special_window_state(state):
+        """最大化、全屏或最小化状态不执行临时外扩。"""
+        special_states = Qt.WindowMinimized | Qt.WindowMaximized | Qt.WindowFullScreen
+        return bool(state & special_states)
+
+    def _collapsed_geometry_from_expanded(self):
+        """移除自动外扩量，同时保留用户在展开期间做的移动和缩放。"""
+        base = self._multi_send_collapsed_geometry
+        expanded = self._multi_send_expanded_geometry
+        if base is None or expanded is None:
+            return self.geometry()
+        if self._is_special_window_state(self._multi_send_collapsed_window_state):
+            return self.normalGeometry() if self._is_special_window_state(
+                self.windowState()
+            ) else self.geometry()
+
+        current = self.normalGeometry() if self._is_special_window_state(
+            self.windowState()
+        ) else self.geometry()
+        return QRect(
+            base.x() + current.x() - expanded.x(),
+            base.y() + current.y() - expanded.y(),
+            max(self.minimumWidth(), base.width() + current.width() - expanded.width()),
+            max(self.minimumHeight(), base.height() + current.height() - expanded.height()),
+        )
+
+    def _window_geometry_hex_for_config(self):
+        """生成不含临时面板外扩量、但包含用户调整的窗口 geometry。"""
+        if self._multi_send_collapsed_geometry is None:
+            return bytes(self.saveGeometry().toHex()).decode('ascii')
+        if self._is_special_window_state(self._multi_send_collapsed_window_state):
+            return bytes(self.saveGeometry().toHex()).decode('ascii')
+
+        target_geometry = self._collapsed_geometry_from_expanded()
+        if (target_geometry == self._multi_send_collapsed_geometry
+                and self.windowState() == self._multi_send_collapsed_window_state
+                and self._multi_send_collapsed_window_geometry):
+            return self._multi_send_collapsed_window_geometry
+
+        snapshot = QMainWindow()
+        try:
+            if self._multi_send_collapsed_window_geometry:
+                snapshot.restoreGeometry(QByteArray.fromHex(
+                    self._multi_send_collapsed_window_geometry.encode('ascii')
+                ))
+            snapshot.setWindowState(Qt.WindowNoState)
+            snapshot.setGeometry(target_geometry)
+            snapshot.setWindowState(self.windowState())
+            return bytes(snapshot.saveGeometry().toHex()).decode('ascii')
+        finally:
+            snapshot.deleteLater()
+
+    def _clear_multi_send_expansion_state(self):
+        self._multi_send_collapsed_geometry = None
+        self._multi_send_expanded_geometry = None
+        self._multi_send_collapsed_window_state = None
+        self._multi_send_collapsed_window_geometry = None
+        self._multi_send_collapsed_splitter_state = None
+
+    def toggle_multi_send(self):
+        """切换多字符串发送区域的显示/隐藏状态。"""
+        right_content = self.main_splitter.widget(1)
+        if not right_content.isHidden():
+            target_geometry = self._collapsed_geometry_from_expanded()
+            original_state = self._multi_send_collapsed_window_state
+            current_state = self.windowState()
             right_content.hide()
             self.btn_toggle_multi_send.setText("显示多字符串发送")
             if hasattr(self, 'act_multi_send'):
                 self.act_multi_send.setChecked(False)
-            # 调整左侧大小
-            self.main_splitter.setSizes([1000, 0])
+            self.main_splitter.setSizes([max(1, self.main_splitter.width()), 0])
+
+            # 只有普通窗口发生过临时外扩；收起时移除外扩量并保留用户调整。
+            if (original_state is not None
+                    and not self._is_special_window_state(original_state)):
+                if self._is_special_window_state(current_state):
+                    if self._multi_send_collapsed_window_geometry:
+                        self.restoreGeometry(QByteArray.fromHex(
+                            self._multi_send_collapsed_window_geometry.encode('ascii')
+                        ))
+                    self.setWindowState(Qt.WindowNoState)
+                    self.setGeometry(target_geometry)
+                    self.setWindowState(current_state)
+                else:
+                    self.setGeometry(target_geometry)
+            self._clear_multi_send_expansion_state()
         else:
+            self._multi_send_collapsed_geometry = self.geometry()
+            self._multi_send_collapsed_window_state = self.windowState()
+            self._multi_send_collapsed_window_geometry = bytes(
+                self.saveGeometry().toHex()
+            ).decode('ascii')
+            self._multi_send_collapsed_splitter_state = bytes(
+                self.main_splitter.saveState().toHex()
+            ).decode('ascii')
+            left_width = max(1, self.main_splitter.sizes()[0])
             right_content.show()
             self.btn_toggle_multi_send.setText("隐藏多字符串发送")
             if hasattr(self, 'act_multi_send'):
                 self.act_multi_send.setChecked(True)
-            # 确保所有相关组件的大小策略正确
             right_content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.multi_send_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.table_multi_send.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            
-            # 确保分割器设置正确
+
             self.main_splitter.setHandleWidth(8)
             self.main_splitter.setOpaqueResize(True)
             self.main_splitter.setStretchFactor(0, 1)
             self.main_splitter.setStretchFactor(1, 1)
-            
-            # 恢复分割器大小
-            self._fit_multi_send_to_current_screen()
-            self.main_splitter.setSizes([700, 380])
+
+            # 最大化/全屏窗口没有可用的外扩空间，保持窗口状态并在内部显示。
+            if not self._is_special_window_state(self._multi_send_collapsed_window_state):
+                expected_height = self._multi_send_collapsed_geometry.height()
+                self._fit_multi_send_to_current_screen()
+                self._keep_multi_send_expanded_height(expected_height)
+                QTimer.singleShot(
+                    0,
+                    lambda height=expected_height:
+                        self._keep_multi_send_expanded_height(height),
+                )
+            self._multi_send_expanded_geometry = self.normalGeometry() if (
+                self._is_special_window_state(self.windowState())
+            ) else self.geometry()
+            self.main_splitter.setSizes([left_width, 380])
             if not self._multi_columns_fitted:
                 QTimer.singleShot(0, self._fit_multi_send_default_columns)
-            
-            # 强制刷新布局
+
             self.main_splitter.update()
             self.main_splitter.repaint()
 
@@ -5872,10 +5981,11 @@ class SerialTool(QMainWindow):
             # 主题设置
             'theme': self.current_theme,
             # 窗口布局状态
-            'window_geometry': bytes(self.saveGeometry().toHex()).decode('ascii'),
-            'main_splitter_state': bytes(
-                self.main_splitter.saveState().toHex()
-            ).decode('ascii'),
+            'window_geometry': self._window_geometry_hex_for_config(),
+            'main_splitter_state': (
+                self._multi_send_collapsed_splitter_state
+                or bytes(self.main_splitter.saveState().toHex()).decode('ascii')
+            ),
             'io_splitter_state': bytes(
                 self.io_splitter.saveState().toHex()
             ).decode('ascii'),

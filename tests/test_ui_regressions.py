@@ -58,8 +58,8 @@ class _DialogParent(QWidget):
 
 
 class UIRegressionTests(unittest.TestCase):
-    def test应用版本号为1_3_7(self):
-        self.assertEqual(VERSION, "1.3.7")
+    def test应用版本号为1_3_9(self):
+        self.assertEqual(VERSION, "1.3.9")
 
     @classmethod
     def setUpClass(cls):
@@ -86,11 +86,6 @@ class UIRegressionTests(unittest.TestCase):
         source = inspect.getsource(SerialTool.init_ui)
         self.assertNotIn("self.text_send.setMaximumHeight", source)
         self.assertIn("self.io_splitter = QSplitter(Qt.Vertical)", source)
-
-    def test多字符串面板显示时获得可用宽度(self):
-        source = inspect.getsource(SerialTool.toggle_multi_send)
-        self.assertIn("setSizes([700, 380])", source)
-        self.assertNotIn("setSizes([900, 100])", source)
 
     def test主界面自动应答勾选框位于重复发送间隔之后(self):
         source = inspect.getsource(SerialTool.init_ui)

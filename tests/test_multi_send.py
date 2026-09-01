@@ -1,3 +1,4 @@
+import json
 import os
 import inspect
 import tempfile
@@ -9,10 +10,11 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QRect, Qt
+from PyQt5.QtCore import QByteArray, QRect, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication, QMessageBox, QAbstractItemView, QCheckBox, QHeaderView,
+    QMainWindow,
 )
 
 from app_paths import AppPaths
@@ -641,19 +643,38 @@ class MultiSendTests(unittest.TestCase):
         available = QRect(100, 50, 1024, 700)
         fake_screen = SimpleNamespace(availableGeometry=lambda: available)
         self.tool.setGeometry(900, 400, 1280, 900)
+        original_height = self.tool.height()
 
         with mock.patch.object(SerialTool, "screen", return_value=fake_screen):
             self.tool._fit_multi_send_to_current_screen()
 
         geometry = self.tool.geometry()
         self.assertLessEqual(geometry.width(), available.width())
-        self.assertLessEqual(geometry.height(), available.height())
+        self.assertEqual(geometry.height(), original_height)
         self.assertGreaterEqual(geometry.left(), available.left())
         self.assertGreaterEqual(geometry.top(), available.top())
         self.assertLessEqual(geometry.right(), available.right())
-        self.assertLessEqual(geometry.bottom(), available.bottom())
 
-    def test展开面板时目标宽度为1080(self):
+    def test展开面板时忽略布局提出的纵向增高(self):
+        self.tool.setGeometry(100, 50, 1080, 700)
+        self.tool.show()
+        self.app.processEvents()
+        original_height = self.tool.height()
+
+        def simulate_platform_layout_resize():
+            self.tool.resize(self.tool.width() + 388, original_height + 120)
+
+        with mock.patch.object(
+            self.tool,
+            "_fit_multi_send_to_current_screen",
+            side_effect=simulate_platform_layout_resize,
+        ):
+            self.tool.toggle_multi_send()
+            self.app.processEvents()
+
+        self.assertEqual(self.tool.height(), original_height)
+
+    def test展开面板时在原窗口宽度上向外扩展(self):
         available = QRect(0, 0, 1600, 900)
         fake_screen = SimpleNamespace(availableGeometry=lambda: available)
         self.tool.setGeometry(100, 50, 900, 800)
@@ -661,7 +682,198 @@ class MultiSendTests(unittest.TestCase):
         with mock.patch.object(SerialTool, "screen", return_value=fake_screen):
             self.tool._fit_multi_send_to_current_screen()
 
-        self.assertEqual(self.tool.width(), 1080)
+        self.assertEqual(self.tool.width(), 1288)
+
+    def test多字符串面板收起后恢复展开前窗口尺寸(self):
+        available = QRect(0, 0, 1920, 1080)
+        fake_screen = SimpleNamespace(availableGeometry=lambda: available)
+        self.tool.setGeometry(100, 50, 1080, 800)
+        self.tool.show()
+        self.app.processEvents()
+        original_geometry = self.tool.geometry()
+        original_left_width = self.tool.main_splitter.sizes()[0]
+
+        with mock.patch.object(SerialTool, "screen", return_value=fake_screen):
+            self.tool.toggle_multi_send()
+            self.app.processEvents()
+            self.assertEqual(self.tool.width(), original_geometry.width() + 388)
+            self.assertLessEqual(
+                abs(self.tool.main_splitter.sizes()[0] - original_left_width), 2
+            )
+            self.tool.toggle_multi_send()
+            self.app.processEvents()
+
+        self.assertEqual(self.tool.geometry(), original_geometry)
+
+    def test主窗口未显示时仍能连续展开并收起面板(self):
+        right_content = self.tool.main_splitter.widget(1)
+        self.assertTrue(right_content.isHidden())
+
+        self.tool.toggle_multi_send()
+        self.assertFalse(right_content.isHidden())
+        self.tool.toggle_multi_send()
+
+        self.assertTrue(right_content.isHidden())
+
+    def test最大化窗口展开收起后保持最大化状态(self):
+        self.tool.showMaximized()
+        self.app.processEvents()
+        original_normal_geometry = self.tool.normalGeometry()
+
+        self.tool.toggle_multi_send()
+        self.app.processEvents()
+        self.assertTrue(self.tool.isMaximized())
+
+        self.tool.toggle_multi_send()
+        self.app.processEvents()
+        self.assertTrue(self.tool.isMaximized())
+        self.assertEqual(self.tool.normalGeometry(), original_normal_geometry)
+
+    def test全屏窗口展开收起后保持全屏状态(self):
+        self.tool.showFullScreen()
+        self.app.processEvents()
+
+        self.tool.toggle_multi_send()
+        self.app.processEvents()
+        self.assertTrue(self.tool.isFullScreen())
+
+        self.tool.toggle_multi_send()
+        self.app.processEvents()
+        self.assertTrue(self.tool.isFullScreen())
+
+    def test普通窗口展开后最大化再收起仍保留原正常尺寸(self):
+        available = QRect(0, 0, 1920, 1080)
+        fake_screen = SimpleNamespace(availableGeometry=lambda: available)
+        self.tool.setGeometry(100, 50, 1080, 800)
+        self.tool.show()
+        self.app.processEvents()
+        original_geometry = self.tool.geometry()
+
+        with mock.patch.object(SerialTool, "screen", return_value=fake_screen):
+            self.tool.toggle_multi_send()
+            self.app.processEvents()
+            self.tool.showMaximized()
+            self.app.processEvents()
+            self.tool.toggle_multi_send()
+            self.app.processEvents()
+
+        self.assertTrue(self.tool.isMaximized())
+        self.tool.showNormal()
+        self.app.processEvents()
+        self.assertEqual(self.tool.geometry(), original_geometry)
+
+    def test展开期间用户调整的位置和尺寸在收起后保留(self):
+        available = QRect(0, 0, 1920, 1080)
+        fake_screen = SimpleNamespace(availableGeometry=lambda: available)
+        self.tool.setGeometry(100, 50, 1080, 800)
+        self.tool.show()
+        self.app.processEvents()
+        original_geometry = self.tool.geometry()
+
+        with mock.patch.object(SerialTool, "screen", return_value=fake_screen):
+            self.tool.toggle_multi_send()
+            self.app.processEvents()
+            expanded_geometry = self.tool.geometry()
+            self.tool.setGeometry(
+                expanded_geometry.x() + 17,
+                expanded_geometry.y() + 11,
+                expanded_geometry.width() + 25,
+                expanded_geometry.height() + 30,
+            )
+            self.tool.toggle_multi_send()
+            self.app.processEvents()
+
+        expected = QRect(
+            original_geometry.x() + 17,
+            original_geometry.y() + 11,
+            original_geometry.width() + 25,
+            original_geometry.height() + 30,
+        )
+        self.assertEqual(self.tool.geometry(), expected)
+
+    def test扩展面板显示时保存的仍是默认窗口尺寸(self):
+        available = QRect(0, 0, 1920, 1080)
+        fake_screen = SimpleNamespace(availableGeometry=lambda: available)
+        self.tool.setGeometry(100, 50, 1080, 800)
+        self.tool.show()
+        self.app.processEvents()
+        collapsed_geometry = bytes(self.tool.saveGeometry().toHex()).decode("ascii")
+        collapsed_splitter = bytes(
+            self.tool.main_splitter.saveState().toHex()
+        ).decode("ascii")
+
+        with mock.patch.object(SerialTool, "screen", return_value=fake_screen):
+            self.tool.toggle_multi_send()
+            self.app.processEvents()
+            self.tool.save_config()
+
+        with Path(self.tool.config_file).open("r", encoding="utf-8") as config_file:
+            config = json.load(config_file)
+
+        self.assertEqual(config["window_geometry"], collapsed_geometry)
+        self.assertEqual(config["main_splitter_state"], collapsed_splitter)
+
+    def test扩展期间用户调整的位置和尺寸会写入配置(self):
+        available = QRect(0, 0, 1920, 1080)
+        fake_screen = SimpleNamespace(availableGeometry=lambda: available)
+        self.tool.setGeometry(100, 50, 1080, 800)
+        self.tool.show()
+        self.app.processEvents()
+        original_geometry = self.tool.geometry()
+
+        with mock.patch.object(SerialTool, "screen", return_value=fake_screen):
+            self.tool.toggle_multi_send()
+            self.app.processEvents()
+            expanded_geometry = self.tool.geometry()
+            self.tool.setGeometry(
+                expanded_geometry.x() + 17,
+                expanded_geometry.y() + 11,
+                expanded_geometry.width() + 25,
+                expanded_geometry.height() + 30,
+            )
+            self.tool.save_config()
+
+        with Path(self.tool.config_file).open("r", encoding="utf-8") as config_file:
+            config = json.load(config_file)
+        restored = QMainWindow()
+        self.addCleanup(restored.deleteLater)
+        self.assertTrue(restored.restoreGeometry(QByteArray.fromHex(
+            config["window_geometry"].encode("ascii")
+        )))
+
+        expected = QRect(
+            original_geometry.x() + 17,
+            original_geometry.y() + 11,
+            original_geometry.width() + 25,
+            original_geometry.height() + 30,
+        )
+        self.assertEqual(restored.geometry(), expected)
+
+    def test展开后最大化时配置保留最大化和原正常尺寸(self):
+        available = QRect(0, 0, 1920, 1080)
+        fake_screen = SimpleNamespace(availableGeometry=lambda: available)
+        self.tool.setGeometry(100, 50, 1080, 800)
+        self.tool.show()
+        self.app.processEvents()
+        original_geometry = self.tool.geometry()
+
+        with mock.patch.object(SerialTool, "screen", return_value=fake_screen):
+            self.tool.toggle_multi_send()
+            self.app.processEvents()
+            self.tool.showMaximized()
+            self.app.processEvents()
+            self.tool.save_config()
+
+        with Path(self.tool.config_file).open("r", encoding="utf-8") as config_file:
+            config = json.load(config_file)
+        restored = QMainWindow()
+        self.addCleanup(restored.deleteLater)
+        self.assertTrue(restored.restoreGeometry(QByteArray.fromHex(
+            config["window_geometry"].encode("ascii")
+        )))
+
+        self.assertTrue(restored.isMaximized())
+        self.assertEqual(restored.normalGeometry(), original_geometry)
 
     def test批量状态单独位于按钮下方并可完整显示(self):
         self.tool.show()

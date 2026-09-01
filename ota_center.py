@@ -914,7 +914,7 @@ class OTAControlCenter(QDialog):
             else "… 正在准备" if is_preparing
             else "▶ 开始升级"
         )
-        self._btn_start_ota.setEnabled(True)
+        self._btn_start_ota.setEnabled(not reason and not is_preparing)
         self._btn_start_ota.setText(button_text)
         self._btn_start_ota.setToolTip(
             reason or ("重新下发上一次 OTA 指令" if can_resend else "开始 OTA 升级")
