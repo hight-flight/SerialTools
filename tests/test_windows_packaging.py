@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -173,6 +174,15 @@ class WindowsPackagingTests(unittest.TestCase):
         joined = " ".join(str(item) for item in args)
         self.assertNotIn("serial_config.json", joined)
         self.assertIn("serial_GUI.py", joined)
+
+    def test_windows发布包含运行时多分辨率图标(self):
+        args = build_app.build_pyinstaller_arguments(
+            icon_path=Path("图标.ico"),
+            onedir=False,
+        )
+
+        self.assertIn("--add-data", args)
+        self.assertIn(f"图标.ico{os.pathsep}.", [str(item) for item in args])
 
     def test_windows发布不收集无关平台和全部pyqtgraph子模块(self):
         args = build_app.build_pyinstaller_arguments(onedir=True)

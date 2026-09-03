@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
 )
 
 from app_paths import AppPaths
-from serial_GUI import SerialTool
+from serial_GUI import FullHitCheckBox, SerialTool
 from theme import DARK_QSS, LIGHT_QSS
 
 ORIGINAL_LOAD_CONFIG = SerialTool.load_config
@@ -280,11 +280,18 @@ class MultiSendTests(unittest.TestCase):
         delay_widget.layout().itemAt(0).widget().setValue(100)
         results = []
         event_loop = QEventLoop()
+        finish_batch_send = self.tool._finish_batch_send
 
-        with mock.patch("serial_GUI.QMessageBox.warning"):
+        def record_result(result):
+            results.append(result)
+            finish_batch_send(result)
+            event_loop.quit()
+
+        # 在 batch_send 启动线程前接入既有完成回调，避免快速失败时错过信号。
+        with mock.patch("serial_GUI.QMessageBox.warning"), mock.patch.object(
+            self.tool, "_finish_batch_send", side_effect=record_result
+        ):
             self.tool.batch_send()
-            self.tool.batch_thread.batch_finished.connect(results.append)
-            self.tool.batch_thread.batch_finished.connect(event_loop.quit)
             QTimer.singleShot(1500, event_loop.quit)
             event_loop.exec_()
 
@@ -494,7 +501,7 @@ class MultiSendTests(unittest.TestCase):
 
         self.assertEqual(
             headers,
-            ["HEX", "字符串", "名称/备注", "操作", "单条延时(ms)", "顺序"],
+            ["HEX", "字符串", "备注", "操作", "单条延时(ms)", "顺序"],
         )
         self.assertFalse(
             self.tool.table_multi_send.editTriggers()
@@ -589,7 +596,7 @@ class MultiSendTests(unittest.TestCase):
         )
 
     def test多字符串表格使用紧凑宽度(self):
-        self.assertEqual(self.tool.table_multi_send.minimumWidth(), 360)
+        self.assertEqual(self.tool.table_multi_send.minimumWidth(), 456)
 
     def test多字符串的字符串列允许用户拖动调整宽度(self):
         header = self.tool.table_multi_send.horizontalHeader()
@@ -682,7 +689,12 @@ class MultiSendTests(unittest.TestCase):
         with mock.patch.object(SerialTool, "screen", return_value=fake_screen):
             self.tool._fit_multi_send_to_current_screen()
 
-        self.assertEqual(self.tool.width(), 1288)
+        panel_width = max(
+            self.tool.table_multi_send.minimumWidth(),
+            self.tool.main_splitter.widget(1).minimumSizeHint().width(),
+        )
+        expected_width = 900 + panel_width + 8
+        self.assertEqual(self.tool.width(), expected_width)
 
     def test多字符串面板收起后恢复展开前窗口尺寸(self):
         available = QRect(0, 0, 1920, 1080)
@@ -696,7 +708,13 @@ class MultiSendTests(unittest.TestCase):
         with mock.patch.object(SerialTool, "screen", return_value=fake_screen):
             self.tool.toggle_multi_send()
             self.app.processEvents()
-            self.assertEqual(self.tool.width(), original_geometry.width() + 388)
+            panel_width = max(
+                self.tool.table_multi_send.minimumWidth(),
+                self.tool.main_splitter.widget(1).minimumSizeHint().width(),
+            )
+            expected_width = (original_geometry.width() + panel_width
+                              + self.tool.main_splitter.handleWidth())
+            self.assertEqual(self.tool.width(), expected_width)
             self.assertLessEqual(
                 abs(self.tool.main_splitter.sizes()[0] - original_left_width), 2
             )
@@ -904,6 +922,11 @@ class MultiSendTests(unittest.TestCase):
         self.assertNotIn("#FFB300", DARK_QSS)
         self.assertNotIn("#FF8F00", LIGHT_QSS)
 
+    def test_hex自绘勾选框有焦点和禁用态反馈(self):
+        source = inspect.getsource(FullHitCheckBox.paintEvent)
+        self.assertIn("self.hasFocus()", source)
+        self.assertIn("self.isEnabled() and self.isChecked()", source)
+
     def test_hex空白状态的整个控件区域均可点击(self):
         checkbox = self.tool.table_multi_send.cellWidget(0, 0).layout().itemAt(0).widget()
         self.tool.show()
@@ -950,7 +973,8 @@ class MultiSendTests(unittest.TestCase):
     def test帮助文案与新的批量操作和表格结构一致(self):
         source = inspect.getsource(SerialTool.show_multi_send_help)
         self.assertIn("开始批量发送", source)
-        self.assertIn("名称/备注", source)
+        self.assertIn("“备注”", source)
+        self.assertNotIn("名称/备注", source)
         self.assertIn("按当前编码将字符串转换为十六进制字节后发送", source)
         self.assertIn("轮间隔", source)
         self.assertIn("顺序为 0 的行不参与批量发送", source)

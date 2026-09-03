@@ -237,7 +237,10 @@ class OTAControlCenter(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("OTA 升级控制中心")
-        self.resize(620, 800)
+        screen = self.parentWidget().screen() if self.parentWidget() else QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        self.resize(min(620, available.width()) if available else 620,
+                    min(800, available.height()) if available else 800)
         self.setMinimumSize(520, 460)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setAcceptDrops(True)
@@ -321,6 +324,7 @@ class OTAControlCenter(QDialog):
         self._fw_path_edit = QLineEdit()
         self._fw_path_edit.setReadOnly(True)
         self._fw_path_edit.setPlaceholderText("请选择固件文件...")
+        self._fw_path_edit.setToolTip("完整固件路径")
         path_row.addWidget(self._fw_path_edit)
         btn_browse = QPushButton("浏览")
         btn_browse.clicked.connect(self._browse_firmware)
@@ -369,12 +373,7 @@ class OTAControlCenter(QDialog):
         self._btn_start_ota.setMinimumHeight(36)
         self._btn_start_ota.setMinimumWidth(160)
         self._btn_start_ota.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
-        self._btn_start_ota.setStyleSheet(
-            "QPushButton { background-color: #4EC972; color: #FFFFFF; font-weight: bold;"
-            "  border: 1px solid #3EB862; border-radius: 4px; }"
-            "QPushButton:hover { background-color: #3EB862; }"
-            "QPushButton:pressed { background-color: #2EA852; }"
-            "QPushButton:disabled { background-color: #555555; color: #888888; border-color: #444444; }")
+        self._btn_start_ota.setProperty("primary", True)
         self._btn_start_ota.clicked.connect(self._start_ota)
         ota_btn_row.addWidget(self._btn_start_ota)
 
@@ -382,12 +381,8 @@ class OTAControlCenter(QDialog):
         self._btn_stop_ota.setMinimumHeight(36)
         self._btn_stop_ota.setMinimumWidth(160)
         self._btn_stop_ota.setEnabled(False)
-        self._btn_stop_ota.setStyleSheet(
-            "QPushButton { background-color: #E06C75; color: #FFFFFF; font-weight: bold;"
-            "  border: 1px solid #D05C65; border-radius: 4px; }"
-            "QPushButton:hover { background-color: #D05C65; }"
-            "QPushButton:pressed { background-color: #C04C55; }"
-            "QPushButton:disabled { background-color: #555555; color: #888888; border-color: #444444; }")
+        self._btn_stop_ota.setProperty("danger", True)
+        self._btn_stop_ota.setAccessibleName("停止 OTA 升级")
         self._btn_stop_ota.clicked.connect(self._stop_ota)
         ota_btn_row.addWidget(self._btn_stop_ota)
         ota_layout.addLayout(ota_btn_row)

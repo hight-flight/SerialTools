@@ -12,13 +12,14 @@ from PyQt5.QtCore import QMutex, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QHeaderView, QMessageBox, QPushButton, QScrollArea,
-    QSplitter, QWidget,
+    QSplitter, QStyle, QStyleOptionButton, QTableWidget, QWidget,
 )
 
 from app_paths import AppPaths
 from auto_reply import AutoReplyDialog
 import dialogs
 import serial_GUI
+import theme
 from gsm_debugger import GSMDebuggerDialog
 from ota_center import OTAControlCenter
 from serial_GUI import SerialTool
@@ -58,8 +59,176 @@ class _DialogParent(QWidget):
 
 
 class UIRegressionTests(unittest.TestCase):
-    def test应用版本号为1_3_9(self):
-        self.assertEqual(VERSION, "1.3.9")
+    def test应用版本号为1_4_0(self):
+        self.assertEqual(VERSION, "1.4.0")
+
+    def test应用在创建窗口前启用高DPI图像(self):
+        self.assertTrue(
+            QApplication.testAttribute(Qt.AA_EnableHighDpiScaling)
+        )
+        self.assertTrue(
+            QApplication.testAttribute(Qt.AA_UseHighDpiPixmaps)
+        )
+
+    def test主窗口与子窗口使用方形多分辨率图标(self):
+        tool = SerialTool()
+        self.addCleanup(self._close_dialog, tool)
+        icon_sizes = {
+            (size.width(), size.height()) for size in tool.windowIcon().availableSizes()
+        }
+        self.assertTrue({(16, 16), (32, 32), (48, 48)}.issubset(icon_sizes))
+        self.assertEqual(tool.windowIcon().pixmap(32, 32).size().width(), 32)
+        self.assertEqual(tool.windowIcon().pixmap(32, 32).size().height(), 32)
+
+        child = dialogs.show_crc_calculator(tool, is_dark=True)
+        self.addCleanup(self._close_dialog, child)
+        child_pixmap = child.windowIcon().pixmap(32, 32)
+        self.assertEqual((child_pixmap.width(), child_pixmap.height()), (32, 32))
+        app_pixmap = QApplication.instance().windowIcon().pixmap(32, 32)
+        self.assertEqual((app_pixmap.width(), app_pixmap.height()), (32, 32))
+
+    def test全局勾选框在两种主题下都显示勾选标记(self):
+        self.assertIn("__CHECK_DARK__", DARK_QSS)
+        self.assertIn("__CHECK_LIGHT__", LIGHT_QSS)
+
+    def test确认弹窗按钮根据文字保留完整宽度(self):
+        self.assertTrue(hasattr(theme, "fit_message_box_buttons"))
+        box = QMessageBox(
+            QMessageBox.Question,
+            "确认",
+            "是否继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            self.parent,
+        )
+        self.addCleanup(self._close_dialog, box)
+        for button in box.buttons():
+            button.setMinimumWidth(0)
+
+        theme.fit_message_box_buttons(box)
+
+        for button in box.buttons():
+            text_width = button.fontMetrics().horizontalAdvance(
+                button.text().replace("&", "")
+            )
+            self.assertGreaterEqual(button.minimumWidth(), text_width + 32)
+        self.assertIn(
+            "fit_message_box_buttons(dialog)",
+            inspect.getsource(theme.apply_dialog_theme),
+        )
+        self.assertIn(
+            "fit_message_box_buttons(msgbox)",
+            inspect.getsource(SerialTool._patch_qmessagebox_theme),
+        )
+
+    def test所有普通按钮为文字保留安全余量(self):
+        self.assertTrue(hasattr(theme, "fit_push_button_texts"))
+        button = QPushButton("隐藏多字符串发送", self.parent)
+        text_width = button.fontMetrics().horizontalAdvance(button.text())
+        button.resize(text_width, 28)
+        button.setMinimumWidth(text_width)
+
+        theme.fit_push_button_texts(button)
+        button.resize(button.minimumSizeHint())
+        option = QStyleOptionButton()
+        button.initStyleOption(option)
+        content_rect = button.style().subElementRect(
+            QStyle.SE_PushButtonContents, option, button
+        )
+
+        self.assertGreaterEqual(content_rect.width(), text_width + 8)
+        self.assertIn(
+            "fit_push_button_texts(dialog)",
+            inspect.getsource(theme.apply_dialog_theme),
+        )
+        self.assertIn(
+            "fit_push_button_texts(self)",
+            inspect.getsource(SerialTool.apply_theme),
+        )
+        self.assertIn(
+            "fit_push_button_texts(obj)",
+            inspect.getsource(SerialTool.eventFilter),
+        )
+
+    def test主界面紧凑控件不使用固定高度(self):
+        source = inspect.getsource(SerialTool.init_ui)
+        self.assertNotIn("setFixedHeight(26)", source)
+        self.assertIn("min(720, available.width())", source)
+
+    def test子窗口统一登记以支持运行时切换主题(self):
+        source = inspect.getsource(SerialTool._apply_dialog_theme)
+        self.assertIn("_track_dialog", source)
+        refresh_source = inspect.getsource(SerialTool._refresh_open_dialog_themes)
+        self.assertIn("set_theme", refresh_source)
+
+    def test保存路径提供完整提示并从头显示(self):
+        source = inspect.getsource(SerialTool._show_save_directory)
+        self.assertIn("setToolTip", source)
+        self.assertIn("setCursorPosition(0)", source)
+
+    def test示波器单实例且空状态会重新挂载(self):
+        source = inspect.getsource(SerialTool.oscilloscope)
+        self.assertIn("self._scope_dialog", source)
+        self.assertIn("availableGeometry", source)
+        self.assertIn("plot_widget.addItem(empty_text)", source)
+        self.assertGreater(
+            source.rfind("plot_widget.addItem(empty_text)"),
+            source.find("def rebuild_channels"),
+        )
+
+    def test工具子窗口返回实例供主窗口跟踪(self):
+        for helper in (
+            dialogs.show_crc_calculator,
+            dialogs.show_hex_converter,
+            dialogs.show_serial_monitor,
+        ):
+            self.assertIn("return dialog", inspect.getsource(helper))
+
+    def test_hex转换器支持十进制反向转换(self):
+        source = inspect.getsource(dialogs.show_hex_converter)
+        self.assertIn("def on_decimal_changed", source)
+        self.assertIn("dec_edit.textEdited.connect(on_decimal_changed)", source)
+
+    def test简单工具窗按内容收紧不留大片空白(self):
+        crc = dialogs.show_crc_calculator(self.parent, is_dark=True)
+        converter = dialogs.show_hex_converter(self.parent, is_dark=True)
+        self.addCleanup(self._close_dialog, crc)
+        self.addCleanup(self._close_dialog, converter)
+        self.app.processEvents()
+
+        self.assertLessEqual(crc.height(), 260)
+        self.assertLessEqual(converter.height(), 180)
+
+    def test串口监视器长字段提供完整提示(self):
+        source = inspect.getsource(dialogs.show_serial_monitor)
+        self.assertIn("setToolTip", source)
+        self.assertIn("ResizeToContents", source)
+
+    def test复杂子窗口初始尺寸不超出当前屏幕(self):
+        for initializer in (
+            OTAControlCenter.init_ui,
+            AutoReplyDialog._init_ui,
+            GSMDebuggerDialog._init_ui,
+        ):
+            source = inspect.getsource(initializer)
+            self.assertIn("availableGeometry", source)
+
+    def test_ota主操作按钮使用统一语义属性(self):
+        dialog = OTAControlCenter(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+        self.assertEqual(dialog._btn_start_ota.property("primary"), True)
+        self.assertEqual(dialog._btn_stop_ota.property("danger"), True)
+
+    def test_gsm短信表格长内容不会无提示截断(self):
+        dialog = GSMDebuggerDialog(self.parent)
+        self.addCleanup(self._close_dialog, dialog)
+        source = inspect.getsource(GSMDebuggerDialog._append_sms_row)
+        self.assertIn("setToolTip", source)
+        header = dialog.table_sms.horizontalHeader()
+        self.assertEqual(header.sectionResizeMode(4), QHeaderView.Stretch)
+
+    def test自动应答规则表格保留完整内容提示(self):
+        source = inspect.getsource(AutoReplyDialog._refresh_rules_table)
+        self.assertIn("setToolTip", source)
 
     @classmethod
     def setUpClass(cls):
@@ -312,7 +481,7 @@ class UIRegressionTests(unittest.TestCase):
         header = dialog.table_rules.horizontalHeader()
 
         self.assertEqual(header.sectionResizeMode(0), QHeaderView.Fixed)
-        self.assertLessEqual(dialog.table_rules.columnWidth(0), 48)
+        self.assertEqual(dialog.table_rules.columnWidth(0), 54)
 
     def test自动应答关键输入具有明确无障碍名称(self):
         dialog = AutoReplyDialog(self.parent)
@@ -411,6 +580,22 @@ class UIRegressionTests(unittest.TestCase):
                 self.assertIn('QPushButton[danger="true"]', qss)
                 self.assertIn("QScrollArea {", qss)
 
+    def test工业控制台主题使用确认的视觉令牌(self):
+        """明暗主题应使用确认预览稿的页面、主操作和数据面板颜色。"""
+        self.assertIn("#F6F8FB", LIGHT_QSS)
+        self.assertIn("#1677FF", LIGHT_QSS)
+        self.assertIn("#151A22", DARK_QSS)
+        self.assertIn("#49A6FF", DARK_QSS)
+        self.assertIn("QPlainTextEdit", DARK_QSS)
+
+    def test暗色原生标题栏使用石墨背景(self):
+        source = inspect.getsource(SerialTool.apply_theme)
+        self.assertIn("_set_titlebar_dark(True, color_hex='#151A22')", source)
+
+    def test暗色子窗口原生标题栏使用石墨背景(self):
+        source = inspect.getsource(apply_dialog_theme)
+        self.assertIn("r, g, b = 0x15, 0x1A, 0x22", source)
+
     def test复杂对话框默认宽度为垂直滚动条预留空间(self):
         gsm = GSMDebuggerDialog(self.parent)
         reply = AutoReplyDialog(self.parent)
@@ -434,8 +619,10 @@ class UIRegressionTests(unittest.TestCase):
         dialog.show()
         self.app.processEvents()
 
-        self.assertGreaterEqual(dialog.height(), 800)
-        self.assertFalse(dialog._scroll_area.verticalScrollBar().isVisible())
+        available_height = dialog.screen().availableGeometry().height()
+        self.assertEqual(dialog.height(), min(800, available_height))
+        if available_height >= 800:
+            self.assertFalse(dialog._scroll_area.verticalScrollBar().isVisible())
 
     def test自动应答默认高度可直接显示主要内容(self):
         dialog = AutoReplyDialog(self.parent)
@@ -443,8 +630,10 @@ class UIRegressionTests(unittest.TestCase):
         dialog.show()
         self.app.processEvents()
 
-        self.assertGreaterEqual(dialog.height(), 760)
-        self.assertFalse(dialog.scroll_area.verticalScrollBar().isVisible())
+        available_height = dialog.screen().availableGeometry().height()
+        self.assertEqual(dialog.height(), min(760, available_height))
+        if available_height >= 760:
+            self.assertFalse(dialog.scroll_area.verticalScrollBar().isVisible())
 
     def test主界面术语与无障碍名称保持一致(self):
         source = inspect.getsource(SerialTool.init_ui)
@@ -457,6 +646,67 @@ class UIRegressionTests(unittest.TestCase):
     def test用户可见文案统一使用多字符串发送(self):
         self.assertNotIn("多字符发送", inspect.getsource(serial_GUI))
         self.assertNotIn("多字符发送", inspect.getsource(dialogs))
+
+    def test多字符串表头与限定轮数字体一致且面板留有余量(self):
+        source = inspect.getsource(serial_GUI.SerialTool.init_ui)
+        self.assertIn('header.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))', source)
+        self.assertIn('header.setFixedHeight(34)', source)
+        self.assertIn('header.setDefaultAlignment(Qt.AlignCenter)', source)
+        self.assertIn('self.table_multi_send.setColumnWidth(MULTI_COL_HEX, 60)', source)
+        self.assertIn('self.table_multi_send.setColumnWidth(MULTI_COL_TEXT, 72)', source)
+        self.assertIn('self.table_multi_send.setColumnWidth(MULTI_COL_NAME, 64)', source)
+        self.assertIn('self.table_multi_send.setColumnWidth(MULTI_COL_DELAY, 144)', source)
+        self.assertIn('self.table_multi_send.setMinimumWidth(456)', source)
+
+    def test关键表格表头按当前样式完整显示(self):
+        tool = SerialTool()
+        monitor = dialogs.show_serial_monitor(self.parent, is_dark=True)
+        reply = AutoReplyDialog(self.parent)
+        for dialog in (tool, monitor, reply):
+            self.addCleanup(self._close_dialog, dialog)
+            dialog.show()
+        QApplication.processEvents()
+
+        expected_headers = (
+            (tool, {"HEX", "备注"}),
+            (monitor, {"序号", "端口", "描述", "硬件ID", "制造商", "VID/PID"}),
+            (reply, {"序号"}),
+        )
+        for window, names in expected_headers:
+            tables = window.findChildren(QTableWidget)
+            found = set()
+            for table in tables:
+                header = table.horizontalHeader()
+                for column in range(table.columnCount()):
+                    item = table.horizontalHeaderItem(column)
+                    if item is None or item.text() not in names:
+                        continue
+                    found.add(item.text())
+                    required_width = (
+                        header.fontMetrics().horizontalAdvance(item.text()) + 8
+                    )
+                    self.assertGreaterEqual(
+                        header.sectionSize(column),
+                        required_width,
+                        f"{item.text()} 表头仍会被裁切",
+                    )
+            self.assertEqual(found, names)
+
+    def test多字符串HEX勾选框跟随暗色主题色(self):
+        source = inspect.getsource(serial_GUI.FullHitCheckBox.paintEvent)
+        self.assertIn('getattr(self.window(), "current_theme", "light") == "dark"', source)
+        self.assertIn('QColor("#49A6FF")', source)
+        self.assertIn('QColor("#19212C")', source)
+
+    def test多字符串表格内容使用常规紧凑字体(self):
+        source = inspect.getsource(serial_GUI.SerialTool.init_ui)
+        self.assertIn(
+            'self.table_multi_send.setFont(QFont("Microsoft YaHei", 8, QFont.Normal))',
+            source,
+        )
+        row_source = inspect.getsource(serial_GUI.SerialTool._insert_multi_item_row)
+        self.assertIn('send_button.setFont(QFont("Microsoft YaHei", 8, QFont.Normal))', row_source)
+        self.assertIn('delay_spin.setFont(QFont("Consolas", 8, QFont.Normal))', row_source)
 
     def test数据分析帮助按钮具有可访问名称(self):
         from data_viewer import JsonViewerDialog

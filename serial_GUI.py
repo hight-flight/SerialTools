@@ -20,10 +20,16 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint, QRect, QEvent, QByteArray
 from PyQt5.QtGui import QBrush, QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon, QPen, QIcon
 
+# 必须在 QApplication 创建前启用，避免高 DPI 下图标先低分辨率栅格化再放大。
+if QApplication.instance() is None:
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
 from dialogs import (show_crc_calculator, show_hex_converter,
                          show_serial_monitor, show_usage_dialog,
                          show_about_dialog)
-from theme import THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, VERSION, unescape_text
+from theme import (THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme,
+                   fit_message_box_buttons, fit_push_button_texts, VERSION, unescape_text)
 from transport import TransportWrapper, TransportReadThread
 from app_paths import ensure_user_dirs, migrate_legacy_user_data, resolve_app_paths, resource_path
 # 注意：JsonViewerDialog 和 AutoReplyDialog 保持延迟导入（懒加载），
@@ -46,6 +52,15 @@ MULTI_COL_DELAY = 4
 MULTI_COL_ORDER = 5
 
 
+def _load_application_icon():
+    """优先加载包含多档方形位图的 ICO，其他平台缺失时回退到 PNG。"""
+    for filename in ("图标.ico", "图标.png"):
+        icon = QIcon(os.fspath(resource_path(filename)))
+        if not icon.isNull():
+            return icon
+    return QIcon()
+
+
 class FullHitCheckBox(QCheckBox):
     """绘制紧凑方框复选框，并让整个控件矩形响应点击。"""
 
@@ -58,14 +73,29 @@ class FullHitCheckBox(QCheckBox):
         side = 16
         left = (self.width() - side) // 2
         top = (self.height() - side) // 2
-        border = QColor("#5D6675") if self.isEnabled() else QColor("#A0A4AA")
-        fill = QColor("#FFFFFF") if self.isEnabled() else QColor("#E5E7EB")
+        is_dark = getattr(self.window(), "current_theme", "light") == "dark"
+        if is_dark:
+            border = QColor("#3A4A5E") if self.isEnabled() else QColor("#2D3A4A")
+            fill = (QColor("#49A6FF") if self.isEnabled() and self.isChecked()
+                    else QColor("#415164") if self.isChecked() else QColor("#19212C"))
+            focus_color = QColor("#78BCFF")
+        else:
+            border = QColor("#5D6675") if self.isEnabled() else QColor("#A0A4AA")
+            fill = (QColor("#1677FF") if self.isEnabled() and self.isChecked()
+                    else QColor("#9CBEE8") if self.isChecked() else QColor("#FFFFFF"))
+            focus_color = QColor("#1677FF")
         painter.setPen(QPen(border, 1.4))
         painter.setBrush(fill)
         painter.drawRoundedRect(left, top, side, side, 2, 2)
 
+        if self.hasFocus():
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(focus_color, 1.2, Qt.DotLine))
+            painter.drawRoundedRect(left - 3, top - 3, side + 6, side + 6, 3, 3)
+
         if self.isChecked():
-            painter.setPen(QPen(QColor("#1F2937"), 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            check_color = QColor("#FFFFFF") if self.isEnabled() else QColor("#D8DEE9")
+            painter.setPen(QPen(check_color, 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
             painter.drawLine(QPoint(left + 4, top + 8), QPoint(left + 7, top + 11))
             painter.drawLine(QPoint(left + 7, top + 11), QPoint(left + 13, top + 4))
 
@@ -410,7 +440,9 @@ class SerialTool(QMainWindow):
         self.theme_colors = dict(THEME_COLORS['light'])
 
         # 生成下拉箭头图标（QSS 接管 QComboBox 后必须显式提供箭头图片）
-        self._arrow_dark_path, self._arrow_light_path = self._make_arrow_icons()
+        self._themed_dialogs = []
+        (self._arrow_dark_path, self._arrow_light_path,
+         self._check_dark_path, self._check_light_path) = self._make_arrow_icons()
 
 
         self.init_ui()
@@ -442,20 +474,39 @@ class SerialTool(QMainWindow):
             pix.save(path, 'PNG')
             return path.replace('\\', '/')
 
+        def _draw_check(path, color_hex, size=12):
+            pix = QPixmap(size, size)
+            pix.fill(Qt.transparent)
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.Antialiasing)
+            pen = QPen(QColor(color_hex), 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+            p.setPen(pen)
+            p.drawLine(QPoint(2, 6), QPoint(5, 9))
+            p.drawLine(QPoint(5, 9), QPoint(10, 3))
+            p.end()
+            pix.save(path, 'PNG')
+            return path.replace('\\', '/')
+
         dark = _draw(os.path.join(icon_dir, '_arrow_dark.png'), '#6A7384')
         light = _draw(os.path.join(icon_dir, '_arrow_light.png'), '#666666')
-        return dark, light
+        check_dark = _draw_check(os.path.join(icon_dir, '_check_dark.png'), '#FFFFFF')
+        check_light = _draw_check(os.path.join(icon_dir, '_check_light.png'), '#FFFFFF')
+        return dark, light, check_dark, check_light
 
     def init_ui(self):
         self.setWindowTitle("hight-flight串口工具")
-        self.setWindowIcon(QIcon(os.fspath(resource_path("图标.png"))))
+        app_icon = _load_application_icon()
+        if not app_icon.isNull():
+            QApplication.instance().setWindowIcon(app_icon)
+            self.setWindowIcon(app_icon)
         primary_screen = QApplication.primaryScreen()
         if primary_screen is not None:
             available = primary_screen.availableGeometry()
             self.resize(min(1080, available.width()), min(900, available.height()))
+            self.setMinimumSize(min(720, available.width()), min(560, available.height()))
         else:
             self.resize(1080, 900)
-        self.setMinimumSize(720, 560)  # 保证顶部设置栏和发送区控件不重叠
+            self.setMinimumSize(720, 560)  # 保证顶部设置栏和发送区控件不重叠
 
         # 主窗口部件
         main_widget = QWidget()
@@ -660,7 +711,7 @@ class SerialTool(QMainWindow):
         self.edit_udp_local_ip.setEditable(True)
         self.edit_udp_local_ip.setFont(QFont("Consolas", 9))
         self.edit_udp_local_ip.setMinimumWidth(150)
-        self.edit_udp_local_ip.setFixedHeight(26)
+        self.edit_udp_local_ip.setMinimumHeight(26)
         self.edit_udp_local_ip.addItem('0.0.0.0')
         udp_page_layout.addWidget(self.edit_udp_local_ip)
         udp_page_layout.addWidget(QLabel("本地端口:", font=QFont("Microsoft YaHei", 9)))
@@ -669,13 +720,13 @@ class SerialTool(QMainWindow):
         self.edit_udp_local_port.setRange(1, 65535)
         self.edit_udp_local_port.setValue(8080)
         self.edit_udp_local_port.setMaximumWidth(70)
-        self.edit_udp_local_port.setFixedHeight(26)
+        self.edit_udp_local_port.setMinimumHeight(26)
         udp_page_layout.addWidget(self.edit_udp_local_port)
         udp_page_layout.addWidget(QLabel("远程IP:", font=QFont("Microsoft YaHei", 9)))
         self.edit_udp_remote_ip = QLineEdit()
         self.edit_udp_remote_ip.setFont(QFont("Consolas", 9))
         self.edit_udp_remote_ip.setMinimumWidth(120)
-        self.edit_udp_remote_ip.setFixedHeight(26)
+        self.edit_udp_remote_ip.setMinimumHeight(26)
         self.edit_udp_remote_ip.setText('192.168.1.100')
         udp_page_layout.addWidget(self.edit_udp_remote_ip)
         udp_page_layout.addWidget(QLabel("远程端口:", font=QFont("Microsoft YaHei", 9)))
@@ -684,7 +735,7 @@ class SerialTool(QMainWindow):
         self.edit_udp_remote_port.setRange(1, 65535)
         self.edit_udp_remote_port.setValue(8888)
         self.edit_udp_remote_port.setMaximumWidth(70)
-        self.edit_udp_remote_port.setFixedHeight(26)
+        self.edit_udp_remote_port.setMinimumHeight(26)
         udp_page_layout.addWidget(self.edit_udp_remote_port)
         udp_page_layout.addStretch()
         self.stack_params.addWidget(udp_page)  # index 1
@@ -698,7 +749,7 @@ class SerialTool(QMainWindow):
         self.edit_tcp_remote_ip = QLineEdit()
         self.edit_tcp_remote_ip.setFont(QFont("Consolas", 9))
         self.edit_tcp_remote_ip.setMinimumWidth(120)
-        self.edit_tcp_remote_ip.setFixedHeight(26)
+        self.edit_tcp_remote_ip.setMinimumHeight(26)
         self.edit_tcp_remote_ip.setText('192.168.1.100')
         tcp_client_page_layout.addWidget(self.edit_tcp_remote_ip)
         tcp_client_page_layout.addWidget(QLabel("远程端口:", font=QFont("Microsoft YaHei", 9)))
@@ -707,7 +758,7 @@ class SerialTool(QMainWindow):
         self.edit_tcp_remote_port.setRange(1, 65535)
         self.edit_tcp_remote_port.setValue(8888)
         self.edit_tcp_remote_port.setMaximumWidth(70)
-        self.edit_tcp_remote_port.setFixedHeight(26)
+        self.edit_tcp_remote_port.setMinimumHeight(26)
         tcp_client_page_layout.addWidget(self.edit_tcp_remote_port)
         tcp_client_page_layout.addStretch()
         self.stack_params.addWidget(tcp_client_page)  # index 2
@@ -722,7 +773,7 @@ class SerialTool(QMainWindow):
         self.edit_tcp_server_local_ip.setEditable(True)
         self.edit_tcp_server_local_ip.setFont(QFont("Consolas", 9))
         self.edit_tcp_server_local_ip.setMinimumWidth(150)
-        self.edit_tcp_server_local_ip.setFixedHeight(26)
+        self.edit_tcp_server_local_ip.setMinimumHeight(26)
         self.edit_tcp_server_local_ip.addItem('0.0.0.0')
         tcp_server_page_layout.addWidget(self.edit_tcp_server_local_ip)
         tcp_server_page_layout.addWidget(QLabel("本地端口:", font=QFont("Microsoft YaHei", 9)))
@@ -731,7 +782,7 @@ class SerialTool(QMainWindow):
         self.edit_tcp_server_local_port.setRange(1, 65535)
         self.edit_tcp_server_local_port.setValue(8888)
         self.edit_tcp_server_local_port.setMaximumWidth(70)
-        self.edit_tcp_server_local_port.setFixedHeight(26)
+        self.edit_tcp_server_local_port.setMinimumHeight(26)
         tcp_server_page_layout.addWidget(self.edit_tcp_server_local_port)
         tcp_server_page_layout.addStretch()
         self.stack_params.addWidget(tcp_server_page)  # index 3
@@ -750,10 +801,10 @@ class SerialTool(QMainWindow):
         self.params_row.addWidget(self.label_save_path)
         self.line_edit_save_path = QLineEdit()
         self.line_edit_save_path.setReadOnly(True)
-        self.line_edit_save_path.setText(self.save_directory)
         self.line_edit_save_path.setFont(QFont("Consolas", 9))
+        self._show_save_directory()
         self.line_edit_save_path.setMaximumWidth(240)
-        self.line_edit_save_path.setFixedHeight(26)
+        self.line_edit_save_path.setMinimumHeight(26)
         self.params_row.addWidget(self.line_edit_save_path)
         self.btn_browse_path = QPushButton("浏览")
         self.btn_browse_path.setMinimumWidth(56)
@@ -785,7 +836,7 @@ class SerialTool(QMainWindow):
         self.edit_filter.setFont(QFont("Consolas", 9))
         self.edit_filter.setPlaceholderText("输入关键字，逗号分隔...")
         self.edit_filter.setMaximumWidth(180)
-        self.edit_filter.setFixedHeight(26)
+        self.edit_filter.setMinimumHeight(26)
         self.edit_filter.setEnabled(False)
         self.edit_filter.textChanged.connect(self.update_filter_text)
         display_save_layout.addWidget(self.edit_filter)
@@ -979,7 +1030,7 @@ class SerialTool(QMainWindow):
         self.text_ota = QLineEdit()
         self.text_ota.setFont(QFont("Consolas", 9))
         self.text_ota.setPlaceholderText("输入首字段...")
-        self.text_ota.setFixedHeight(26)
+        self.text_ota.setMinimumHeight(26)
         head_field_layout.addWidget(self.text_ota)
         fields_layout.addLayout(head_field_layout)
 
@@ -996,7 +1047,7 @@ class SerialTool(QMainWindow):
         self.text_tail = QLineEdit()
         self.text_tail.setFont(QFont("Consolas", 9))
         self.text_tail.setPlaceholderText("输入尾字段...")
-        self.text_tail.setFixedHeight(26)
+        self.text_tail.setMinimumHeight(26)
         tail_field_layout.addWidget(self.text_tail)
         fields_layout.addLayout(tail_field_layout)
 
@@ -1006,7 +1057,7 @@ class SerialTool(QMainWindow):
         self.file_path_edit.setPlaceholderText("选择要发送的文件...")
         self.file_path_edit.setReadOnly(True)
         self.file_path_edit.setMaximumWidth(180)
-        self.file_path_edit.setFixedHeight(26)
+        self.file_path_edit.setMinimumHeight(26)
         fields_layout.addWidget(self.file_path_edit)
 
         self.btn_select_file = QPushButton("选择文件")
@@ -1178,28 +1229,32 @@ class SerialTool(QMainWindow):
         
         # 多字符列表
         self.table_multi_send = QTableWidget()
+        self.table_multi_send.setFont(QFont("Microsoft YaHei", 8, QFont.Normal))
         self.table_multi_send.setColumnCount(6)
         self.table_multi_send.setHorizontalHeaderLabels(
-            ["HEX", "字符串", "名称/备注", "操作", "单条延时(ms)", "顺序"]
+            ["HEX", "字符串", "备注", "操作", "单条延时(ms)", "顺序"]
         )
         self.table_multi_send.setAccessibleName("多字符串发送指令表")
-        self.table_multi_send.setToolTip("双击字符串、名称或顺序单元格进行编辑")
+        self.table_multi_send.setToolTip("双击字符串、备注或顺序单元格进行编辑")
         self.table_multi_send.setEditTriggers(
             QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
         )
         
         # 设置列宽调整模式
         header = self.table_multi_send.horizontalHeader()
+        header.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+        header.setFixedHeight(34)
+        header.setDefaultAlignment(Qt.AlignCenter)
         # 设置列宽调整模式为可交互，允许手动调整
         for column in range(self.table_multi_send.columnCount()):
             header.setSectionResizeMode(column, QHeaderView.Interactive)
         
         # 设置初始列宽
-        self.table_multi_send.setColumnWidth(MULTI_COL_HEX, 36)
+        self.table_multi_send.setColumnWidth(MULTI_COL_HEX, 60)
         self.table_multi_send.setColumnWidth(MULTI_COL_TEXT, 72)
-        self.table_multi_send.setColumnWidth(MULTI_COL_NAME, 66)
+        self.table_multi_send.setColumnWidth(MULTI_COL_NAME, 64)
         self.table_multi_send.setColumnWidth(MULTI_COL_SEND, 52)
-        self.table_multi_send.setColumnWidth(MULTI_COL_DELAY, 84)
+        self.table_multi_send.setColumnWidth(MULTI_COL_DELAY, 144)
         self.table_multi_send.setColumnWidth(MULTI_COL_ORDER, 48)
         self._multi_columns_fitted = False
         self._multi_send_collapsed_geometry = None
@@ -1209,7 +1264,7 @@ class SerialTool(QMainWindow):
         self._multi_send_collapsed_splitter_state = None
         # 确保表格充满可用空间
         self.table_multi_send.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.table_multi_send.setMinimumWidth(360)
+        self.table_multi_send.setMinimumWidth(456)
         self.table_multi_send.setRowCount(0)
         self._insert_multi_item_row({
             "hex": False, "string": "", "button_text": "无注释",
@@ -1321,6 +1376,7 @@ class SerialTool(QMainWindow):
         self.status_baud.setFont(QFont("Microsoft YaHei", 9))
         self.status_log = QLabel("日志文件: 未创建")
         self.status_log.setFont(QFont("Microsoft YaHei", 9))
+        self.status_log.setToolTip("当前未创建日志文件")
         
         self.statusBar().addPermanentWidget(self.status_connection)
         # 纯间距分隔（VSCode 风格）：无分隔符，用固定宽度空白 QLabel 做间距
@@ -1450,11 +1506,15 @@ class SerialTool(QMainWindow):
 
         # 1. 全局 QSS（注入下拉箭头图片路径）
         if theme_name == 'dark':
-            qss = DARK_QSS.replace('__ARROW_DARK__', self._arrow_dark_path)
+            qss = (DARK_QSS
+                   .replace('__ARROW_DARK__', self._arrow_dark_path)
+                   .replace('__CHECK_DARK__', self._check_dark_path))
             QApplication.instance().setStyleSheet(qss)
-            self._set_titlebar_dark(True, color_hex='#282C34')
+            self._set_titlebar_dark(True, color_hex='#151A22')
         else:
-            qss = LIGHT_QSS.replace('__ARROW_LIGHT__', self._arrow_light_path)
+            qss = (LIGHT_QSS
+                   .replace('__ARROW_LIGHT__', self._arrow_light_path)
+                   .replace('__CHECK_LIGHT__', self._check_light_path))
             QApplication.instance().setStyleSheet(qss)
             self._set_titlebar_dark(False)
 
@@ -1466,6 +1526,8 @@ class SerialTool(QMainWindow):
         self._refresh_status_connection()
         if hasattr(self, '_current_status_text'):
             self._set_status(self._current_status_text, self._current_status_level)
+        self._refresh_open_dialog_themes()
+        fit_push_button_texts(self)
 
 
     def _patch_qmessagebox_theme(self):
@@ -1516,6 +1578,7 @@ class SerialTool(QMainWindow):
             msgbox = QMessageBox(icon, title, text, buttons, parent=parent)
             if default_btn != QMessageBox.NoButton:
                 msgbox.setDefaultButton(default_btn)
+            fit_message_box_buttons(msgbox)
             return msgbox
 
         @staticmethod
@@ -1547,7 +1610,7 @@ class SerialTool(QMainWindow):
         QMessageBox.critical = _patched_critical
         QMessageBox.question = _patched_question
 
-    def _set_titlebar_dark(self, dark=True, color_hex='#282C34'):
+    def _set_titlebar_dark(self, dark=True, color_hex='#151A22'):
         """设置窗口标题栏/背景颜色以匹配主题（Windows / Linux / macOS）"""
         import platform
         system = platform.system()
@@ -1677,7 +1740,7 @@ class SerialTool(QMainWindow):
         """窗口显示时设置标题栏颜色（此时 winId 已有效）"""
         super().showEvent(event)
         if self.current_theme == 'dark':
-            self._set_titlebar_dark(True, color_hex='#282C34')
+            self._set_titlebar_dark(True, color_hex='#151A22')
         else:
             self._set_titlebar_dark(False)
 
@@ -1718,41 +1781,13 @@ class SerialTool(QMainWindow):
             )
 
     def toggle_theme(self):
-        """切换主题"""
+        """切换主题，并同步所有已打开的子窗口。"""
         new_theme = 'dark' if self.current_theme == 'light' else 'light'
         self.apply_theme(new_theme)
         self.save_config()
-        # 同步已打开的 OTA 对话框主题
-        if hasattr(self, '_ota_dialog') and self._ota_dialog is not None:
-            try:
-                if self._ota_dialog.isVisible():
-                    self._apply_dialog_theme(self._ota_dialog)
-            except RuntimeError:
-                pass
-        # 同步数据分析面板主题
-        if hasattr(self, '_json_viewer_dlg') and self._json_viewer_dlg is not None:
-            try:
-                if self._json_viewer_dlg.isVisible():
-                    self._json_viewer_dlg.set_theme(is_dark=(new_theme == 'dark'))
-                    self._apply_dialog_theme(self._json_viewer_dlg)
-            except RuntimeError:
-                pass
-        # 同步 GSM 调试助手主题
-        if hasattr(self, '_gsm_dialog') and self._gsm_dialog is not None:
-            try:
-                if self._gsm_dialog.isVisible():
-                    self._apply_dialog_theme(self._gsm_dialog)
-            except RuntimeError:
-                pass
-        # 同步自动应答对话框主题
-        if hasattr(self, '_auto_reply_dialog') and self._auto_reply_dialog is not None:
-            try:
-                if self._auto_reply_dialog.isVisible():
-                    self._apply_dialog_theme(self._auto_reply_dialog)
-            except RuntimeError:
-                pass
         theme_display = "暗黑模式" if new_theme == 'dark' else "亮色模式"
         self.append_text(f"[系统]: 已切换至{theme_display}\n")
+
     def handle_baud_change(self, index):
         """处理波特率选择变化"""
         baud_text = self.combo_baud.itemText(index)
@@ -3314,6 +3349,14 @@ class SerialTool(QMainWindow):
             print(f"路径验证错误: {e}")
             return False
 
+    def _show_save_directory(self):
+        """更新路径控件；界面保持紧凑，同时允许查看完整路径。"""
+        if not hasattr(self, 'line_edit_save_path'):
+            return
+        self.line_edit_save_path.setText(self.save_directory)
+        self.line_edit_save_path.setToolTip(self.save_directory)
+        self.line_edit_save_path.setCursorPosition(0)
+
     def browse_save_path(self):
         """浏览保存路径"""
         from PyQt5.QtWidgets import QFileDialog
@@ -3326,7 +3369,7 @@ class SerialTool(QMainWindow):
             # 验证路径合法性，防止路径注入攻击
             if self.is_valid_path(directory):
                 self.save_directory = directory
-                self.line_edit_save_path.setText(self.save_directory)
+                self._show_save_directory()
                 self.append_text(f"[系统]: 保存路径已设置为: {self.save_directory}\n")
                 # 保存配置
                 self.save_config()
@@ -3575,7 +3618,7 @@ class SerialTool(QMainWindow):
         self.table_multi_send.setItem(row, MULTI_COL_NAME, name_item)
 
         send_button = QPushButton("发送")
-        send_button.setFont(QFont("Microsoft YaHei", 9))
+        send_button.setFont(QFont("Microsoft YaHei", 8, QFont.Normal))
         send_button.setMinimumWidth(52)
         send_button.clicked.connect(self.on_send_multi_btn_clicked)
         send_widget = QWidget()
@@ -3589,7 +3632,7 @@ class SerialTool(QMainWindow):
         delay_spin.setRange(0, 10000)
         delay_spin.setValue(int(item.get("delay", 1000)))
         delay_spin.setSuffix(" ms")
-        delay_spin.setFont(QFont("Consolas", 9))
+        delay_spin.setFont(QFont("Consolas", 8, QFont.Normal))
         delay_spin.valueChanged.connect(
             lambda _value, widget=delay_spin: self._select_multi_row_for_widget(widget)
         )
@@ -3667,7 +3710,10 @@ class SerialTool(QMainWindow):
         if screen is None:
             return
         available = screen.availableGeometry()
-        width = min(self.width() + 380 + self.main_splitter.handleWidth(), available.width())
+        right_panel = self.main_splitter.widget(1)
+        panel_width = max(456, self.table_multi_send.minimumWidth(),
+                          right_panel.minimumSizeHint().width())
+        width = min(self.width() + panel_width + self.main_splitter.handleWidth(), available.width())
         height = self.height()
         x = min(max(self.x(), available.left()), available.right() - width + 1)
         max_y = max(available.top(), available.bottom() - height + 1)
@@ -3807,7 +3853,14 @@ class SerialTool(QMainWindow):
             self._multi_send_expanded_geometry = self.normalGeometry() if (
                 self._is_special_window_state(self.windowState())
             ) else self.geometry()
-            self.main_splitter.setSizes([left_width, 380])
+            panel_width = max(456, self.table_multi_send.minimumWidth(),
+                              right_content.minimumSizeHint().width())
+            self.main_splitter.setSizes([left_width, panel_width])
+            QTimer.singleShot(
+                0,
+                lambda left=left_width, right=panel_width:
+                    self.main_splitter.setSizes([left, right]),
+            )
             if not self._multi_columns_fitted:
                 QTimer.singleShot(0, self._fit_multi_send_default_columns)
 
@@ -3863,7 +3916,7 @@ class SerialTool(QMainWindow):
            - “轮间隔(ms)”是每轮全部指令发送完毕后，到下一轮之间的等待时间
 
         3. 编辑与单独发送：
-           - 双击“字符串”“名称/备注”或“顺序”单元格可直接编辑
+           - 双击“字符串”“备注”或“顺序”单元格可直接编辑
            - 勾选 HEX 后，会按当前编码将字符串转换为十六进制字节后发送
            - 点击“操作”列中的“发送”，只发送该行，不会覆盖主发送框草稿
 
@@ -4157,6 +4210,10 @@ class SerialTool(QMainWindow):
 
     def eventFilter(self, obj, event):
         """处理发送历史导航、接收区滚轮跟底和弹窗暗黑标题栏。"""
+        # 按钮显示或字体变化后重新核对文字宽度，覆盖动态创建的帮助窗口。
+        if isinstance(obj, QPushButton) and event.type() in (QEvent.Show, QEvent.FontChange):
+            fit_push_button_texts(obj)
+
         # 自动给所有 QMessageBox/独立 QDialog 应用当前主题（标题栏暗色处理）
         # 用 WinIdChange 事件（窗口获得 hwnd 时触发，早于 Show），避免显示后再改 DWM 产生白色闪烁
         # 仅在暗黑模式下生效，一次性处理
@@ -4476,7 +4533,7 @@ class SerialTool(QMainWindow):
 
     def crc_calculator(self):
         """CRC 计算器弹窗"""
-        show_crc_calculator(self, is_dark=(self.current_theme == 'dark'))
+        self._track_dialog(show_crc_calculator(self, is_dark=(self.current_theme == 'dark')))
 
     def _reset_auto_reply_runtime(self):
         """连接会话改变时清除自动应答的半包和待发送响应。"""
@@ -4531,14 +4588,23 @@ class SerialTool(QMainWindow):
 
     def hex_converter(self):
         """HEX 转换器弹窗：HEX ↔ ASCII ↔ Decimal 互转"""
-        show_hex_converter(self, is_dark=(self.current_theme == 'dark'))
+        self._track_dialog(show_hex_converter(self, is_dark=(self.current_theme == 'dark')))
 
     def serial_monitor(self):
         """串口监视器：列出系统所有串口及详细信息"""
-        show_serial_monitor(self, is_dark=(self.current_theme == 'dark'))
+        self._track_dialog(show_serial_monitor(self, is_dark=(self.current_theme == 'dark')))
 
     def oscilloscope(self):
         """数据波形示波器：将串口接收的原始字节按数据类型解析为波形图"""
+        existing = getattr(self, '_scope_dialog', None)
+        try:
+            if existing is not None and existing.isVisible():
+                existing.raise_()
+                existing.activateWindow()
+                return
+        except RuntimeError:
+            self._scope_dialog = None
+
         try:
             import pyqtgraph as pg
         except ImportError:
@@ -4564,8 +4630,14 @@ class SerialTool(QMainWindow):
 
         # ── 对话框 ──
         dialog = QDialog(self)
+        self._scope_dialog = dialog
         dialog.setWindowTitle("数据波形（示波器）")
-        dialog.setMinimumSize(900, 550)
+        screen = self.screen() or QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        dialog.resize(min(900, available.width()) if available else 900,
+                      min(550, available.height()) if available else 550)
+        dialog.setMinimumSize(min(720, available.width()) if available else 720,
+                              min(480, available.height()) if available else 480)
         dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         main_layout = QHBoxLayout(dialog)
         main_layout.setSpacing(8)
@@ -4682,11 +4754,15 @@ class SerialTool(QMainWindow):
         main_layout.addWidget(plot_widget, stretch=1)
 
         # ── 每通道曲线 + 环形缓冲区 ──
-        CHANNEL_COLORS = [
+        CHANNEL_COLORS = ([
             (0x61, 0xAF, 0xEF), (0x98, 0xC3, 0x79), (0xE0, 0x6C, 0x75),
             (0xD1, 0x9A, 0x66), (0xC6, 0x78, 0xDD), (0x56, 0xB6, 0xC2),
             (0xAB, 0xB2, 0xBF), (0xE5, 0xC0, 0x7B),
-        ]
+        ] if self.current_theme == 'dark' else [
+            (0, 103, 197), (20, 125, 100), (209, 47, 69),
+            (181, 71, 8), (123, 63, 178), (0, 112, 138),
+            (52, 65, 84), (138, 98, 0),
+        ])
         curves = []
         buffers = []
 
@@ -4703,6 +4779,8 @@ class SerialTool(QMainWindow):
                 curve = plot_widget.plot([], [], pen=pen, name=f'CH{i+1}')
                 curves.append(curve)
                 buffers.append(deque(maxlen=spin_points.value()))
+            plot_widget.addItem(empty_text)
+            empty_text.setVisible(True)
             spin_points.valueChanged.connect(lambda v: [b.__setattr__('maxlen', v) for b in buffers])
 
         rebuild_channels()
@@ -4789,6 +4867,7 @@ class SerialTool(QMainWindow):
         def on_close():
             refresh_timer.stop()
             self.scope_running = False
+            self._scope_dialog = None
             if hasattr(self, 'read_thread') and self.read_thread:
                 try:
                     self.read_thread.receive_data_signal.disconnect(feed_data)
@@ -5263,10 +5342,41 @@ class SerialTool(QMainWindow):
             QMessageBox.critical(self, "GSM 调试助手错误",
                                 f"打开 GSM 调试助手失败:\n{e}")
 
+    def _track_dialog(self, dialog):
+        """登记非模态子窗口，并在销毁时自动移除。"""
+        if dialog is None:
+            return None
+        if not hasattr(self, '_themed_dialogs'):
+            self._themed_dialogs = []
+        if dialog not in self._themed_dialogs:
+            self._themed_dialogs.append(dialog)
+            dialog.destroyed.connect(lambda _=None, d=dialog: self._forget_dialog(d))
+        return dialog
+
+    def _forget_dialog(self, dialog):
+        try:
+            self._themed_dialogs.remove(dialog)
+        except (ValueError, RuntimeError):
+            pass
+
+    def _refresh_open_dialog_themes(self):
+        """将当前主题应用到所有仍存活的子窗口。"""
+        dialogs = []
+        for dialog in list(getattr(self, '_themed_dialogs', [])):
+            try:
+                if callable(getattr(dialog, 'set_theme', None)):
+                    dialog.set_theme(is_dark=(self.current_theme == 'dark'))
+                apply_dialog_theme(dialog, self.current_theme == 'dark')
+                dialog.update()
+                dialogs.append(dialog)
+            except RuntimeError:
+                continue
+        self._themed_dialogs = dialogs
+
     def _apply_dialog_theme(self, dialog):
         """为子对话框应用当前主题（暗黑/明亮），支持运行时切换。"""
-        is_dark = self.current_theme == 'dark'
-        apply_dialog_theme(dialog, is_dark)
+        self._track_dialog(dialog)
+        apply_dialog_theme(dialog, self.current_theme == 'dark')
 
     def show_more_settings(self):
         """显示更多设置（串口模式）"""
@@ -5489,6 +5599,7 @@ class SerialTool(QMainWindow):
             self.append_text(f"[系统]: 已创建新的日志文件: {self.log_file_path}\n")
             # 更新状态栏
             self.status_log.setText(f"日志文件: {os.path.basename(self.log_file_path)}")
+            self.status_log.setToolTip(self.log_file_path)
             self._set_status(f"已创建新的日志文件: {os.path.basename(self.log_file_path)}")
 
         except Exception as e:
@@ -5756,7 +5867,7 @@ class SerialTool(QMainWindow):
                     # 验证路径安全性
                     if self.is_valid_path(config['save_directory']):
                         self.save_directory = config['save_directory']
-                        self.line_edit_save_path.setText(self.save_directory)
+                        self._show_save_directory()
                     else:
                         print(f"[警告]: 保存路径不安全，已忽略: {config['save_directory']}")
                 
@@ -5913,7 +6024,7 @@ class SerialTool(QMainWindow):
                 string_item = self.table_multi_send.item(i, MULTI_COL_TEXT)
                 string = string_item.text() if string_item else ""
                 
-                # 名称/备注是可直接编辑的表格项。
+                # 备注是可直接编辑的表格项。
                 name_item = self.table_multi_send.item(i, MULTI_COL_NAME)
                 button_text = name_item.text() if name_item else ""
                 

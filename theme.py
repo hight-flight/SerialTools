@@ -3,14 +3,16 @@
 主题模块：颜色常量、QSS 样式表、对话框主题应用工具函数。
 """
 
-VERSION = "1.3.9"
+VERSION = "1.4.0"
 
 import platform
 import re
 
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import (
+    QApplication, QMessageBox, QPushButton, QStyle, QStyleOptionButton,
+)
 
 
 _TEXT_ESCAPE_PATTERN = re.compile(
@@ -47,12 +49,12 @@ class DataReceiver(QObject):
 # --- 主题颜色常量 ---
 THEME_COLORS = {
     'light': {
-        'text_normal':    QColor(0, 0, 0),
-        'text_send':      QColor(0, 0, 255),
-        'text_system':    QColor(128, 128, 128),
-        'text_error':     QColor(255, 0, 0),
-        'highlight_bg':   QColor(255, 235, 60, 140),  # 明亮模式高亮背景（半透明黄）
-        'ansi_default_fg': QColor(0, 0, 0),
+        'text_normal':    QColor(0x1D, 0x29, 0x39),
+        'text_send':      QColor(0x16, 0x77, 0xFF),
+        'text_system':    QColor(0x66, 0x70, 0x85),
+        'text_error':     QColor(0xDC, 0x3E, 0x42),
+        'highlight_bg':   QColor(207, 229, 255, 160),  # 明亮模式柔和蓝色高亮
+        'ansi_default_fg': QColor(0x1D, 0x29, 0x39),
         # ANSI 前景色映射（亮色模式使用原色）
         'ansi_fg': {
             '30': QColor(0, 0, 0),       '31': QColor(255, 0, 0),
@@ -73,12 +75,12 @@ THEME_COLORS = {
         },
     },
     'dark': {
-        'text_normal':    QColor(0xAB, 0xB2, 0xBF),
-        'text_send':      QColor(0x61, 0xAF, 0xEF),
-        'text_system':    QColor(0x5C, 0x63, 0x70),
-        'text_error':     QColor(0xE0, 0x6C, 0x75),
-        'highlight_bg':   QColor(200, 160, 0, 100),   # 暗黑模式高亮背景（半透明暖金）
-        'ansi_default_fg': QColor(0xAB, 0xB2, 0xBF),
+        'text_normal':    QColor(0xE6, 0xED, 0xF5),
+        'text_send':      QColor(0x49, 0xA6, 0xFF),
+        'text_system':    QColor(0x9E, 0xB0, 0xC3),
+        'text_error':     QColor(0xFF, 0x7B, 0x7F),
+        'highlight_bg':   QColor(36, 91, 143, 160),   # 暗黑模式数据面板蓝色高亮
+        'ansi_default_fg': QColor(0xE6, 0xED, 0xF5),
         # ANSI 前景色映射（暗底提亮）
         'ansi_fg': {
             '30': QColor(0x6A, 0x73, 0x84),  '31': QColor(0xE0, 0x6C, 0x75),
@@ -164,10 +166,6 @@ QCheckBox::indicator {
 QCheckBox::indicator:hover { border-color: #528BFF; }
 QCheckBox::indicator:checked { background-color: #528BFF; border-color: #528BFF; }
 QCheckBox::indicator:disabled { background-color: #21252B; border-color: #2C313C; }
-QTableWidget QCheckBox::indicator {
-    width: 0px; height: 0px; border: none; background: transparent;
-}
-QTableWidget QCheckBox { spacing: 0px; background: transparent; }
 QLabel      { color: #ABB2BF; }
 QSpinBox {
     background-color: #2C313C; color: #E6EAF0;
@@ -322,10 +320,6 @@ QCheckBox::indicator {
 QCheckBox::indicator:hover { border-color: #0078D4; }
 QCheckBox::indicator:checked { background-color: #0078D4; border-color: #0078D4; }
 QCheckBox::indicator:disabled { background-color: #F0F0F0; border-color: #CCCCCC; }
-QTableWidget QCheckBox::indicator {
-    width: 0px; height: 0px; border: none; background: transparent;
-}
-QTableWidget QCheckBox { spacing: 0px; background: transparent; }
 QLabel      { color: #333333; }
 QSpinBox {
     background-color: rgba(255, 255, 255, 230); color: #333333;
@@ -417,9 +411,137 @@ QTabBar::tab:hover { background-color: #D0D0D0; }
 """
 
 
+# 工业控制台 2.0：仅覆盖视觉令牌，不改变控件尺寸、布局或交互。
+LIGHT_QSS += """
+QMainWindow, QWidget { background-color: #F6F8FB; color: #1D2939; }
+QMenuBar { background-color: #FFFFFF; color: #344054; border-bottom: 1px solid #E3E8EF; }
+QMenuBar::item { padding: 6px 10px; border-radius: 4px; }
+QMenuBar::item:selected { background-color: #EEF5FF; color: #1677FF; }
+QMenu { background-color: #FFFFFF; color: #344054; border: 1px solid #E3E8EF; border-radius: 8px; }
+QMenu::item:selected { background-color: #EEF5FF; color: #1677FF; }
+QGroupBox { background-color: #FFFFFF; color: #1D2939; border: 1px solid #E3E8EF; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 600; }
+QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; background-color: #FFFFFF; }
+QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox { background-color: #FFFFFF; color: #1D2939; border: 1px solid #D7DFEA; border-radius: 6px; selection-background-color: #CFE5FF; selection-color: #102A56; }
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #1677FF; }
+QLineEdit:read-only, QTextEdit:read-only, QPlainTextEdit:read-only { background-color: #F8FAFC; }
+QPushButton { background-color: #FFFFFF; color: #344054; border: 1px solid #D7DFEA; border-radius: 6px; padding: 4px 10px; }
+QPushButton:hover { background-color: #F1F6FF; border-color: #8FC0FF; color: #1677FF; }
+QPushButton:pressed { background-color: #E2EFFF; }
+QPushButton:checked { background-color: #1677FF; color: #FFFFFF; border-color: #1677FF; }
+QPushButton[primary="true"] { background-color: #16844A; color: #FFFFFF; border-color: #126B3D; font-weight: 600; }
+QPushButton[primary="true"]:hover { background-color: #126B3D; }
+QPushButton[danger="true"] { background-color: #C83B4D; color: #FFFFFF; border-color: #A92E3E; font-weight: 600; }
+QPushButton[danger="true"]:hover { background-color: #A92E3E; }
+QPushButton:focus { border: 2px solid #1677FF; }
+QHeaderView::section { background-color: #F1F5F9; color: #475467; border: none; border-bottom: 1px solid #E3E8EF; padding: 5px 8px; }
+QTableView, QTableWidget, QTreeView { background-color: #FFFFFF; alternate-background-color: #F8FAFC; color: #1D2939; gridline-color: #E8EDF3; border: 1px solid #E3E8EF; border-radius: 8px; }
+QTableView::item:selected, QTableWidget::item:selected, QTreeView::item:selected { background-color: #E2EFFF; color: #102A56; }
+QCheckBox, QRadioButton { color: #344054; spacing: 8px; }
+QCheckBox::indicator, QRadioButton::indicator { width: 16px; height: 16px; }
+QCheckBox::indicator:checked { background-color: #1677FF; border-color: #1677FF; image: url(__CHECK_LIGHT__); }
+QRadioButton::indicator:checked { background-color: #1677FF; border-color: #1677FF; }
+QCheckBox::indicator:checked:disabled { background-color: #9CBEE8; border-color: #9CBEE8; }
+QTableWidget QCheckBox::indicator { width: 0px; height: 0px; border: none; }
+QTableWidget QCheckBox::indicator:checked { image: url(__CHECK_LIGHT__); }
+QStatusBar { background-color: #FFFFFF; color: #667085; border-top: 1px solid #E3E8EF; }
+QSplitter::handle { background-color: #E3E8EF; }
+QSplitter::handle:hover { background-color: #B9D8FF; }
+QScrollArea, QScrollArea > QWidget > QWidget { background-color: #F6F8FB; }
+QScrollBar:vertical { background: #F6F8FB; width: 10px; margin: 4px; }
+QScrollBar::handle:vertical { background: #B9C5D3; min-height: 28px; border-radius: 5px; }
+QScrollBar::handle:vertical:hover { background: #8FA1B5; }
+"""
+
+DARK_QSS += """
+QMainWindow, QWidget { background-color: #151A22; color: #E6EDF5; }
+QMenuBar { background-color: #1B2330; color: #C8D3E0; border-bottom: 1px solid #2D3A4A; }
+QMenuBar::item { padding: 6px 10px; border-radius: 4px; }
+QMenuBar::item:selected { background-color: #223C59; color: #78BCFF; }
+QMenu { background-color: #202936; color: #D9E3EE; border: 1px solid #334155; border-radius: 8px; }
+QMenu::item:selected { background-color: #223C59; color: #78BCFF; }
+QGroupBox { background-color: #202936; color: #E6EDF5; border: 1px solid #2D3A4A; border-radius: 8px; margin-top: 12px; padding-top: 12px; font-weight: 600; }
+QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; background-color: #202936; }
+QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox { background-color: #19212C; color: #E6EDF5; border: 1px solid #3A4A5E; border-radius: 6px; selection-background-color: #245B8F; selection-color: #FFFFFF; }
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #49A6FF; }
+QLineEdit:read-only, QTextEdit:read-only, QPlainTextEdit:read-only { background-color: #111827; }
+QPlainTextEdit { font-family: Consolas, "Cascadia Mono"; }
+QPushButton { background-color: #263241; color: #D9E3EE; border: 1px solid #3A4A5E; border-radius: 6px; padding: 4px 10px; }
+QPushButton:hover { background-color: #2B4057; border-color: #49A6FF; color: #FFFFFF; }
+QPushButton:pressed { background-color: #203A55; }
+QPushButton:checked { background-color: #1677FF; color: #FFFFFF; border-color: #49A6FF; }
+QPushButton[primary="true"] { background-color: #238653; color: #FFFFFF; border-color: #3DA76B; font-weight: 600; }
+QPushButton[primary="true"]:hover { background-color: #2E9B63; }
+QPushButton[danger="true"] { background-color: #A63D4B; color: #FFFFFF; border-color: #D05A68; font-weight: 600; }
+QPushButton[danger="true"]:hover { background-color: #B94958; }
+QPushButton:focus { border: 2px solid #49A6FF; }
+QHeaderView::section { background-color: #263241; color: #B9C8D8; border: none; border-bottom: 1px solid #3A4A5E; padding: 5px 8px; }
+QTableView, QTableWidget, QTreeView { background-color: #19212C; alternate-background-color: #1E2835; color: #E6EDF5; gridline-color: #2D3A4A; border: 1px solid #2D3A4A; border-radius: 8px; }
+QTableView::item:selected, QTableWidget::item:selected, QTreeView::item:selected { background-color: #245B8F; color: #FFFFFF; }
+QCheckBox, QRadioButton { color: #C8D3E0; spacing: 8px; }
+QCheckBox::indicator, QRadioButton::indicator { width: 16px; height: 16px; }
+QCheckBox::indicator:checked { background-color: #49A6FF; border-color: #49A6FF; image: url(__CHECK_DARK__); }
+QRadioButton::indicator:checked { background-color: #49A6FF; border-color: #49A6FF; }
+QCheckBox::indicator:checked:disabled { background-color: #415164; border-color: #53657A; }
+QTableWidget QCheckBox::indicator { width: 0px; height: 0px; border: none; }
+QTableWidget QCheckBox::indicator:checked { image: url(__CHECK_DARK__); }
+QStatusBar { background-color: #1B2330; color: #9EB0C3; border-top: 1px solid #2D3A4A; }
+QSplitter::handle { background-color: #2D3A4A; }
+QSplitter::handle:hover { background-color: #415A77; }
+QScrollArea, QScrollArea > QWidget > QWidget { background-color: #151A22; }
+QScrollBar:vertical { background: #151A22; width: 10px; margin: 4px; }
+QScrollBar::handle:vertical { background: #415164; min-height: 28px; border-radius: 5px; }
+QScrollBar::handle:vertical:hover { background: #5A6D82; }
+"""
+
+def fit_message_box_buttons(dialog):
+    """按实际字体宽度扩展消息框按钮，避免高 DPI 下文字被裁切。"""
+    if not isinstance(dialog, QMessageBox):
+        return
+
+    for button in dialog.buttons():
+        visible_text = button.text().replace("&", "")
+        text_width = button.fontMetrics().horizontalAdvance(visible_text)
+        button.setMinimumWidth(max(88, text_width + 32, button.sizeHint().width()))
+        button.setMinimumHeight(max(30, button.sizeHint().height()))
+        button.updateGeometry()
+
+    if dialog.layout() is not None:
+        dialog.layout().activate()
+    dialog.adjustSize()
+
+
+def fit_push_button_texts(root):
+    """按按钮实际内容区域补足文字安全余量，兼容不同字体和 DPI。"""
+    buttons = [root] if isinstance(root, QPushButton) else []
+    buttons.extend(root.findChildren(QPushButton))
+
+    for button in buttons:
+        if not button.text():
+            continue
+        button.ensurePolished()
+        option = QStyleOptionButton()
+        button.initStyleOption(option)
+        content_rect = button.style().subElementRect(
+            QStyle.SE_PushButtonContents, option, button
+        )
+        visible_text = button.text().replace("&", "")
+        required_width = button.fontMetrics().horizontalAdvance(visible_text) + 8
+        if not button.icon().isNull():
+            required_width += button.iconSize().width() + 6
+        deficit = required_width - content_rect.width()
+        if deficit > 0:
+            button.setMinimumWidth(
+                max(button.minimumWidth(), button.width() + deficit)
+            )
+            button.updateGeometry()
+
+
 def apply_dialog_theme(dialog, is_dark):
     """为子对话框应用当前主题（暗黑/明亮），支持运行时切换。"""
     is_win = platform.system() == 'Windows'
+    app = QApplication.instance()
+    if app is not None and not app.windowIcon().isNull():
+        dialog.setWindowIcon(app.windowIcon())
 
     if is_dark:
         # 暗黑主题
@@ -445,13 +567,14 @@ def apply_dialog_theme(dialog, is_dark):
                                 break
                         except Exception:
                             continue
-                    r, g, b = 0x2C, 0x31, 0x3C
+                    r, g, b = 0x15, 0x1A, 0x22
                     colorref = ctypes.c_uint32((b << 16) | (g << 8) | r)
                     ctypes.windll.dwmapi.DwmSetWindowAttribute(
                         ctypes.wintypes.HWND(hwnd), ctypes.c_uint(35),
                         ctypes.byref(colorref), ctypes.sizeof(colorref))
             except Exception:
                 pass
+
     else:
         # 明亮主题：清除 QSS，恢复标准调色板
         dialog.setStyleSheet('')
@@ -476,3 +599,6 @@ def apply_dialog_theme(dialog, is_dark):
                         ctypes.byref(none), ctypes.sizeof(none))
             except Exception:
                 pass
+
+    fit_message_box_buttons(dialog)
+    fit_push_button_texts(dialog)

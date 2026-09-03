@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLa
                              QMessageBox, QTableWidget, QTableWidgetItem,
                              QHeaderView, QAbstractItemView, QGroupBox,
                              QFrame, QCheckBox, QSpinBox, QFileDialog,
-                             QScrollArea, QSplitter, QWidget)
+                             QScrollArea, QSplitter, QWidget, QApplication)
 from PyQt5.QtCore import Qt, QTimer, QMutexLocker
 from PyQt5.QtGui import QFont, QTextCursor
 
@@ -45,7 +45,10 @@ class AutoReplyDialog(QDialog):
 
     def _init_ui(self):
         self.setWindowTitle("自动应答配置")
-        self.resize(780, 760)
+        screen = self.parentWidget().screen() if self.parentWidget() else QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        self.resize(min(780, available.width()) if available else 780,
+                    min(760, available.height()) if available else 760)
         self.setMinimumSize(560, 420)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
@@ -134,7 +137,7 @@ class AutoReplyDialog(QDialog):
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(2, QHeaderView.Stretch)
         header.setSectionResizeMode(3, QHeaderView.Stretch)
-        self.table_rules.setColumnWidth(0, 42)
+        self.table_rules.setColumnWidth(0, 54)
         self.table_rules.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table_rules.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_rules.setMinimumHeight(150)
@@ -595,8 +598,12 @@ class AutoReplyDialog(QDialog):
             trigger_display = rule['trigger']
             if not rule['enabled']:
                 trigger_display += " (已禁用)"
-            self.table_rules.setItem(row, 1, QTableWidgetItem(trigger_display))
-            self.table_rules.setItem(row, 2, QTableWidgetItem(rule['match_mode']))
+            trigger_item = QTableWidgetItem(trigger_display)
+            trigger_item.setToolTip(rule['trigger'])
+            self.table_rules.setItem(row, 1, trigger_item)
+            mode_item = QTableWidgetItem(rule['match_mode'])
+            mode_item.setToolTip(rule['match_mode'])
+            self.table_rules.setItem(row, 2, mode_item)
 
             response_display = rule['response']
             if len(response_display) > 30:
@@ -608,7 +615,9 @@ class AutoReplyDialog(QDialog):
                 tags.append("+\\r\\n")
             if tags:
                 response_display += f" [{' '.join(tags)}]"
-            self.table_rules.setItem(row, 3, QTableWidgetItem(response_display))
+            response_item = QTableWidgetItem(response_display)
+            response_item.setToolTip(rule['response'])
+            self.table_rules.setItem(row, 3, response_item)
 
             if not rule['enabled']:
                 for col in range(4):

@@ -22,7 +22,7 @@ def show_crc_calculator(parent, is_dark=False):
     """CRC 计算器弹窗"""
     dialog = QDialog(parent)
     dialog.setWindowTitle("CRC 计算器")
-    dialog.setMinimumSize(420, 280)
+    dialog.setMinimumWidth(420)
     dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
     layout = QVBoxLayout(dialog)
@@ -117,9 +117,12 @@ def show_crc_calculator(parent, is_dark=False):
     btn_layout.addWidget(close_btn)
 
     layout.addLayout(btn_layout)
+    dialog.adjustSize()
+    dialog.resize(460, max(220, dialog.sizeHint().height()))
     apply_dialog_theme(dialog, is_dark)
     dialog.setAttribute(Qt.WA_DeleteOnClose)
     dialog.show()
+    return dialog
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -130,7 +133,7 @@ def show_hex_converter(parent, is_dark=False):
     """HEX 转换器弹窗：HEX ↔ ASCII ↔ Decimal 互转"""
     dialog = QDialog(parent)
     dialog.setWindowTitle("HEX 转换器")
-    dialog.setMinimumSize(480, 320)
+    dialog.setMinimumWidth(480)
     dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
     layout = QFormLayout(dialog)
@@ -178,12 +181,36 @@ def show_hex_converter(parent, is_dark=False):
         dec_edit.setText(' '.join(str(b) for b in data))
         dec_edit.blockSignals(False)
 
+    def on_decimal_changed(text):
+        if not text.strip():
+            return
+        try:
+            parts = text.replace(',', ' ').split()
+            values = [int(part, 10) for part in parts]
+            if not values or any(value < 0 or value > 255 for value in values):
+                raise ValueError
+            data = bytes(values)
+        except ValueError:
+            dec_edit.setToolTip("请输入 0–255 的十进制字节，使用空格或逗号分隔")
+            return
+        dec_edit.setToolTip("")
+        hex_edit.blockSignals(True)
+        hex_edit.setText(data.hex(' ').upper())
+        hex_edit.blockSignals(False)
+        ascii_edit.blockSignals(True)
+        ascii_edit.setText(data.decode('ascii', errors='replace'))
+        ascii_edit.blockSignals(False)
+
     hex_edit.textEdited.connect(on_hex_changed)
     ascii_edit.textEdited.connect(on_ascii_changed)
+    dec_edit.textEdited.connect(on_decimal_changed)
 
+    dialog.adjustSize()
+    dialog.resize(520, max(150, dialog.sizeHint().height()))
     apply_dialog_theme(dialog, is_dark)
     dialog.setAttribute(Qt.WA_DeleteOnClose)
     dialog.show()
+    return dialog
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -203,9 +230,18 @@ def show_serial_monitor(parent, is_dark=False):
     table = QTableWidget()
     table.setColumnCount(6)
     table.setHorizontalHeaderLabels(["序号", "端口", "描述", "硬件ID", "制造商", "VID/PID"])
-    table.setColumnWidth(0, 44)
+    table.setColumnWidth(0, 54)
     table.verticalHeader().setVisible(False)
-    table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(0, QHeaderView.Fixed)
+    header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+    header.setSectionResizeMode(2, QHeaderView.Stretch)
+    header.setSectionResizeMode(3, QHeaderView.Fixed)
+    table.setColumnWidth(3, 88)
+    header.setSectionResizeMode(4, QHeaderView.Fixed)
+    table.setColumnWidth(4, 100)
+    header.setSectionResizeMode(5, QHeaderView.Fixed)
+    table.setColumnWidth(5, 140)
     table.setEditTriggers(QAbstractItemView.NoEditTriggers)
     table.setSelectionBehavior(QAbstractItemView.SelectRows)
     layout.addWidget(table)
@@ -217,13 +253,13 @@ def show_serial_monitor(parent, is_dark=False):
             ports = list_ports.comports()
             table.setRowCount(len(ports))
             for i, p in enumerate(ports):
-                table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
-                table.setItem(i, 1, QTableWidgetItem(p.device))
-                table.setItem(i, 2, QTableWidgetItem(p.description))
-                table.setItem(i, 3, QTableWidgetItem(p.hwid))
-                table.setItem(i, 4, QTableWidgetItem(p.manufacturer or "—"))
                 vid_pid = f"{p.vid:04X}:{p.pid:04X}" if p.vid and p.pid else "—"
-                table.setItem(i, 5, QTableWidgetItem(vid_pid))
+                values = [str(i + 1), p.device, p.description, p.hwid,
+                          p.manufacturer or "—", vid_pid]
+                for column, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    item.setToolTip(value)
+                    table.setItem(i, column, item)
         except Exception as e:
             QMessageBox.warning(dialog, "错误", f"枚举串口失败: {e}")
 
@@ -243,6 +279,7 @@ def show_serial_monitor(parent, is_dark=False):
     apply_dialog_theme(dialog, is_dark)
     dialog.setAttribute(Qt.WA_DeleteOnClose)
     dialog.show()
+    return dialog
 
 
 # ═══════════════════════════════════════════════════════════════

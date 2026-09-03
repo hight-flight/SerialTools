@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QMessageBox, QTableWidget, QTableWidgetItem,
                              QHeaderView, QAbstractItemView, QGroupBox,
                              QFrame, QSizePolicy, QCheckBox, QTabWidget,
-                             QWidget, QScrollArea)
+                             QWidget, QScrollArea, QApplication)
 from PyQt5.QtCore import Qt, QTimer, QMutexLocker
 from PyQt5.QtGui import QFont, QTextCursor, QColor
 
@@ -42,7 +42,10 @@ class GSMDebuggerDialog(QDialog):
 
     def _init_ui(self):
         self.setWindowTitle("GSM 调试助手")
-        self.resize(760, 620)
+        screen = self.parentWidget().screen() if self.parentWidget() else QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        self.resize(min(760, available.width()) if available else 760,
+                    min(620, available.height()) if available else 620)
         self.setMinimumSize(560, 460)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
@@ -108,28 +111,28 @@ class GSMDebuggerDialog(QDialog):
         self.lbl_signal = QLabel("信号强度: —")
         self.lbl_signal.setFont(QFont("Consolas", 9))
         self.lbl_signal.setFrameStyle(QFrame.Panel | QFrame.Sunken)
-        self.lbl_signal.setMinimumWidth(120)
+        self.lbl_signal.setMinimumWidth(82)
         self.lbl_signal.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.lbl_signal)
 
         self.lbl_sim = QLabel("SIM状态: —")
         self.lbl_sim.setFont(QFont("Consolas", 9))
         self.lbl_sim.setFrameStyle(QFrame.Panel | QFrame.Sunken)
-        self.lbl_sim.setMinimumWidth(100)
+        self.lbl_sim.setMinimumWidth(76)
         self.lbl_sim.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.lbl_sim)
 
         self.lbl_network = QLabel("网络状态: —")
         self.lbl_network.setFont(QFont("Consolas", 9))
         self.lbl_network.setFrameStyle(QFrame.Panel | QFrame.Sunken)
-        self.lbl_network.setMinimumWidth(120)
+        self.lbl_network.setMinimumWidth(90)
         self.lbl_network.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.lbl_network)
 
         self.lbl_operator = QLabel("运营商: —")
         self.lbl_operator.setFont(QFont("Consolas", 9))
         self.lbl_operator.setFrameStyle(QFrame.Panel | QFrame.Sunken)
-        self.lbl_operator.setMinimumWidth(120)
+        self.lbl_operator.setMinimumWidth(90)
         self.lbl_operator.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.lbl_operator)
 
@@ -323,7 +326,12 @@ class GSMDebuggerDialog(QDialog):
         self.table_sms = QTableWidget()
         self.table_sms.setColumnCount(5)
         self.table_sms.setHorizontalHeaderLabels(["序号", "号码", "时间", "状态", "内容"])
-        self.table_sms.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        sms_header = self.table_sms.horizontalHeader()
+        sms_header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        sms_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        sms_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        sms_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        sms_header.setSectionResizeMode(4, QHeaderView.Stretch)
         self.table_sms.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table_sms.setMinimumHeight(80)
         self._show_sms_empty_state()
@@ -771,11 +779,11 @@ class GSMDebuggerDialog(QDialog):
                 self.table_sms.setRowCount(0)
         row = self.table_sms.rowCount()
         self.table_sms.insertRow(row)
-        self.table_sms.setItem(row, 0, QTableWidgetItem(header['index']))
-        self.table_sms.setItem(row, 1, QTableWidgetItem(header['phone']))
-        self.table_sms.setItem(row, 2, QTableWidgetItem(header['date']))
-        self.table_sms.setItem(row, 3, QTableWidgetItem(header['status']))
-        self.table_sms.setItem(row, 4, QTableWidgetItem(content))
+        values = [header['index'], header['phone'], header['date'], header['status'], content]
+        for column, value in enumerate(values):
+            item = QTableWidgetItem(value)
+            item.setToolTip(value)
+            self.table_sms.setItem(row, column, item)
 
     def _on_sms_timeout(self):
         """模块在限定时间内未响应时终止当前短信事务。"""

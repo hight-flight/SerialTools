@@ -547,7 +547,10 @@ def build_pyinstaller_arguments(
     if upx_dir:
         args.extend(['--upx-dir', os.fspath(upx_dir)])
     if icon_path:
-        args.extend(['--icon', os.fspath(icon_path)])
+        icon_text = os.fspath(icon_path)
+        args.extend(['--icon', icon_text])
+        # 标题栏运行时也需要原始多分辨率 ICO，不能只写入 EXE 资源。
+        args.extend(['--add-data', f'{icon_text}{os.pathsep}.'])
     args.append(MAIN_SCRIPT)
     return args
 

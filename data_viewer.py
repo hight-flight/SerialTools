@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QTableView, QTreeView, QHeaderView, QAbstractItemView,
     QTableWidget, QTableWidgetItem, QPlainTextEdit,
     QStackedWidget, QMenu, QAction, QFileDialog, QInputDialog,
-    QColorDialog, QToolTip,
+    QColorDialog, QToolTip, QScrollArea,
 )
 from PyQt5.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QMutex, QMutexLocker,
@@ -116,6 +116,13 @@ CURVE_COLORS = [
     (0xD1, 0x9A, 0x66), (0xC6, 0x78, 0xDD), (0x56, 0xB6, 0xC2),
     (0xAB, 0xB2, 0xBF), (0xE5, 0xC0, 0x7B), (0xBE, 0x50, 0x46),
     (0x46, 0xBE, 0x8C), (0xBE, 0x46, 0xBE), (0x8C, 0xBE, 0x46),
+]
+
+LIGHT_CURVE_COLORS = [
+    (0, 103, 197), (20, 125, 100), (209, 47, 69),
+    (181, 71, 8), (123, 63, 178), (0, 112, 138),
+    (52, 65, 84), (138, 98, 0), (166, 45, 38),
+    (0, 119, 88), (151, 45, 151), (91, 125, 0),
 ]
 
 # JSON 类型着色配置: (r, g, b) 元组，在 dark/light 下复用
@@ -391,6 +398,10 @@ class JsonSyntaxHighlighter(QSyntaxHighlighter):
             (r'[:,]', _fmt(*gray_fg)),
         ]
 
+    def set_theme(self, is_dark: bool):
+        self._init_formats(is_dark)
+        self.rehighlight()
+
     def highlightBlock(self, text):
         for pattern, fmt in self.rules:
             for m in re.finditer(pattern, text):
@@ -654,6 +665,8 @@ class TrackChip(QWidget):
     """可关闭的彩色跟踪字段标签"""
     removed = pyqtSignal(object)       # 携带自身引用
     threshold_changed = pyqtSignal()
+    alias_changed = pyqtSignal(object)
+    color_changed = pyqtSignal(object)
 
     def __init__(self, path: str, color: tuple, alias: str = "", parent=None):
         super().__init__(parent)
@@ -668,14 +681,16 @@ class TrackChip(QWidget):
         layout.setSpacing(4)
 
         # 色标
-        dot = QLabel("●")
+        self.dot = QLabel("●")
         r, g, b = color
-        dot.setStyleSheet(f"color: rgb({r},{g},{b}); font-size: 12px;")
-        layout.addWidget(dot)
+        self.dot.setStyleSheet(f"color: rgb({r},{g},{b}); font-size: 12px;")
+        layout.addWidget(self.dot)
 
         # 标签文字
-        self.label = QLabel(self.alias)
+        self._display_prefix = "fx: " if path.startswith("__computed__") else ""
+        self.label = QLabel(self._display_prefix + self.alias)
         self.label.setFont(QFont("Consolas", 9))
+        self.label.setToolTip(path)
         layout.addWidget(self.label)
 
         # 关闭按钮
@@ -683,12 +698,15 @@ class TrackChip(QWidget):
         btn_close.setFixedSize(18, 18)
         btn_close.setFont(QFont("Arial", 9))
         btn_close.setStyleSheet("QPushButton { border: none; padding: 0; }")
+        btn_close.setAccessibleName(f"停止跟踪 {self.alias}")
+        btn_close.setToolTip(f"停止跟踪 {self.alias}")
         btn_close.clicked.connect(lambda: self.removed.emit(self))
         layout.addWidget(btn_close)
 
     def set_alias(self, alias: str):
         self.alias = alias
-        self.label.setText(alias)
+        self.label.setText(self._display_prefix + alias)
+        self.alias_changed.emit(self)
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -722,7 +740,8 @@ class TrackChip(QWidget):
             c = QColorDialog.getColor(QColor(*self.color), self)
             if c.isValid():
                 self.color = (c.red(), c.green(), c.blue())
-                dot.setStyleSheet(f"color: rgb({self.color[0]},{self.color[1]},{self.color[2]}); font-size: 12px;")
+                self.dot.setStyleSheet(f"color: rgb({self.color[0]},{self.color[1]},{self.color[2]}); font-size: 12px;")
+                self.color_changed.emit(self)
 
 
 # ──────────────────────────────────────────────
@@ -736,14 +755,14 @@ class ChartTrackerWidget(QWidget):
 
     def __init__(self, parent=None, is_dark=True):
         super().__init__(parent)
+        self._is_dark = is_dark
+        self._paused = False
+        self._tracked: dict[str, dict] = {}
         if not HAS_PYQTGRAPH:
             layout = QVBoxLayout(self)
             layout.addWidget(QLabel("⚠ 需要安装 pyqtgraph 和 numpy 以启用图表功能"))
             return
 
-        self._is_dark = is_dark
-        self._paused = False
-        self._tracked: dict[str, dict] = {}  # path -> {chip, curve, buffer, viewbox, ...}
         self._color_idx = 0
 
         # Feature 2: 告警状态
@@ -762,6 +781,13 @@ class ChartTrackerWidget(QWidget):
 
         # ── 字段标签栏 ──
         chips_wrapper = QWidget()
+        chips_scroll = QScrollArea()
+        chips_scroll.setWidgetResizable(True)
+        chips_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        chips_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        chips_scroll.setFrameShape(QFrame.NoFrame)
+        chips_scroll.setMaximumHeight(44)
+        chips_scroll.setWidget(chips_wrapper)
         self.chips_layout = QHBoxLayout(chips_wrapper)
         self.chips_layout.setContentsMargins(4, 2, 4, 2)
         self.chips_layout.setSpacing(4)
@@ -775,7 +801,7 @@ class ChartTrackerWidget(QWidget):
         self.chips_layout.addWidget(self.edit_add_field)
         self.chips_layout.addStretch()
 
-        layout.addWidget(chips_wrapper)
+        layout.addWidget(chips_scroll)
 
         # ── 绘图区 ──
         t = _VIEWER_TOKENS['dark' if is_dark else 'light']
@@ -825,8 +851,9 @@ class ChartTrackerWidget(QWidget):
         self.regression_line.hide()
 
         # 十字准线和值提示
-        self.crosshair_v = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(color=(0xFF, 0xFF, 0xFF, 80)))
-        self.crosshair_h = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen(color=(0xFF, 0xFF, 0xFF, 80)))
+        crosshair_color = (0xFF, 0xFF, 0xFF, 100) if is_dark else (0x1D, 0x29, 0x39, 110)
+        self.crosshair_v = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(color=crosshair_color))
+        self.crosshair_h = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen(color=crosshair_color))
         self.plot_widget.addItem(self.crosshair_v, ignoreBounds=True)
         self.plot_widget.addItem(self.crosshair_h, ignoreBounds=True)
         self.crosshair_v.hide()
@@ -853,7 +880,9 @@ class ChartTrackerWidget(QWidget):
         self.plot_widget.installEventFilter(self)
 
         # ── 控制按钮行 ──
-        btn_row = QHBoxLayout()
+        btn_wrapper = QWidget()
+        btn_row = QHBoxLayout(btn_wrapper)
+        btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.setSpacing(4)
 
         self.btn_pause = QPushButton("暂停")
@@ -930,18 +959,28 @@ class ChartTrackerWidget(QWidget):
         self.btn_toggle_table.clicked.connect(self.toggle_data_table_requested.emit)
         btn_row.addWidget(self.btn_toggle_table)
 
-        btn_png = QPushButton("导出 PNG")
-        btn_png.setFont(QFont("Microsoft YaHei", 9))
-        btn_png.clicked.connect(self._export_png)
-        btn_row.addWidget(btn_png)
+        self.btn_export_png = QPushButton("导出 PNG")
+        self.btn_export_png.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_export_png.setEnabled(False)
+        self.btn_export_png.clicked.connect(self._export_png)
+        btn_row.addWidget(self.btn_export_png)
 
-        btn_csv = QPushButton("导出 CSV")
-        btn_csv.setFont(QFont("Microsoft YaHei", 9))
-        btn_csv.clicked.connect(self._export_csv)
-        btn_row.addWidget(btn_csv)
+        self.btn_export_csv = QPushButton("导出 CSV")
+        self.btn_export_csv.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_export_csv.setEnabled(False)
+        self.btn_export_csv.clicked.connect(self._export_csv)
+        btn_row.addWidget(self.btn_export_csv)
 
         btn_row.addStretch()
-        layout.addLayout(btn_row)
+        btn_wrapper.adjustSize()
+        btn_scroll = QScrollArea()
+        btn_scroll.setWidgetResizable(False)
+        btn_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        btn_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        btn_scroll.setFrameShape(QFrame.NoFrame)
+        btn_scroll.setMaximumHeight(46)
+        btn_scroll.setWidget(btn_wrapper)
+        layout.addWidget(btn_scroll)
 
         # ── 刷新定时器（有跟踪字段时才启动）──
         self.refresh_timer = QTimer(self)
@@ -963,6 +1002,9 @@ class ChartTrackerWidget(QWidget):
         self.plot_widget.setBackground(t['chart_bg'])
         text_color_rgb = (0xAB, 0xB2, 0xBF) if is_dark else (0x66, 0x66, 0x66)
         self.empty_text.setColor(text_color_rgb)
+        crosshair_color = (0xFF, 0xFF, 0xFF, 100) if is_dark else (0x1D, 0x29, 0x39, 110)
+        self.crosshair_v.setPen(pg.mkPen(color=crosshair_color))
+        self.crosshair_h.setPen(pg.mkPen(color=crosshair_color))
         # 统计浮层主题
         if is_dark:
             self.stats_overlay.setStyleSheet(
@@ -991,15 +1033,18 @@ class ChartTrackerWidget(QWidget):
         if path in self._tracked:
             return False
 
-        color = CURVE_COLORS[self._color_idx % len(CURVE_COLORS)]
+        palette = CURVE_COLORS if self._is_dark else LIGHT_CURVE_COLORS
+        color = palette[self._color_idx % len(palette)]
         self._color_idx += 1
 
         display_name = alias or path
         # 计算字段在 chip 标签上显示 fx 前缀
         chip_label = f"fx: {display_name}" if is_computed else display_name
-        chip = TrackChip(path, color, chip_label)
+        chip = TrackChip(path, color, display_name)
         chip.removed.connect(self._on_chip_removed)
         chip.threshold_changed.connect(self._update_threshold_lines)
+        chip.alias_changed.connect(self._on_chip_alias_changed)
+        chip.color_changed.connect(self._on_chip_color_changed)
 
         # 插入到输入框之前
         self.chips_layout.insertWidget(self.chips_layout.count() - 2, chip)
@@ -1023,6 +1068,8 @@ class ChartTrackerWidget(QWidget):
         }
 
         self.empty_text.setVisible(False)
+        self.btn_export_png.setEnabled(True)
+        self.btn_export_csv.setEnabled(True)
         # 有字段了，启动刷新定时器
         if not self.refresh_timer.isActive():
             self.refresh_timer.start()
@@ -1049,6 +1096,8 @@ class ChartTrackerWidget(QWidget):
             del self._alerts[path]
         if not self._tracked:
             self.empty_text.setVisible(True)
+            self.btn_export_png.setEnabled(False)
+            self.btn_export_csv.setEnabled(False)
             self.refresh_timer.stop()  # 无字段，停止刷新省资源
         # Feature 5: 更新散点图下拉框 + 散点项
         self._update_scatter_combos()
@@ -1188,11 +1237,16 @@ class ChartTrackerWidget(QWidget):
             if not stats:
                 continue
             line = (
-                f"{alias[:6]:6s} {stats['current']:>7.2f} "
+                f"{alias[:16]:16s} {stats['current']:>7.2f} "
                 f"[{stats['min']:.1f}~{stats['max']:.1f}] "
                 f"avg {stats['mean']:.2f}"
             )
             lines.append(line)
+            if len(lines) == 8:
+                remaining = sum(1 for item in self._tracked.values() if item.get('buffer')) - 8
+                if remaining > 0:
+                    lines.append(f"… 另有 {remaining} 个字段")
+                break
         if lines:
             self.stats_overlay.setText('\n'.join(lines))
             self.stats_overlay.adjustSize()
@@ -1484,6 +1538,28 @@ class ChartTrackerWidget(QWidget):
             except Exception:
                 pass
 
+    def _on_chip_alias_changed(self, chip):
+        entry = self._tracked.get(chip.path)
+        if not entry:
+            return
+        entry['alias'] = chip.alias
+        if hasattr(entry['curve'], 'setName'):
+            entry['curve'].setName(chip.alias)
+        self._update_scatter_combos()
+
+    def _on_chip_color_changed(self, chip):
+        entry = self._tracked.get(chip.path)
+        if not entry:
+            return
+        entry['color'] = chip.color
+        style = Qt.DashLine if entry.get('is_computed') else Qt.SolidLine
+        entry['curve'].setPen(pg.mkPen(color=chip.color, width=1.5, style=style))
+        self._update_threshold_lines()
+        if chip.path in self._scatter_items:
+            self.plot_widget.removeItem(self._scatter_items.pop(chip.path))
+        if self._chart_mode == 'scatter':
+            self._ensure_scatter_items()
+
     def _on_chip_removed(self, chip):
         self.remove_field(chip.path)
 
@@ -1556,40 +1632,37 @@ class ChartTrackerWidget(QWidget):
     # --- 导出 ---
     def _export_png(self):
         path, _ = QFileDialog.getSaveFileName(self, "导出 PNG", "chart_export.png", "PNG (*.png)")
-        if path:
+        if not path:
+            return
+        try:
             pix = self.plot_widget.grab()
-            pix.save(path, 'PNG')
+            if not pix.save(path, 'PNG'):
+                raise OSError("图像编码或写入失败")
+        except OSError as exc:
+            QMessageBox.warning(self, "导出失败", f"无法写入 PNG：\n{exc}")
 
     def _export_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "导出 CSV", "track_data.csv", "CSV (*.csv)")
         if not path:
             return
         import csv
-        with open(path, 'w', newline='', encoding='utf-8-sig') as f:
-            w = csv.writer(f)
-            # 构建所有字段的时间序列
-            all_x = set()
-            for entry in self._tracked.values():
-                for p in entry['buffer']:
-                    all_x.add(p[0])
-            all_x = sorted(all_x)
+        try:
+            with open(path, 'w', newline='', encoding='utf-8-sig') as f:
+                w = csv.writer(f)
+                all_x = sorted({point[0] for entry in self._tracked.values()
+                                for point in entry['buffer']})
+                headers = ['index'] + [entry['alias'] for entry in self._tracked.values()]
+                w.writerow(headers)
+                data_maps = {
+                    field_path: {point[0]: point[1] for point in entry['buffer']}
+                    for field_path, entry in self._tracked.items()
+                }
+                paths = list(self._tracked.keys())
+                for x in all_x:
+                    w.writerow([x] + [data_maps[field_path].get(x, '') for field_path in paths])
+        except OSError as exc:
+            QMessageBox.warning(self, "导出失败", f"无法写入 CSV：\n{exc}")
 
-            headers = ['index'] + [e['alias'] for e in self._tracked.values()]
-            w.writerow(headers)
-
-            # 构建 x -> values map
-            data_maps = {}
-            for path, entry in self._tracked.items():
-                data_maps[path] = {p[0]: p[1] for p in entry['buffer']}
-
-            paths = list(self._tracked.keys())
-            for x in all_x:
-                row = [x]
-                for p in paths:
-                    row.append(data_maps[p].get(x, ''))
-                w.writerow(row)
-
-    # --- 拖放支持（ChartTrackerWidget + PlotWidget 事件过滤器）---
     def dragEnterEvent(self, event):
         if event.mimeData().hasFormat('application/x-json-path'):
             event.acceptProposedAction()
@@ -1689,7 +1762,7 @@ class StatsPanelWidget(QWidget):
         """)
 
     def refresh(self):
-        tracked = self._chart_tracker._tracked
+        tracked = getattr(self._chart_tracker, '_tracked', {})
         if not tracked:
             self.lbl_hint.show()
             self.table.setRowCount(0)
@@ -1819,7 +1892,7 @@ class DataTableWidget(QWidget):
         """)
 
     def refresh(self):
-        tracked = self._chart_tracker._tracked
+        tracked = getattr(self._chart_tracker, '_tracked', {})
         if not tracked:
             self.table.setRowCount(1)
             self.table.setColumnCount(1)
@@ -1844,12 +1917,21 @@ class DataTableWidget(QWidget):
             buf = tracked[path].get('buffer', deque())
             field_maps[path] = {p[0]: p[1] for p in buf}
 
-        self.table.setColumnCount(len(col_paths))
-        self.table.setHorizontalHeaderLabels(col_aliases)
+        self.table.setColumnCount(len(col_paths) + 1)
+        headers = ["采样"] + col_aliases
+        self.table.setHorizontalHeaderLabels(headers)
+        for column, label in enumerate(headers):
+            header_item = self.table.horizontalHeaderItem(column)
+            if header_item is not None:
+                header_item.setToolTip(label)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.setRowCount(len(recent_x))
 
         for r, x in enumerate(recent_x):
-            for c, path in enumerate(col_paths):
+            index_item = QTableWidgetItem(str(x))
+            index_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(r, 0, index_item)
+            for c, path in enumerate(col_paths, start=1):
                 val = field_maps[path].get(x, None)
                 text = f"{val:.4f}" if val is not None else "—"
                 item = QTableWidgetItem(text)
@@ -2049,6 +2131,14 @@ class DetailViewerWidget(QWidget):
         if obj is None:
             return
 
+        def _display_item(value, limit=200):
+            full_text = str(value)
+            display_text = full_text if len(full_text) <= limit else full_text[:limit - 1] + '…'
+            item = QTableWidgetItem(display_text)
+            if display_text != full_text:
+                item.setToolTip(full_text)
+            return item
+
         if isinstance(obj, list) and len(obj) > 0 and all(isinstance(x, dict) for x in obj):
             # 数组对象展平
             flat = [_flatten_dict(item) for item in obj]
@@ -2064,7 +2154,7 @@ class DetailViewerWidget(QWidget):
             for r, item in enumerate(flat):
                 for c, key in enumerate(all_keys):
                     val = item.get(key, "")
-                    self.table_view.setItem(r, c, QTableWidgetItem(str(val)))
+                    self.table_view.setItem(r, c, _display_item(val))
         elif isinstance(obj, dict):
             # 单对象：键值对表格
             self.table_view.setColumnCount(2)
@@ -2072,11 +2162,11 @@ class DetailViewerWidget(QWidget):
             items = list(obj.items())
             self.table_view.setRowCount(len(items))
             for r, (k, v) in enumerate(items):
-                self.table_view.setItem(r, 0, QTableWidgetItem(str(k)))
+                self.table_view.setItem(r, 0, _display_item(k))
                 if isinstance(v, (dict, list)):
-                    self.table_view.setItem(r, 1, QTableWidgetItem(json.dumps(v, ensure_ascii=False)[:200]))
+                    self.table_view.setItem(r, 1, _display_item(json.dumps(v, ensure_ascii=False)))
                 else:
-                    self.table_view.setItem(r, 1, QTableWidgetItem(str(v)))
+                    self.table_view.setItem(r, 1, _display_item(v))
 
     # --- 视图切换 ---
     def _on_view_changed(self, idx):
@@ -2167,7 +2257,7 @@ class DetailViewerWidget(QWidget):
     def set_theme(self, is_dark: bool):
         """响应主题切换"""
         # 更新语法高亮
-        self.highlighter._init_formats(is_dark)
+        self.highlighter.set_theme(is_dark)
         # 更新原始文本视图背景
         t = _VIEWER_TOKENS['dark' if is_dark else 'light']
         self.raw_view.setStyleSheet(
@@ -2793,8 +2883,12 @@ class ProtocolEditorDialog(QDialog):
             ]
 
         self.setWindowTitle("二进制协议编辑器")
-        self.resize(800, 600)
-        self.setMinimumSize(700, 500)
+        screen = self.parentWidget().screen() if self.parentWidget() else QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        self.resize(min(800, available.width()) if available else 800,
+                    min(600, available.height()) if available else 600)
+        self.setMinimumSize(min(700, available.width()) if available else 700,
+                            min(500, available.height()) if available else 500)
         self.setWindowFlags(
             Qt.Window | Qt.WindowMinimizeButtonHint |
             Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint
@@ -2908,6 +3002,7 @@ class ProtocolEditorDialog(QDialog):
         self.fields_table.horizontalHeader().setStretchLastSection(True)
         self.fields_table.setEditTriggers(QAbstractItemView.AllEditTriggers)
         self.fields_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.fields_table.itemChanged.connect(self._validate_field_cell)
         # 设置合理列宽，避免类型下拉框被截断
         self.fields_table.setColumnWidth(0, 100)   # 名称
         self.fields_table.setColumnWidth(1, 110)   # 类型（uint16_le 等长文本）
@@ -2948,6 +3043,8 @@ class ProtocolEditorDialog(QDialog):
         self.lbl_preview = QLabel("解析结果: —")
         self.lbl_preview.setFont(QFont("Consolas", 9))
         self.lbl_preview.setWordWrap(True)
+        self.lbl_preview.setMaximumHeight(64)
+        self.lbl_preview.setTextInteractionFlags(Qt.TextSelectableByMouse)
         preview_layout.addWidget(self.lbl_preview)
         layout.addWidget(preview_group)
 
@@ -3074,6 +3171,37 @@ class ProtocolEditorDialog(QDialog):
         for r in sorted(rows, reverse=True):
             self.fields_table.removeRow(r)
 
+    def _validate_field_cell(self, item):
+        """即时标记无效的偏移、缩放和位域数值。"""
+        column = item.column()
+        if column not in (2, 3, 5, 6):
+            return
+        text = item.text().strip()
+        valid = True
+        try:
+            if column == 3:
+                float(text)
+            else:
+                value = int(text)
+                if column == 2:
+                    valid = value >= 0
+                elif column == 5:
+                    valid = 0 <= value <= 7
+                else:
+                    valid = 0 <= value <= 64
+        except ValueError:
+            valid = False
+        self.fields_table.blockSignals(True)
+        try:
+            if valid:
+                item.setBackground(QColor(0, 0, 0, 0))
+                item.setToolTip("")
+            else:
+                item.setBackground(QColor('#5C2B31' if self._is_dark else '#FDE7EA'))
+                item.setToolTip("请输入有效数值：偏移≥0、位偏移 0–7、位宽 0–64")
+        finally:
+            self.fields_table.blockSignals(False)
+
     def _collect_fields(self) -> list[ProtoField]:
         """从表格收集字段定义"""
         fields = []
@@ -3142,7 +3270,9 @@ class ProtocolEditorDialog(QDialog):
                 if k.startswith('_'):
                     continue
                 preview[k] = v
-            self.lbl_preview.setText(f"解析结果: {json.dumps(preview, ensure_ascii=False)}")
+            preview_text = f"解析结果: {json.dumps(preview, ensure_ascii=False)}"
+            self.lbl_preview.setText(preview_text)
+            self.lbl_preview.setToolTip(preview_text)
         else:
             self.lbl_preview.setText("解析结果: 无字段定义")
 
@@ -3211,7 +3341,7 @@ class JsonViewerDialog(QDialog):
                 pass
 
         self.setWindowTitle("数据分析面板")
-        screen = QApplication.primaryScreen()
+        screen = self.parentWidget().screen() if self.parentWidget() else QApplication.primaryScreen()
         available = screen.availableGeometry() if screen else None
         width = min(1200, available.width()) if available else 1200
         height = min(800, available.height()) if available else 800
@@ -3277,6 +3407,7 @@ class JsonViewerDialog(QDialog):
         self.combo_filter_mode.addItems(["所有行尝试解析", "提取 JSON 对象", "自定义正则", "二进制协议解析"])
         self.combo_filter_mode.setFont(QFont("Microsoft YaHei", 9))
         self.combo_filter_mode.setToolTip("选择数据解析策略")
+        flt_label.setBuddy(self.combo_filter_mode)
         self.combo_filter_mode.currentIndexChanged.connect(self._on_filter_mode_changed)
         ctrl_layout.addWidget(self.combo_filter_mode)
 
@@ -3360,6 +3491,7 @@ class JsonViewerDialog(QDialog):
 
         # ──── 主分割器（左右） ────
         self.splitter_h = QSplitter(Qt.Horizontal)
+        self.splitter_h.setChildrenCollapsible(False)
 
         # 左侧面板：状态指示 + 捕获列表（状态仅在左侧，不占用右侧空间）
         left_panel = QWidget()
@@ -3390,6 +3522,7 @@ class JsonViewerDialog(QDialog):
 
         # 右侧：垂直分割器（详情 + 图表 + 数据表格）
         self.splitter_v = QSplitter(Qt.Vertical)
+        self.splitter_v.setChildrenCollapsible(False)
 
         self.chart_tracker = ChartTrackerWidget(is_dark=self._is_dark)
         self.detail_viewer = DetailViewerWidget(chart_tracker=self.chart_tracker)
@@ -3403,6 +3536,8 @@ class JsonViewerDialog(QDialog):
 
         # 图表+数据表格 嵌套分割器
         self.chart_data_splitter = QSplitter(Qt.Vertical)
+        self.chart_data_splitter.setChildrenCollapsible(False)
+        self._data_table_sizes = [280, 150]
         self.chart_data_splitter.addWidget(self.chart_tracker)
         self.chart_data_splitter.addWidget(self.data_table)
         self.chart_data_splitter.setSizes([350, 0])  # 初始隐藏数据表格
@@ -3586,14 +3721,16 @@ class JsonViewerDialog(QDialog):
         """切换数据表格显示/隐藏"""
         btn = self.chart_tracker.btn_toggle_table
         if self.data_table.isVisible():
+            sizes = self.chart_data_splitter.sizes()
+            if len(sizes) == 2 and sizes[1] > 0:
+                self._data_table_sizes = sizes
             self.data_table.setVisible(False)
             btn.setText("⊞ 数据表")
-            self.chart_data_splitter.setSizes([350, 0])
         else:
             self.data_table.setVisible(True)
             self.data_table.refresh()
             btn.setText("⊟ 数据表")
-            self.chart_data_splitter.setSizes([280, 150])
+            self.chart_data_splitter.setSizes(self._data_table_sizes)
 
     def _on_alert_changed(self, active: bool):
         """Feature 2: 告警状态变化时更新状态栏"""
@@ -3878,7 +4015,7 @@ class JsonViewerDialog(QDialog):
             tracked = self.chart_tracker._tracked
             ini['tracks'] = {
                 'paths': json.dumps(list(tracked.keys())),
-                'aliases': json.dumps({p: e['chip'].alias for p, e in tracked.items()}),
+                'aliases': json.dumps({p: e.get('alias', p) for p, e in tracked.items()}),
                 'is_computed': json.dumps({p: e.get('is_computed', False) for p, e in tracked.items()}),
                 'expressions': json.dumps({p: e.get('expression', '') for p, e in tracked.items()}),
             }
@@ -3946,14 +4083,20 @@ class JsonViewerDialog(QDialog):
             self.edit_search.setFocus(Qt.ShortcutFocusReason)
             self.edit_search.selectAll()
             return
-        if event.key() == Qt.Key_Delete and event.modifiers() == Qt.NoModifier:
+        focus = QApplication.focusWidget()
+        if (event.key() == Qt.Key_Delete and event.modifiers() == Qt.NoModifier
+                and focus is self.capture_list.table):
             self.capture_list.remove_selected()
             return
-        if event.key() == Qt.Key_Space and event.modifiers() == Qt.NoModifier:
-            focus = QApplication.focusWidget()
-            if not isinstance(focus, (QLineEdit, QPlainTextEdit)):
-                self.chart_tracker.btn_pause.click()
-                return
+        chart_focus_widgets = {
+            self.capture_list.table,
+            self.chart_tracker,
+            getattr(self.chart_tracker, 'plot_widget', None),
+        }
+        if (event.key() == Qt.Key_Space and event.modifiers() == Qt.NoModifier
+                and focus in chart_focus_widgets):
+            self.chart_tracker.btn_pause.click()
+            return
         super().keyPressEvent(event)
 
     # --- 生命周期 ---

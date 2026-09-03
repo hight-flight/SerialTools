@@ -1,4 +1,5 @@
 import json
+import inspect
 import os
 import tempfile
 import unittest
@@ -15,7 +16,11 @@ from PyQt5.QtWidgets import QApplication, QHeaderView, QWidget
 from PyQt5.QtWidgets import QMessageBox
 
 from app_paths import AppPaths
-from data_viewer import CaptureListWidget, CaptureTableModel, JsonCaptureThread, JsonViewerDialog
+import data_viewer
+from data_viewer import (
+    CaptureListWidget, CaptureTableModel, ChartTrackerWidget,
+    JsonCaptureThread, JsonViewerDialog, JsonSyntaxHighlighter, TrackChip,
+)
 
 
 class _DialogParent(QWidget):
@@ -163,6 +168,7 @@ class DataViewerTests(unittest.TestCase):
 
         QTest.keyClick(dialog, Qt.Key_F, Qt.ControlModifier)
         self.assertTrue(dialog.edit_search.hasFocus())
+        dialog.capture_list.table.setFocus()
         QTest.keyClick(dialog, Qt.Key_Delete)
         self.assertEqual(dialog.capture_list.model.total_count, 0)
         dialog.capture_list.table.setFocus()
@@ -176,6 +182,102 @@ class DataViewerTests(unittest.TestCase):
         self.assertFalse(dialog.btn_clear.isEnabled())
         self.assertTrue(dialog.edit_search.accessibleName())
         self.assertTrue(dialog.capture_list.table.accessibleName())
+
+    def test图表依赖缺失时统计面板仍可安全刷新(self):
+        with mock.patch.object(data_viewer, "HAS_PYQTGRAPH", False):
+            tracker = ChartTrackerWidget()
+            self.addCleanup(tracker.close)
+            self.assertEqual(tracker._tracked, {})
+
+    def test跟踪标签别名和颜色修改会回写图表状态(self):
+        source = inspect.getsource(TrackChip)
+        self.assertIn("self.dot", source)
+        self.assertIn("alias_changed", source)
+        self.assertIn("color_changed", source)
+
+    def test计算字段别名持久化不累加_fx前缀(self):
+        dialog = self._dialog()
+        dialog.chart_tracker.add_field(
+            "__computed__test", alias="温度差", is_computed=True, expression="a-b"
+        )
+        dialog._save_layout()
+
+        import configparser
+        ini = configparser.ConfigParser()
+        ini.read(dialog._ini_file, encoding="utf-8")
+        aliases = json.loads(ini["tracks"]["aliases"])
+        self.assertEqual(aliases["__computed__test"], "温度差")
+
+    def test删除和空格快捷键不抢占可交互控件(self):
+        dialog = self._dialog()
+        dialog.show()
+        dialog.capture_list.append_items([{
+            "seq": 1, "timestamp": "00:00:00.000", "summary": "one",
+            "length": 3, "raw": "one", "obj": None, "parse_error": True,
+        }])
+        checkbox = dialog.data_table.check_autoscroll
+        checkbox.setFocus()
+        self.app.processEvents()
+
+        QTest.keyClick(checkbox, Qt.Key_Delete)
+        self.assertEqual(dialog.capture_list.model.total_count, 1)
+        QTest.keyClick(checkbox, Qt.Key_Space)
+        self.assertFalse(dialog.chart_tracker._paused)
+
+    def test语法高亮切换主题后立即重新着色(self):
+        source = inspect.getsource(JsonSyntaxHighlighter)
+        self.assertIn("def set_theme", source)
+        self.assertIn("self.rehighlight()", source)
+
+    def test实时数据表包含采样序号列(self):
+        source = inspect.getsource(data_viewer.DataTableWidget.refresh)
+        self.assertIn('["采样"] + col_aliases', source)
+        self.assertIn("QTableWidgetItem(str(x))", source)
+        self.assertIn("horizontalHeaderItem", source)
+
+    def test图表工具栏在窄窗口可横向滚动(self):
+        source = inspect.getsource(data_viewer.ChartTrackerWidget.__init__)
+        self.assertIn("btn_scroll", source)
+        self.assertIn("ScrollBarAsNeeded", source)
+
+    def test无跟踪字段时禁用图表导出(self):
+        if not data_viewer.HAS_PYQTGRAPH:
+            self.skipTest("pyqtgraph 不可用")
+        tracker = ChartTrackerWidget()
+        self.addCleanup(tracker.close)
+
+        self.assertTrue(hasattr(tracker, "btn_export_png"))
+        self.assertTrue(hasattr(tracker, "btn_export_csv"))
+        self.assertFalse(tracker.btn_export_png.isEnabled())
+        self.assertFalse(tracker.btn_export_csv.isEnabled())
+
+        self.assertTrue(tracker.add_field("temperature"))
+        self.assertTrue(tracker.btn_export_png.isEnabled())
+        self.assertTrue(tracker.btn_export_csv.isEnabled())
+
+        tracker.remove_field("temperature")
+        self.assertFalse(tracker.btn_export_png.isEnabled())
+        self.assertFalse(tracker.btn_export_csv.isEnabled())
+
+    def test详情表格截断长值时保留完整提示(self):
+        source = inspect.getsource(data_viewer.DetailViewerWidget._build_table)
+        self.assertIn("setToolTip", source)
+        self.assertIn("+ '…'", source)
+
+    def test协议编辑器适配当前屏幕并校验数值单元格(self):
+        init_source = inspect.getsource(data_viewer.ProtocolEditorDialog.__init__)
+        ui_source = inspect.getsource(data_viewer.ProtocolEditorDialog._init_ui)
+        self.assertIn("availableGeometry", init_source)
+        self.assertIn("_validate_field_cell", ui_source)
+        self.assertIn("setMaximumHeight", ui_source)
+
+    def test图表导出会报告写入失败(self):
+        for exporter in (
+            data_viewer.ChartTrackerWidget._export_png,
+            data_viewer.ChartTrackerWidget._export_csv,
+        ):
+            source = inspect.getsource(exporter)
+            self.assertIn("QMessageBox.warning", source)
 
     def test数据分析面板每次打开时位于主窗口中央(self):
         self.parent.setGeometry(QRect(120, 80, 560, 420))
