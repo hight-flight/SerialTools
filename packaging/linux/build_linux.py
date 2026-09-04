@@ -10,6 +10,7 @@ import os
 import platform
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -69,6 +70,8 @@ def pyinstaller_arguments(
         linux_path(spec_dir),
         "--add-data",
         f"{linux_path(project_root / '图标.png')}:.",
+        "--add-data",
+        f"{linux_path(project_root / '图标.ico')}:.",
         "--hidden-import",
         "pyqtgraph",
         "--hidden-import",
@@ -102,6 +105,34 @@ Recommends: fonts-noto-cjk
 Description: 串口、UDP 和 TCP 调试工具
  SerialTool 是基于 PyQt5 的多协议通信与数据分析桌面工具。
 """
+
+
+def _largest_png_from_ico(icon_path: Path) -> bytes:
+    """从 ICO 中提取面积最大的内置 PNG，供 Linux 图标主题使用。"""
+    content = Path(icon_path).read_bytes()
+    if len(content) < 6:
+        raise ValueError("ICO 文件头不完整")
+    reserved, icon_type, count = struct.unpack_from("<HHH", content)
+    if reserved != 0 or icon_type != 1 or count < 1:
+        raise ValueError("不是有效的 ICO 文件")
+
+    candidates = []
+    for index in range(count):
+        entry_offset = 6 + index * 16
+        if entry_offset + 16 > len(content):
+            raise ValueError("ICO 目录不完整")
+        width, height, _, _, _, _, size, offset = struct.unpack_from(
+            "<BBBBHHII", content, entry_offset
+        )
+        width = width or 256
+        height = height or 256
+        if offset + size <= len(content):
+            image = content[offset:offset + size]
+            if image.startswith(b"\x89PNG\r\n\x1a\n"):
+                candidates.append((width * height, image))
+    if not candidates:
+        raise ValueError("ICO 中不包含 PNG 图像")
+    return max(candidates, key=lambda item: item[0])[1]
 
 
 def create_debian_layout(
@@ -164,7 +195,10 @@ def create_debian_layout(
         / "serialtool.png"
     )
     icon_target.parent.mkdir(parents=True)
-    shutil.copy2(icon_path, icon_target)
+    if icon_path.suffix.lower() == ".ico":
+        icon_target.write_bytes(_largest_png_from_ico(icon_path))
+    else:
+        shutil.copy2(icon_path, icon_target)
     icon_target.chmod(0o644)
 
     copyright_target = (
@@ -326,7 +360,7 @@ def build_deb_package(
             package_root=package_root,
             version=version,
             deb_arch=deb_arch,
-            icon_path=project_root / "图标.png",
+            icon_path=project_root / "图标.ico",
             license_path=project_root / "LICENSE",
             source_date_epoch=source_date_epoch,
             glibc_baseline=glibc_baseline,
@@ -335,8 +369,12 @@ def build_deb_package(
             **os.environ,
             "SOURCE_DATE_EPOCH": str(source_date_epoch),
         }
+        print("正在生成 Debian 安装包（gzip 压缩）……", flush=True)
         subprocess.run(
-            ["dpkg-deb", "--root-owner-group", "--build", package_root, output_path],
+            [
+                "dpkg-deb", "--root-owner-group", "-Zgzip", "-z6",
+                "--build", package_root, output_path,
+            ],
             check=True,
             env=environment,
         )

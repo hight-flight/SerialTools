@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 class AppPathsTests(unittest.TestCase):
@@ -190,6 +191,20 @@ class AppPathsTests(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(opened, [(Path.cwd() / "relative" / "ota_serve").resolve()])
+
+    def test_linux清除所有者不匹配的qt运行目录(self):
+        app_paths = self._load_module()
+        environ = {"XDG_RUNTIME_DIR": "/run/user/1000"}
+
+        changed = app_paths.sanitize_linux_runtime_environment(
+            platform_name="linux",
+            environ=environ,
+            current_uid=0,
+            stat_result=SimpleNamespace(st_uid=1000, st_mode=0o40700),
+        )
+
+        self.assertTrue(changed)
+        self.assertNotIn("XDG_RUNTIME_DIR", environ)
 
 
 if __name__ == "__main__":

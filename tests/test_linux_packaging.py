@@ -245,6 +245,7 @@ class LinuxPackagingTests(unittest.TestCase):
         self.assertIn("--windowed", args)
         self.assertIn("--noupx", args)
         self.assertIn("/src/SerialTool/图标.png:.", args)
+        self.assertIn("/src/SerialTool/图标.ico:.", args)
         self.assertNotIn("--collect-submodules", args)
         self.assertNotIn("serial.tools.list_ports_windows", args)
         self.assertEqual(args[-1], "/src/SerialTool/serial_GUI.py")
@@ -313,6 +314,36 @@ class LinuxPackagingTests(unittest.TestCase):
             self.assertTrue(installed_icon.is_file())
             self.assertIn("Architecture: amd64", control.read_text(encoding="utf-8"))
 
+    def test_deb从多分辨率ico提取方形png图标(self):
+        builder = self._load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source"
+            source.mkdir()
+            (source / "SerialTool").write_bytes(b"executable")
+            license_file = root / "LICENSE"
+            license_file.write_text("license", encoding="utf-8")
+            package_root = root / "package"
+
+            builder.create_debian_layout(
+                source,
+                package_root,
+                "1.4.0",
+                "amd64",
+                PROJECT_ROOT / "图标.ico",
+                license_file,
+            )
+
+            installed_icon = (
+                package_root / "usr" / "share" / "icons" / "hicolor"
+                / "256x256" / "apps" / "serialtool.png"
+            )
+            content = installed_icon.read_bytes()
+            self.assertEqual(content[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(int.from_bytes(content[16:20], "big"), 256)
+            self.assertEqual(int.from_bytes(content[20:24], "big"), 256)
+
     def test_deb在系统临时目录组装以保留unix权限(self):
         builder = self._load_module()
 
@@ -340,6 +371,29 @@ class LinuxPackagingTests(unittest.TestCase):
 
             package_root = Path(captured["package_root"])
             self.assertNotIn(build_root.resolve(), package_root.resolve().parents)
+
+    def test_deb使用gzip压缩避免大目录长时间无进度(self):
+        builder = self._load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output_dir = root / "output"
+            output_dir.mkdir()
+            with mock.patch.object(builder, "create_debian_layout"), mock.patch.object(
+                builder.subprocess, "run"
+            ) as run:
+                builder.build_deb_package(
+                    bundle_dir=root / "bundle",
+                    output_dir=output_dir,
+                    version="1.4.0",
+                    release_arch="x86_64",
+                    deb_arch="amd64",
+                    project_root=root,
+                )
+
+            command = run.call_args.args[0]
+            self.assertIn("-Zgzip", command)
+            self.assertIn("-z6", command)
 
     @unittest.skipIf(os.name == "nt", "Windows 文件系统不支持 POSIX 权限断言")
     def test便携包规范化入口和普通文件权限(self):

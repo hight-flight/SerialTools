@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Callable, Mapping, NamedTuple
+from typing import Callable, Mapping, MutableMapping, NamedTuple
 
 
 APP_NAME = "SerialTool"
@@ -18,6 +19,35 @@ class AppPaths(NamedTuple):
     cache_dir: Path
     logs_dir: Path
     ota_dir: Path
+
+
+def sanitize_linux_runtime_environment(
+    platform_name: str | None = None,
+    environ: MutableMapping[str, str] | None = None,
+    current_uid: int | None = None,
+    stat_result=None,
+) -> bool:
+    """清除不属于当前用户的 Qt 运行目录，避免 sudo 启动时继承错误环境。"""
+    platform_name = platform_name or sys.platform
+    if not platform_name.startswith("linux"):
+        return False
+
+    env = os.environ if environ is None else environ
+    runtime_dir = env.get("XDG_RUNTIME_DIR")
+    if not runtime_dir:
+        return False
+
+    uid = os.getuid() if current_uid is None else current_uid
+    try:
+        metadata = stat_result if stat_result is not None else Path(runtime_dir).stat()
+        valid = metadata.st_uid == uid and stat.S_IMODE(metadata.st_mode) == 0o700
+    except OSError:
+        valid = False
+
+    if valid:
+        return False
+    env.pop("XDG_RUNTIME_DIR", None)
+    return True
 
 
 def _absolute_env_path(

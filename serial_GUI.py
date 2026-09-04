@@ -31,7 +31,12 @@ from dialogs import (show_crc_calculator, show_hex_converter,
 from theme import (THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme,
                    fit_message_box_buttons, fit_push_button_texts, VERSION, unescape_text)
 from transport import TransportWrapper, TransportReadThread
-from app_paths import ensure_user_dirs, migrate_legacy_user_data, resolve_app_paths, resource_path
+from app_paths import (ensure_user_dirs, migrate_legacy_user_data, resolve_app_paths,
+                       resource_path, sanitize_linux_runtime_environment)
+
+# sudo 运行 GUI 时可能继承普通用户的 XDG_RUNTIME_DIR；Qt 要求该目录必须
+# 属于当前 UID 且权限为 0700，否则会持续报警并可能影响桌面集成。
+sanitize_linux_runtime_environment()
 # 注意：JsonViewerDialog 和 AutoReplyDialog 保持延迟导入（懒加载），
 # 因为它们依赖 pyqtgraph/numpy 等重型模块，懒加载可显著加快 exe 首次启动速度。
 # OTAControlCenter 和 GSMDebuggerDialog 只依赖轻量 stdlib 模块，改为顶层导入，
@@ -1687,45 +1692,8 @@ class SerialTool(QMainWindow):
             except Exception:
                 pass
 
-        # ── Linux：通过 X11 property 告知窗口管理器这是暗色应用 ──
-        elif system == 'Linux':
-            try:
-                import ctypes
-                x11 = ctypes.cdll.LoadLibrary('libX11.so.6')
-                if not x11:
-                    return
-                display = x11.XOpenDisplay(None)
-                if not display:
-                    return
-                try:
-                    xwin = int(self.winId())
-                    if xwin == 0:
-                        return
-
-                    # 获取 UTF8_STRING 类型原子
-                    utf8_atom = x11.XInternAtom(display, ctypes.c_char_p(b'UTF8_STRING'), 0)
-                    variant = ctypes.c_char_p(b'dark' if dark else b'light')
-                    data_len = len(b'dark' if dark else b'light')
-
-                    # 设置 _GTK_THEME_VARIANT hint (GNOME/GTK 环境)
-                    gtk_atom = x11.XInternAtom(display, ctypes.c_char_p(b'_GTK_THEME_VARIANT'), 0)
-                    x11.XChangeProperty(
-                        display, ctypes.c_ulong(xwin),
-                        gtk_atom, utf8_atom, 8,
-                        ctypes.c_int(0),  # PropModeReplace
-                        variant, data_len)
-                    # 设置 _KDE_NET_WM_THEME_VARIANT hint (KDE Plasma 环境)
-                    kde_atom = x11.XInternAtom(display, ctypes.c_char_p(b'_KDE_NET_WM_THEME_VARIANT'), 0)
-                    x11.XChangeProperty(
-                        display, ctypes.c_ulong(xwin),
-                        kde_atom, utf8_atom, 8,
-                        ctypes.c_int(0),
-                        variant, data_len)
-                    x11.XFlush(display)
-                finally:
-                    x11.XCloseDisplay(display)
-            except Exception:
-                pass
+        # Linux/macOS 的原生标题栏由桌面环境或窗口管理器控制。这里仅使用
+        # Qt 调色板和 QSS，避免在 Wayland/XWayland 下直接注入 X11 属性。
 
         # ── 确保 central widget 也获得暗色背景（QMainWindow QSS 不自动穿透）──
         central = self.centralWidget()
@@ -3294,6 +3262,12 @@ class SerialTool(QMainWindow):
             # 用户下载目录
             user_downloads = os.path.join(os.path.expanduser("~"), "Downloads")
             allowed_dirs.append(user_downloads)
+
+            # 应用配置、日志、缓存和 OTA 目录由 app_paths 按平台解析，属于
+            # 程序正常写入范围；Linux 的 XDG 目录通常不在 Documents 下。
+            app_paths = getattr(self, '_app_paths', None)
+            if app_paths is not None:
+                allowed_dirs.extend(os.path.abspath(path) for path in app_paths)
             
             # 检查路径是否在允许的目录范围内
             is_allowed = False

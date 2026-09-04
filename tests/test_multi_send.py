@@ -76,6 +76,9 @@ class MultiSendTests(unittest.TestCase):
         for _ in range(3):
             self.app.processEvents()
 
+    def test应用默认日志目录通过保存路径校验(self):
+        self.assertTrue(self.tool.is_valid_path(self.tool.save_directory))
+
     def test主窗口标题栏显示应用图标(self):
         self.assertFalse(self.tool.windowIcon().isNull())
 

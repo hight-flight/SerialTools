@@ -520,7 +520,12 @@ def fit_push_button_texts(root):
             continue
         button.ensurePolished()
         option = QStyleOptionButton()
-        button.initStyleOption(option)
+        # initStyleOption 是受保护接口；Linux 下 Qt 原生创建的按钮不能从
+        # Python 调用它，因此只通过公开的 QStyleOption API 初始化样式信息。
+        option.initFrom(button)
+        option.text = button.text()
+        option.icon = button.icon()
+        option.iconSize = button.iconSize()
         content_rect = button.style().subElementRect(
             QStyle.SE_PushButtonContents, option, button
         )

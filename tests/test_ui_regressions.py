@@ -149,6 +149,20 @@ class UIRegressionTests(unittest.TestCase):
             inspect.getsource(SerialTool.eventFilter),
         )
 
+    def test原生创建的按钮无需调用受保护接口也能调整宽度(self):
+        class NativeLikeButton(QPushButton):
+            def initStyleOption(self, _option):
+                raise RuntimeError("不允许访问非 Python 创建对象的受保护函数")
+
+        button = NativeLikeButton("确定并继续", self.parent)
+        text_width = button.fontMetrics().horizontalAdvance(button.text())
+        button.resize(text_width, 28)
+        button.setMinimumWidth(text_width)
+
+        theme.fit_push_button_texts(button)
+
+        self.assertGreater(button.minimumWidth(), text_width)
+
     def test主界面紧凑控件不使用固定高度(self):
         source = inspect.getsource(SerialTool.init_ui)
         self.assertNotIn("setFixedHeight(26)", source)
@@ -591,6 +605,12 @@ class UIRegressionTests(unittest.TestCase):
     def test暗色原生标题栏使用石墨背景(self):
         source = inspect.getsource(SerialTool.apply_theme)
         self.assertIn("_set_titlebar_dark(True, color_hex='#151A22')", source)
+
+    def test_linux标题栏不直接调用不安全的x11接口(self):
+        source = inspect.getsource(SerialTool._set_titlebar_dark)
+
+        self.assertNotIn("libX11", source)
+        self.assertNotIn("XChangeProperty", source)
 
     def test暗色子窗口原生标题栏使用石墨背景(self):
         source = inspect.getsource(apply_dialog_theme)
