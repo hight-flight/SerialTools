@@ -652,6 +652,13 @@ class SerialTool(QMainWindow):
         self.params_row.setSpacing(4)
 
         self.stack_params = QStackedWidget()
+        # 参数栈及页面透出通信设置面板底色，避免模式行出现矩形色块。
+        self.stack_params.setObjectName("communicationParameters")
+        self.stack_params.setStyleSheet(
+            "QStackedWidget#communicationParameters, "
+            "QStackedWidget#communicationParameters > QWidget "
+            "{ background-color: transparent; }"
+        )
         self.stack_params.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         # Page 0: 串口参数
@@ -1367,6 +1374,8 @@ class SerialTool(QMainWindow):
         self.status_msg = QLabel(f'<span style="color: {ok_color};">就绪</span>')
         self.status_msg.setFont(QFont("Microsoft YaHei", 9))
         status_left_gap = QWidget()
+        status_left_gap.setObjectName("statusLeftGap")
+        status_left_gap.setStyleSheet("QWidget#statusLeftGap { background: transparent; }")
         status_left_gap.setFixedWidth(10)
         self.statusBar().addWidget(status_left_gap)
         self.statusBar().addWidget(self.status_msg)
@@ -3577,6 +3586,8 @@ class SerialTool(QMainWindow):
             lambda _checked=False, widget=hex_checkbox: self._select_multi_row_for_widget(widget)
         )
         hex_widget = QWidget()
+        hex_widget.setObjectName("multiCellContainer")
+        hex_widget.setStyleSheet("QWidget#multiCellContainer { background: transparent; }")
         hex_layout = QHBoxLayout(hex_widget)
         hex_layout.addWidget(hex_checkbox)
         hex_layout.setAlignment(Qt.AlignCenter)
@@ -3596,6 +3607,8 @@ class SerialTool(QMainWindow):
         send_button.setMinimumWidth(52)
         send_button.clicked.connect(self.on_send_multi_btn_clicked)
         send_widget = QWidget()
+        send_widget.setObjectName("multiCellContainer")
+        send_widget.setStyleSheet("QWidget#multiCellContainer { background: transparent; }")
         send_layout = QHBoxLayout(send_widget)
         send_layout.addWidget(send_button)
         send_layout.setAlignment(Qt.AlignCenter)
@@ -3611,6 +3624,8 @@ class SerialTool(QMainWindow):
             lambda _value, widget=delay_spin: self._select_multi_row_for_widget(widget)
         )
         delay_widget = QWidget()
+        delay_widget.setObjectName("multiCellContainer")
+        delay_widget.setStyleSheet("QWidget#multiCellContainer { background: transparent; }")
         delay_layout = QHBoxLayout(delay_widget)
         delay_layout.addWidget(delay_spin)
         delay_layout.setAlignment(Qt.AlignCenter)
