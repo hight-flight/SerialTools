@@ -412,8 +412,11 @@ QTabBar::tab:hover { background-color: #D0D0D0; }
 
 
 # 工业控制台 2.0：仅覆盖视觉令牌，不改变控件尺寸、布局或交互。
+# 普通文字控件透出父面板背景，避免全局 QWidget 底色形成矩形色块。
+# 控件自身设置的状态背景仍可通过局部样式覆盖此默认规则。
 LIGHT_QSS += """
 QMainWindow, QWidget { background-color: #F6F8FB; color: #1D2939; }
+QLabel, QCheckBox, QRadioButton { background-color: transparent; }
 QMenuBar { background-color: #FFFFFF; color: #344054; border-bottom: 1px solid #E3E8EF; }
 QMenuBar::item { padding: 6px 10px; border-radius: 4px; }
 QMenuBar::item:selected { background-color: #EEF5FF; color: #1677FF; }
@@ -454,6 +457,7 @@ QScrollBar::handle:vertical:hover { background: #8FA1B5; }
 
 DARK_QSS += """
 QMainWindow, QWidget { background-color: #151A22; color: #E6EDF5; }
+QLabel, QCheckBox, QRadioButton { background-color: transparent; }
 QMenuBar { background-color: #1B2330; color: #C8D3E0; border-bottom: 1px solid #2D3A4A; }
 QMenuBar::item { padding: 6px 10px; border-radius: 4px; }
 QMenuBar::item:selected { background-color: #223C59; color: #78BCFF; }
