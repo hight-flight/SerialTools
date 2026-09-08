@@ -4445,8 +4445,12 @@ class SerialTool(QMainWindow):
             QMessageBox.information(self, "提示", "接收区暂无数据可保存。")
             return
 
+        current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_filename = self._build_timestamped_filename(
+            "serial_log", self._current_log_source_name(), current_time, "txt"
+        )
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "保存接收日志", self.save_directory,
+            self, "保存接收日志", os.path.join(self.save_directory, default_filename),
             "日志文件 (*.log *.txt);;所有文件 (*)"
         )
         if not file_path:
@@ -4467,8 +4471,12 @@ class SerialTool(QMainWindow):
             QMessageBox.information(self, "提示", "接收区暂无数据可导出。")
             return
 
+        current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_filename = self._build_timestamped_filename(
+            "serial_export", self._current_log_source_name(), current_time, "txt"
+        )
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "导出接收数据", self.save_directory,
+            self, "导出接收数据", os.path.join(self.save_directory, default_filename),
             "文本文件 (*.txt);;CSV 文件 (*.csv);;所有文件 (*)"
         )
         if not file_path:
@@ -5484,6 +5492,49 @@ class SerialTool(QMainWindow):
             # 显示错误提示
             QMessageBox.critical(self, "错误", f"打开设置对话框失败: {e}")
 
+    @staticmethod
+    def _build_log_source_name(
+        connection_mode, serial_port="", udp_local_port=None,
+        tcp_remote_ip="", tcp_remote_port=None,
+        tcp_server_local_ip="", tcp_server_local_port=None,
+    ):
+        """根据当前连接模式生成日志来源标识。"""
+        if connection_mode == 'serial':
+            return serial_port or 'unknown_port'
+        if connection_mode == 'udp':
+            return f"UDP_{udp_local_port}"
+        if connection_mode == 'tcp_client':
+            return f"TCP_CLIENT_{tcp_remote_ip}_{tcp_remote_port}"
+        if connection_mode == 'tcp_server':
+            return f"TCP_SERVER_{tcp_server_local_ip}_{tcp_server_local_port}"
+        return 'unknown_source'
+
+    @staticmethod
+    def _build_timestamped_filename(prefix, source_name, current_time, extension, suffix=""):
+        """生成包含来源和时间的文件名，并过滤文件系统非法字符。"""
+        safe_source_name = re.sub(r'[^A-Za-z0-9._-]+', '_', source_name.strip()) or 'unknown_source'
+        suffix_part = f"_{suffix}" if suffix else ""
+        return f"{prefix}_{safe_source_name}_{current_time}{suffix_part}.{extension.lstrip('.')}"
+
+    def _current_log_source_name(self):
+        """读取界面当前连接参数，生成日志来源标识。"""
+        return self._build_log_source_name(
+            self.connection_mode,
+            serial_port=self.combo_port.currentText(),
+            udp_local_port=self.edit_udp_local_port.value(),
+            tcp_remote_ip=self.edit_tcp_remote_ip.text().strip(),
+            tcp_remote_port=self.edit_tcp_remote_port.value(),
+            tcp_server_local_ip=self.edit_tcp_server_local_ip.currentText().strip(),
+            tcp_server_local_port=self.edit_tcp_server_local_port.value(),
+        )
+
+    @classmethod
+    def _build_log_filename(cls, port_name, current_time, process_id, sequence):
+        """生成包含端口号和创建时间的自动保存日志文件名。"""
+        return cls._build_timestamped_filename(
+            "serial_data", port_name, current_time, "txt", f"{process_id}_{sequence}"
+        )
+
     def create_new_log_file(self):
         """创建新的日志文件"""
         import os
@@ -5504,8 +5555,8 @@ class SerialTool(QMainWindow):
         self.log_file_count += 1
         
         # 创建默认文件名
-        default_filename = (
-            f"serial_data_{current_time}_{os.getpid()}_{self.log_file_count}.txt"
+        default_filename = self._build_log_filename(
+            self._current_log_source_name(), current_time, os.getpid(), self.log_file_count
         )
         
         try:

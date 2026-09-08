@@ -116,6 +116,27 @@ class RuntimeRegressionTests(unittest.TestCase):
         source = inspect.getsource(SerialTool.create_new_log_file)
         self.assertIn("self.rollover_log_files()", source)
 
+    def test日志文件名包含端口号与创建时间(self):
+        filename = SerialTool._build_log_filename(
+            "COM3", "20260908_142530_123", 4567, 2
+        )
+
+        self.assertEqual(filename, "serial_data_COM3_20260908_142530_123_4567_2.txt")
+
+    def test网络连接使用实际端点作为日志来源名称(self):
+        source_name = SerialTool._build_log_source_name(
+            "tcp_client", tcp_remote_ip="192.168.1.100", tcp_remote_port=8888
+        )
+
+        self.assertEqual(source_name, "TCP_CLIENT_192.168.1.100_8888")
+
+    def test手动保存文件名包含来源和时间(self):
+        filename = SerialTool._build_timestamped_filename(
+            "serial_log", "COM3", "20260908_142530", "txt"
+        )
+
+        self.assertEqual(filename, "serial_log_COM3_20260908_142530.txt")
+
     def test日志轮转同时删除对应备份(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             old_log = Path(temp_dir) / "serial_data_old.txt"
