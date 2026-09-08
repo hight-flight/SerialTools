@@ -440,10 +440,16 @@ QHeaderView::section { background-color: #F1F5F9; color: #475467; border: none; 
 QTableView, QTableWidget, QTreeView { background-color: #FFFFFF; alternate-background-color: #F8FAFC; color: #1D2939; gridline-color: #E8EDF3; border: 1px solid #E3E8EF; border-radius: 8px; }
 QTableView::item:selected, QTableWidget::item:selected, QTreeView::item:selected { background-color: #E2EFFF; color: #102A56; }
 QCheckBox, QRadioButton { color: #344054; spacing: 8px; }
-QCheckBox::indicator, QRadioButton::indicator { width: 16px; height: 16px; }
+QCheckBox::indicator { width: 16px; height: 16px; background-color: #FFFFFF; border: 1px solid #98A2B3; border-radius: 3px; }
+QCheckBox::indicator:hover { border-color: #1677FF; }
 QCheckBox::indicator:checked { background-color: #1677FF; border-color: #1677FF; image: url(__CHECK_LIGHT__); }
-QRadioButton::indicator:checked { background-color: #1677FF; border-color: #1677FF; }
+QCheckBox::indicator:disabled { background-color: #F2F4F7; border-color: #D0D5DD; }
 QCheckBox::indicator:checked:disabled { background-color: #9CBEE8; border-color: #9CBEE8; }
+QRadioButton::indicator { width: 16px; height: 16px; background-color: #FFFFFF; border: 1px solid #98A2B3; border-radius: 8px; }
+QRadioButton::indicator:hover { border-color: #1677FF; }
+QRadioButton::indicator:checked { background-color: #1677FF; border-color: #1677FF; image: url(__RADIO_LIGHT__); }
+QRadioButton::indicator:disabled { background-color: #F2F4F7; border-color: #D0D5DD; }
+QRadioButton::indicator:checked:disabled { background-color: #FFFFFF; border-color: #9CBEE8; }
 QTableWidget QCheckBox::indicator { width: 0px; height: 0px; border: none; }
 QTableWidget QCheckBox::indicator:checked { image: url(__CHECK_LIGHT__); }
 QStatusBar { background-color: #FFFFFF; color: #667085; border-top: 1px solid #E3E8EF; }
@@ -453,6 +459,10 @@ QScrollArea, QScrollArea > QWidget > QWidget { background-color: #F6F8FB; }
 QScrollBar:vertical { background: #F6F8FB; width: 10px; margin: 4px; }
 QScrollBar::handle:vertical { background: #B9C5D3; min-height: 28px; border-radius: 5px; }
 QScrollBar::handle:vertical:hover { background: #8FA1B5; }
+QTabWidget::pane { border: 1px solid #E3E8EF; background-color: #FFFFFF; }
+QTabBar::tab { background-color: #F1F5F9; color: #475467; padding: 6px 16px; border: 1px solid #E3E8EF; border-bottom: none; border-top-left-radius: 6px; border-top-right-radius: 6px; }
+QTabBar::tab:selected { background-color: #FFFFFF; color: #1677FF; }
+QTabBar::tab:hover { background-color: #EEF5FF; color: #1677FF; }
 """
 
 DARK_QSS += """
@@ -482,10 +492,16 @@ QHeaderView::section { background-color: #263241; color: #B9C8D8; border: none; 
 QTableView, QTableWidget, QTreeView { background-color: #19212C; alternate-background-color: #1E2835; color: #E6EDF5; gridline-color: #2D3A4A; border: 1px solid #2D3A4A; border-radius: 8px; }
 QTableView::item:selected, QTableWidget::item:selected, QTreeView::item:selected { background-color: #245B8F; color: #FFFFFF; }
 QCheckBox, QRadioButton { color: #C8D3E0; spacing: 8px; }
-QCheckBox::indicator, QRadioButton::indicator { width: 16px; height: 16px; }
+QCheckBox::indicator { width: 16px; height: 16px; background-color: #263241; border: 1px solid #53657A; border-radius: 3px; }
+QCheckBox::indicator:hover { border-color: #49A6FF; }
 QCheckBox::indicator:checked { background-color: #49A6FF; border-color: #49A6FF; image: url(__CHECK_DARK__); }
-QRadioButton::indicator:checked { background-color: #49A6FF; border-color: #49A6FF; }
+QCheckBox::indicator:disabled { background-color: #1E2835; border-color: #3A4A5E; }
 QCheckBox::indicator:checked:disabled { background-color: #415164; border-color: #53657A; }
+QRadioButton::indicator { width: 16px; height: 16px; background-color: #263241; border: 1px solid #53657A; border-radius: 8px; }
+QRadioButton::indicator:hover { border-color: #49A6FF; }
+QRadioButton::indicator:checked { background-color: #49A6FF; border-color: #49A6FF; image: url(__RADIO_DARK__); }
+QRadioButton::indicator:disabled { background-color: #1E2835; border-color: #3A4A5E; }
+QRadioButton::indicator:checked:disabled { background-color: #263241; border-color: #53657A; }
 QTableWidget QCheckBox::indicator { width: 0px; height: 0px; border: none; }
 QTableWidget QCheckBox::indicator:checked { image: url(__CHECK_DARK__); }
 QStatusBar { background-color: #1B2330; color: #9EB0C3; border-top: 1px solid #2D3A4A; }
@@ -495,6 +511,10 @@ QScrollArea, QScrollArea > QWidget > QWidget { background-color: #151A22; }
 QScrollBar:vertical { background: #151A22; width: 10px; margin: 4px; }
 QScrollBar::handle:vertical { background: #415164; min-height: 28px; border-radius: 5px; }
 QScrollBar::handle:vertical:hover { background: #5A6D82; }
+QTabWidget::pane { border: 1px solid #2D3A4A; background-color: #19212C; }
+QTabBar::tab { background-color: #263241; color: #B9C8D8; padding: 6px 16px; border: 1px solid #2D3A4A; border-bottom: none; border-top-left-radius: 6px; border-top-right-radius: 6px; }
+QTabBar::tab:selected { background-color: #19212C; color: #78BCFF; }
+QTabBar::tab:hover { background-color: #2B4057; color: #FFFFFF; }
 """
 
 def fit_message_box_buttons(dialog):
@@ -556,10 +576,10 @@ def apply_dialog_theme(dialog, is_dark):
         # 暗黑主题
         dialog.setStyleSheet(QApplication.instance().styleSheet())
         p = dialog.palette()
-        p.setColor(QPalette.Highlight, QColor('#3E4451'))
-        p.setColor(QPalette.HighlightedText, QColor('#ABB2BF'))
-        p.setColor(QPalette.Button, QColor('#21252B'))
-        p.setColor(QPalette.ButtonText, QColor('#ABB2BF'))
+        p.setColor(QPalette.Highlight, QColor('#245B8F'))
+        p.setColor(QPalette.HighlightedText, QColor('#FFFFFF'))
+        p.setColor(QPalette.Button, QColor('#263241'))
+        p.setColor(QPalette.ButtonText, QColor('#D9E3EE'))
         dialog.setPalette(p)
         # Windows DWM 标题栏暗色
         if is_win:

@@ -240,6 +240,77 @@ class DataViewerTests(unittest.TestCase):
         self.assertIn("btn_scroll", source)
         self.assertIn("ScrollBarAsNeeded", source)
 
+    def test切换散点图时图表工具栏按钮不被压缩(self):
+        if not data_viewer.HAS_PYQTGRAPH:
+            self.skipTest("pyqtgraph 不可用")
+
+        tracker = ChartTrackerWidget()
+        self.addCleanup(tracker.close)
+        tracker.resize(360, 420)
+        tracker.show()
+        self.app.processEvents()
+
+        for mode_name in ("散点图", "折线图"):
+            tracker._toggle_chart_mode()
+            self.app.processEvents()
+            for button in (
+                tracker.btn_pause,
+                tracker.btn_clear_chart,
+                tracker.btn_scatter_mode,
+                tracker.btn_add_computed,
+                tracker.btn_toggle_table,
+                tracker.btn_export_png,
+                tracker.btn_export_csv,
+            ):
+                self.assertGreaterEqual(
+                    button.width(),
+                    button.fontMetrics().horizontalAdvance(button.text()) + 28,
+                    f"{button.text()} 在切换{mode_name}后被压缩",
+                )
+
+    def test默认图表工具栏为导出操作留出分组间距(self):
+        if not data_viewer.HAS_PYQTGRAPH:
+            self.skipTest("pyqtgraph 不可用")
+
+        tracker = ChartTrackerWidget()
+        self.addCleanup(tracker.close)
+        tracker.resize(640, 420)
+        tracker.show()
+        self.app.processEvents()
+
+        primary_right = tracker.btn_add_computed.geometry().right()
+        export_left = tracker.btn_toggle_table.geometry().left()
+        self.assertGreaterEqual(
+            export_left - primary_right, 32,
+            "默认工具栏未把导出操作与图表操作分组",
+        )
+
+    def test数据分析默认窗口优先为图表区预留宽度(self):
+        init_source = inspect.getsource(JsonViewerDialog.__init__)
+        ui_source = inspect.getsource(JsonViewerDialog._init_ui)
+
+        self.assertIn("width = min(1400, available.width())", init_source)
+        self.assertIn("min(1000, available.width())", init_source)
+        self.assertIn("self.splitter_h.setSizes([300, 1100])", ui_source)
+
+    def test恢复旧分栏状态仍为图表区保留七成宽度(self):
+        dialog = self._dialog()
+        dialog.resize(1400, 850)
+        dialog.show()
+        self.app.processEvents()
+        dialog.splitter_h.setSizes([600, 800])
+        dialog._save_layout()
+
+        restored = JsonViewerDialog(self.parent)
+        self.addCleanup(restored.close)
+        restored.show()
+        self.app.processEvents()
+        left, right = restored.splitter_h.sizes()
+        self.assertGreaterEqual(
+            right, int((left + right) * 0.70),
+            "恢复旧布局后图表区被压窄",
+        )
+
     def test无跟踪字段时禁用图表导出(self):
         if not data_viewer.HAS_PYQTGRAPH:
             self.skipTest("pyqtgraph 不可用")

@@ -58,56 +58,56 @@ SUMMARY_MAX_LEN = 60                # 摘要截断长度
 # ── 色彩令牌（与 theme.py 主主题对齐，统一管理所有硬编码色值）──
 _VIEWER_TOKENS = {
     'dark': {
-        'bg_page':        '#282C34',
-        'bg_card':        '#2C313C',
-        'bg_header':      '#21252B',
-        'bg_alt':         '#252830',
-        'bg_readonly':    '#252526',
-        'bg_menu':        '#21252B',
-        'text_primary':   '#ABB2BF',
-        'text_secondary': '#8B95A5',
-        'text_muted':     '#888888',
+        'bg_page':        '#151A22',
+        'bg_card':        '#19212C',
+        'bg_header':      '#263241',
+        'bg_alt':         '#1E2835',
+        'bg_readonly':    '#111827',
+        'bg_menu':        '#263241',
+        'text_primary':   '#E6EDF5',
+        'text_secondary': '#B9C8D8',
+        'text_muted':     '#9EB0C3',
         'text_inverse':   '#FFFFFF',
-        'border_default': '#3E4451',
-        'border_light':   '#2C313C',
-        'accent':         '#528BFF',
-        'accent_hover':   '#61AFEF',
-        'accent_surface': '#3E5A8C',
-        'hover_row':      'rgba(82, 139, 255, 60)',
-        'hover_header':   '#2C313C',
-        'selection_bg':   '#3E5A8C',
+        'border_default': '#2D3A4A',
+        'border_light':   '#3A4A5E',
+        'accent':         '#49A6FF',
+        'accent_hover':   '#78BCFF',
+        'accent_surface': '#245B8F',
+        'hover_row':      'rgba(73, 166, 255, 60)',
+        'hover_header':   '#2B4057',
+        'selection_bg':   '#245B8F',
         'selection_fg':   '#FFFFFF',
-        'danger':         '#E06C75',
-        'success':        '#98C379',
+        'danger':         '#D05A68',
+        'success':        '#3DA76B',
         'warning':        '#E5C07B',
-        'chart_bg':       '#2C313C',
-        'chart_text':     '#ABB2BF',
+        'chart_bg':       '#19212C',
+        'chart_text':     '#B9C8D8',
     },
     'light': {
-        'bg_page':        '#F5F5F5',
+        'bg_page':        '#F6F8FB',
         'bg_card':        '#FFFFFF',
-        'bg_header':      '#E8E8E8',
-        'bg_alt':         '#F5F5F5',
-        'bg_readonly':    '#F0F0F0',
+        'bg_header':      '#F1F5F9',
+        'bg_alt':         '#F8FAFC',
+        'bg_readonly':    '#F8FAFC',
         'bg_menu':        '#FFFFFF',
-        'text_primary':   '#333333',
-        'text_secondary': '#333333',
-        'text_muted':     '#888888',
+        'text_primary':   '#1D2939',
+        'text_secondary': '#475467',
+        'text_muted':     '#667085',
         'text_inverse':   '#FFFFFF',
-        'border_default': '#CCCCCC',
-        'border_light':   '#E0E0E0',
-        'accent':         '#0078D4',
-        'accent_hover':   '#168BE0',
-        'accent_surface': '#0078D4',
-        'hover_row':      'rgba(0, 120, 212, 50)',
-        'hover_header':   '#D0D0D0',
-        'selection_bg':   '#0078D4',
+        'border_default': '#E3E8EF',
+        'border_light':   '#E8EDF3',
+        'accent':         '#1677FF',
+        'accent_hover':   '#0F66CC',
+        'accent_surface': '#1677FF',
+        'hover_row':      'rgba(22, 119, 255, 50)',
+        'hover_header':   '#EEF5FF',
+        'selection_bg':   '#1677FF',
         'selection_fg':   '#FFFFFF',
-        'danger':         '#E06C75',
-        'success':        '#508C50',
-        'warning':        '#C07020',
+        'danger':         '#C83B4D',
+        'success':        '#16844A',
+        'warning':        '#B54708',
         'chart_bg':       '#FFFFFF',
-        'chart_text':     '#666666',
+        'chart_text':     '#667085',
     },
 }
 
@@ -950,7 +950,10 @@ class ChartTrackerWidget(QWidget):
         self.btn_add_computed.clicked.connect(self._add_computed_field)
         btn_row.addWidget(self.btn_add_computed)
 
-        btn_row.addSpacing(4)
+        # 即便窄窗口下弹性空白收缩，也保留导出操作的固定分组间距。
+        btn_row.addSpacing(32)
+        # 将导出相关操作推到右侧，默认宽度下保留清晰的操作分组。
+        btn_row.addStretch(1)
 
         # Feature 4: 数据表格切换（在图表区，紧邻数据操作）
         self.btn_toggle_table = QPushButton("⊞ 数据表")
@@ -971,15 +974,22 @@ class ChartTrackerWidget(QWidget):
         self.btn_export_csv.clicked.connect(self._export_csv)
         btn_row.addWidget(self.btn_export_csv)
 
-        btn_row.addStretch()
-        btn_wrapper.adjustSize()
+        self._chart_toolbar_wrapper = btn_wrapper
+        self._chart_toolbar_layout = btn_row
+        self._chart_toolbar_buttons = (
+            self.btn_pause, self.btn_clear_chart, self.btn_scatter_mode,
+            self.btn_add_computed, self.btn_toggle_table,
+            self.btn_export_png, self.btn_export_csv,
+        )
         btn_scroll = QScrollArea()
-        btn_scroll.setWidgetResizable(False)
+        self._chart_toolbar_scroll = btn_scroll
+        btn_scroll.setWidgetResizable(True)
         btn_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         btn_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         btn_scroll.setFrameShape(QFrame.NoFrame)
         btn_scroll.setMaximumHeight(46)
         btn_scroll.setWidget(btn_wrapper)
+        self._refresh_chart_toolbar_geometry()
         layout.addWidget(btn_scroll)
 
         # ── 刷新定时器（有跟踪字段时才启动）──
@@ -992,6 +1002,15 @@ class ChartTrackerWidget(QWidget):
 
         # 接受拖放
         self.setAcceptDrops(True)
+
+    def _refresh_chart_toolbar_geometry(self):
+        """为图表工具栏保留安全文字内边距，空间不足时交由横向滚动条处理。"""
+        for button in self._chart_toolbar_buttons:
+            text_width = button.fontMetrics().horizontalAdvance(button.text())
+            button.setFixedWidth(text_width + 28)
+        minimum_size = self._chart_toolbar_layout.minimumSize()
+        self._chart_toolbar_wrapper.setMinimumSize(minimum_size)
+        self._chart_toolbar_wrapper.updateGeometry()
 
     def set_theme(self, is_dark: bool):
         """响应主题切换，更新绘图区背景和告警边框"""
@@ -1315,6 +1334,7 @@ class ChartTrackerWidget(QWidget):
             self._update_plot()
             self.plot_widget.autoRange()
             self.plot_widget.getPlotItem().vb.enableAutoRange()
+        self._refresh_chart_toolbar_geometry()
 
     def _update_scatter_combos(self):
         """更新散点图 X/Y 字段下拉框"""
@@ -3343,12 +3363,13 @@ class JsonViewerDialog(QDialog):
         self.setWindowTitle("数据分析面板")
         screen = self.parentWidget().screen() if self.parentWidget() else QApplication.primaryScreen()
         available = screen.availableGeometry() if screen else None
-        width = min(1200, available.width()) if available else 1200
-        height = min(800, available.height()) if available else 800
+        # 图表区包含散点参数和导出操作，默认给予更宽的工作空间。
+        width = min(1400, available.width()) if available else 1400
+        height = min(850, available.height()) if available else 850
         self.resize(width, height)
         self.setMinimumSize(
-            min(900, available.width()) if available else 900,
-            min(600, available.height()) if available else 600,
+            min(1000, available.width()) if available else 1000,
+            min(650, available.height()) if available else 650,
         )
         # 作为独立工具窗口：允许最小化/最大化，不强制置顶
         self.setWindowFlags(
@@ -3360,6 +3381,8 @@ class JsonViewerDialog(QDialog):
 
         self._init_ui()
         self._restore_layout()
+        # 分栏器在 show 前仍会被 Qt 重新布局，延后校正才能覆盖旧状态。
+        QTimer.singleShot(0, self._reserve_chart_panel_width)
         self.center_on_current_screen()
 
     def center_on_current_screen(self):
@@ -3495,6 +3518,7 @@ class JsonViewerDialog(QDialog):
 
         # 左侧面板：状态指示 + 捕获列表（状态仅在左侧，不占用右侧空间）
         left_panel = QWidget()
+        left_panel.setMinimumWidth(220)
         left_panel_layout = QVBoxLayout(left_panel)
         left_panel_layout.setContentsMargins(0, 0, 0, 0)
         left_panel_layout.setSpacing(2)
@@ -3503,6 +3527,7 @@ class JsonViewerDialog(QDialog):
         self.lbl_status.setAccessibleName("捕获状态")
         self.lbl_status.setFont(QFont("Consolas", 10))
         self.lbl_status.setTextFormat(Qt.PlainText)
+        self.lbl_status.setWordWrap(True)
         self.lbl_status.setStyleSheet(
             "QLabel {"
             "  background-color: rgba(128,128,128,0.12);"
@@ -3546,8 +3571,8 @@ class JsonViewerDialog(QDialog):
 
         self.splitter_h.addWidget(self.splitter_v)
 
-        # 初始比例 左:右 = 35:65
-        self.splitter_h.setSizes([360, 840])
+        # 初始比例 左:右 = 30:70，优先保障图表工具栏与绘图区。
+        self.splitter_h.setSizes([300, 1100])
         self.splitter_v.setSizes([250, 500])
 
         main_layout.addWidget(self.splitter_h, stretch=1)
@@ -4044,6 +4069,9 @@ class JsonViewerDialog(QDialog):
                 if hasattr(self, 'chart_data_splitter') and 'chart_data_splitter' in ini['layout']:
                     cd = QByteArray.fromHex(ini['layout']['chart_data_splitter'].encode('utf-8'))
                     self.chart_data_splitter.restoreState(cd)
+                # 旧版本保存的分栏比例可能不足以容纳散点图工具栏。
+                # 仅在初始化恢复时校正；窗口打开后仍允许用户自由拖动。
+                self._reserve_chart_panel_width()
             # 恢复跟踪字段（含计算字段）—— 批量模式，避免每次 add 都重建下拉框
             if 'tracks' in ini:
                 paths = json.loads(ini['tracks'].get('paths', '[]'))
@@ -4064,6 +4092,18 @@ class JsonViewerDialog(QDialog):
                     self.chart_tracker._update_scatter_combos()
         except Exception:
             pass
+
+    def _reserve_chart_panel_width(self):
+        """初始化时为右侧图表区保留至少七成可用宽度。"""
+        sizes = self.splitter_h.sizes()
+        if len(sizes) != 2:
+            return
+        total = sum(sizes)
+        if total <= 0:
+            return
+        target_right = int(total * 0.70)
+        if sizes[1] < target_right:
+            self.splitter_h.setSizes([total - target_right, target_right])
 
     # --- 键盘快捷键 ---
     def keyPressEvent(self, event):

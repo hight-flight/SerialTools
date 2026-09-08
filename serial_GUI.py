@@ -80,12 +80,12 @@ class FullHitCheckBox(QCheckBox):
         top = (self.height() - side) // 2
         is_dark = getattr(self.window(), "current_theme", "light") == "dark"
         if is_dark:
-            border = QColor("#3A4A5E") if self.isEnabled() else QColor("#2D3A4A")
+            border = QColor("#53657A") if self.isEnabled() else QColor("#3A4A5E")
             fill = (QColor("#49A6FF") if self.isEnabled() and self.isChecked()
-                    else QColor("#415164") if self.isChecked() else QColor("#19212C"))
-            focus_color = QColor("#78BCFF")
+                    else QColor("#415164") if self.isChecked() else QColor("#263241"))
+            focus_color = QColor("#49A6FF")
         else:
-            border = QColor("#5D6675") if self.isEnabled() else QColor("#A0A4AA")
+            border = QColor("#98A2B3") if self.isEnabled() else QColor("#D0D5DD")
             fill = (QColor("#1677FF") if self.isEnabled() and self.isChecked()
                     else QColor("#9CBEE8") if self.isChecked() else QColor("#FFFFFF"))
             focus_color = QColor("#1677FF")
@@ -447,7 +447,8 @@ class SerialTool(QMainWindow):
         # 生成下拉箭头图标（QSS 接管 QComboBox 后必须显式提供箭头图片）
         self._themed_dialogs = []
         (self._arrow_dark_path, self._arrow_light_path,
-         self._check_dark_path, self._check_light_path) = self._make_arrow_icons()
+         self._check_dark_path, self._check_light_path,
+         self._radio_dark_path, self._radio_light_path) = self._make_arrow_icons()
 
 
         self.init_ui()
@@ -492,11 +493,26 @@ class SerialTool(QMainWindow):
             pix.save(path, 'PNG')
             return path.replace('\\', '/')
 
+        def _draw_radio_dot(path, color_hex, size=12):
+            """绘制单选项选中态的中心圆点，避免 QSS 边框改变控件布局尺寸。"""
+            pix = QPixmap(size, size)
+            pix.fill(Qt.transparent)
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setBrush(QColor(color_hex))
+            p.setPen(Qt.NoPen)
+            p.drawEllipse(4, 4, 4, 4)
+            p.end()
+            pix.save(path, 'PNG')
+            return path.replace('\\', '/')
+
         dark = _draw(os.path.join(icon_dir, '_arrow_dark.png'), '#6A7384')
         light = _draw(os.path.join(icon_dir, '_arrow_light.png'), '#666666')
         check_dark = _draw_check(os.path.join(icon_dir, '_check_dark.png'), '#FFFFFF')
         check_light = _draw_check(os.path.join(icon_dir, '_check_light.png'), '#FFFFFF')
-        return dark, light, check_dark, check_light
+        radio_dark = _draw_radio_dot(os.path.join(icon_dir, '_radio_dark.png'), '#FFFFFF')
+        radio_light = _draw_radio_dot(os.path.join(icon_dir, '_radio_light.png'), '#FFFFFF')
+        return dark, light, check_dark, check_light, radio_dark, radio_light
 
     def init_ui(self):
         self.setWindowTitle("hight-flight串口工具")
@@ -1522,13 +1538,15 @@ class SerialTool(QMainWindow):
         if theme_name == 'dark':
             qss = (DARK_QSS
                    .replace('__ARROW_DARK__', self._arrow_dark_path)
-                   .replace('__CHECK_DARK__', self._check_dark_path))
+                   .replace('__CHECK_DARK__', self._check_dark_path)
+                   .replace('__RADIO_DARK__', self._radio_dark_path))
             QApplication.instance().setStyleSheet(qss)
             self._set_titlebar_dark(True, color_hex='#151A22')
         else:
             qss = (LIGHT_QSS
                    .replace('__ARROW_LIGHT__', self._arrow_light_path)
-                   .replace('__CHECK_LIGHT__', self._check_light_path))
+                   .replace('__CHECK_LIGHT__', self._check_light_path)
+                   .replace('__RADIO_LIGHT__', self._radio_light_path))
             QApplication.instance().setStyleSheet(qss)
             self._set_titlebar_dark(False)
 
@@ -1633,12 +1651,12 @@ class SerialTool(QMainWindow):
         if dark:
             dark_palette = QApplication.instance().palette()
             dark_palette.setColor(QPalette.Window, QColor(color_hex))
-            dark_palette.setColor(QPalette.WindowText, QColor(0xAB, 0xB2, 0xBF))
-            dark_palette.setColor(QPalette.Base, QColor(0x2C, 0x31, 0x3C))
-            dark_palette.setColor(QPalette.AlternateBase, QColor(0x21, 0x25, 0x2B))
-            dark_palette.setColor(QPalette.Text, QColor(0xAB, 0xB2, 0xBF))
-            dark_palette.setColor(QPalette.Button, QColor(0x2C, 0x31, 0x3C))
-            dark_palette.setColor(QPalette.ButtonText, QColor(0xAB, 0xB2, 0xBF))
+            dark_palette.setColor(QPalette.WindowText, QColor('#E6EDF5'))
+            dark_palette.setColor(QPalette.Base, QColor('#19212C'))
+            dark_palette.setColor(QPalette.AlternateBase, QColor('#1E2835'))
+            dark_palette.setColor(QPalette.Text, QColor('#E6EDF5'))
+            dark_palette.setColor(QPalette.Button, QColor('#263241'))
+            dark_palette.setColor(QPalette.ButtonText, QColor('#D9E3EE'))
             QApplication.instance().setPalette(dark_palette)
         else:
             QApplication.instance().setPalette(QApplication.style().standardPalette())
@@ -4719,7 +4737,7 @@ class SerialTool(QMainWindow):
         main_layout.addWidget(panel)
 
         # ── 右侧波形图 ──
-        plot_bg = '#2C313C' if self.current_theme == 'dark' else '#FFFFFF'
+        plot_bg = '#19212C' if self.current_theme == 'dark' else '#FFFFFF'
         plot_widget = pg.PlotWidget()
         plot_widget.setBackground(plot_bg)
         plot_widget.showGrid(x=True, y=True, alpha=0.3)
@@ -4736,7 +4754,7 @@ class SerialTool(QMainWindow):
                 except Exception:
                     pass
         # 空状态提示文字
-        empty_color = (0xAB, 0xB2, 0xBF) if self.current_theme == 'dark' else (0x66, 0x66, 0x66)
+        empty_color = (0xB9, 0xC8, 0xD8) if self.current_theme == 'dark' else (0x66, 0x70, 0x85)
         empty_text = pg.TextItem('等待串口数据…', color=empty_color, anchor=(0.5, 0.5))
         empty_text.setFont(QFont("Microsoft YaHei", 10))
         plot_widget.addItem(empty_text)

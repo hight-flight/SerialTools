@@ -602,6 +602,35 @@ class UIRegressionTests(unittest.TestCase):
         self.assertIn("#49A6FF", DARK_QSS)
         self.assertIn("QPlainTextEdit", DARK_QSS)
 
+    def test新版主题完整覆盖标签页样式(self):
+        """标签页不应回落到旧版灰色主题。"""
+        self.assertIn(
+            "QTabWidget::pane { border: 1px solid #E3E8EF; background-color: #FFFFFF; }",
+            LIGHT_QSS,
+        )
+        self.assertIn(
+            "QTabWidget::pane { border: 1px solid #2D3A4A; background-color: #19212C; }",
+            DARK_QSS,
+        )
+
+    def test数据分析面板使用石墨主题令牌(self):
+        from data_viewer import _VIEWER_TOKENS
+
+        dark = _VIEWER_TOKENS["dark"]
+        self.assertEqual(dark["bg_page"], "#151A22")
+        self.assertEqual(dark["bg_card"], "#19212C")
+        self.assertEqual(dark["bg_header"], "#263241")
+        self.assertEqual(dark["text_primary"], "#E6EDF5")
+
+    def test遗留局部控件使用石墨主题颜色(self):
+        usage_source = inspect.getsource(dialogs.show_usage_dialog)
+        checkbox_source = inspect.getsource(serial_GUI.FullHitCheckBox.paintEvent)
+        scope_source = inspect.getsource(SerialTool.oscilloscope)
+
+        self.assertIn("background: #19212C", usage_source)
+        self.assertIn('border = QColor("#53657A")', checkbox_source)
+        self.assertIn("plot_bg = '#19212C'", scope_source)
+
     def test暗色原生标题栏使用石墨背景(self):
         source = inspect.getsource(SerialTool.apply_theme)
         self.assertIn("_set_titlebar_dark(True, color_hex='#151A22')", source)
@@ -716,7 +745,7 @@ class UIRegressionTests(unittest.TestCase):
         source = inspect.getsource(serial_GUI.FullHitCheckBox.paintEvent)
         self.assertIn('getattr(self.window(), "current_theme", "light") == "dark"', source)
         self.assertIn('QColor("#49A6FF")', source)
-        self.assertIn('QColor("#19212C")', source)
+        self.assertIn('QColor("#263241")', source)
 
     def test多字符串表格内容使用常规紧凑字体(self):
         source = inspect.getsource(serial_GUI.SerialTool.init_ui)

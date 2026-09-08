@@ -390,11 +390,11 @@ def show_usage_dialog(parent, is_dark=False):
     # QTextBrowser 背景跟随主题
     if is_dark:
         browser.setStyleSheet(
-            "QTextBrowser { background: #282C34; color: #ABB2BF; border: 1px solid #3E4451; }"
+            "QTextBrowser { background: #19212C; color: #E6EDF5; border: 1px solid #2D3A4A; }"
         )
     else:
         browser.setStyleSheet(
-            "QTextBrowser { background: #FFFFFF; color: #333333; border: 1px solid #CCCCCC; }"
+            "QTextBrowser { background: #FFFFFF; color: #1D2939; border: 1px solid #E3E8EF; }"
         )
 
     dialog.exec_()
