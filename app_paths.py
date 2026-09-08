@@ -121,6 +121,20 @@ def ensure_user_dirs(paths: AppPaths) -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
+def auto_reply_rules_dir(paths: AppPaths) -> Path:
+    """返回自动应答规则的默认保存目录。"""
+    return paths.data_dir / "auto_reply"
+
+
+def is_writable_directory(path: Path | str) -> bool:
+    """确认用户选择的既有目录可用于保存日志。"""
+    try:
+        directory = Path(path).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+    return directory.is_dir() and os.access(directory, os.W_OK | os.X_OK)
+
+
 def migrate_legacy_user_data(
     paths: AppPaths,
     legacy_dir: Path | str,

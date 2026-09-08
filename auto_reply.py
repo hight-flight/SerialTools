@@ -9,6 +9,7 @@
 - 全局开关和响应延迟控制
 """
 
+import os
 from collections import deque
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
@@ -21,6 +22,7 @@ from PyQt5.QtCore import Qt, QTimer, QMutexLocker
 from PyQt5.QtGui import QFont, QTextCursor
 
 from theme import apply_dialog_theme, DataReceiver, unescape_text
+from app_paths import auto_reply_rules_dir, resolve_app_paths
 
 
 class AutoReplyDialog(QDialog):
@@ -35,8 +37,8 @@ class AutoReplyDialog(QDialog):
         self._response_timers = set()
         self._closing = False
         self._force_close = False
-        import os
-        self._last_rules_dir = os.path.join(os.path.expanduser('~'), '.serial_GUI')
+        app_paths = getattr(parent, '_app_paths', resolve_app_paths())
+        self._last_rules_dir = os.fspath(auto_reply_rules_dir(app_paths))
         self._init_ui()
         self.check_enable.toggled.connect(self._on_enable_toggled)
         self._clean_state = self._serialize_persistent_state()

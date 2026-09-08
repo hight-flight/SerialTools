@@ -171,6 +171,27 @@ class AppPathsTests(unittest.TestCase):
             self.assertTrue(paths.ota_dir.is_dir())
             self.assertTrue(paths.cache_dir.is_dir())
 
+    def test自动应答规则目录位于应用数据目录(self):
+        app_paths = self._load_module()
+        paths = app_paths.resolve_app_paths(
+            platform_name="linux",
+            environ={"HOME": "/home/tester"},
+        )
+
+        self.assertEqual(
+            app_paths.auto_reply_rules_dir(paths),
+            Path("/home/tester/.local/share/SerialTool/auto_reply"),
+        )
+
+    def test允许用户选择任意可写的现有日志目录(self):
+        app_paths = self._load_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            external_dir = Path(temp_dir) / "外接磁盘目录"
+            external_dir.mkdir()
+
+            self.assertTrue(app_paths.is_writable_directory(external_dir))
+            self.assertFalse(app_paths.is_writable_directory(external_dir / "不存在"))
+
     def test资源路径可从指定打包目录解析(self):
         app_paths = self._load_module()
         bundle_dir = Path(os.sep) / "tmp" / "bundle"

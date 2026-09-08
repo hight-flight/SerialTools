@@ -15,7 +15,8 @@ from PyQt5.QtWidgets import QApplication, QComboBox, QMessageBox, QWidget
 
 from auto_reply import AutoReplyDialog
 from data_viewer import JsonCaptureThread
-from serial_GUI import SerialTool
+from serial_GUI import (SerialTool, connection_error_message,
+                        preferred_linux_font_substitutions)
 
 
 class _ProgressSignal:
@@ -65,6 +66,38 @@ class RuntimeRegressionTests(unittest.TestCase):
     def test读取错误时重置自动应答运行状态(self):
         source = inspect.getsource(SerialTool.handle_read_error)
         self.assertIn("self._reset_auto_reply_runtime()", source)
+
+    def test_linux串口权限错误给出dialout修复指引(self):
+        message = connection_error_message(
+            PermissionError("[Errno 13] Permission denied: '/dev/ttyUSB0'"),
+            platform_name="linux",
+        )
+
+        self.assertIn("dialout", message)
+        self.assertIn("usermod", message)
+
+    def test非linux连接错误保留原始错误信息(self):
+        message = connection_error_message(
+            PermissionError("Access is denied"),
+            platform_name="win32",
+        )
+
+        self.assertEqual(message, "打开连接失败: Access is denied")
+
+    def test恢复窗口状态后校正到当前屏幕可见区域(self):
+        source = inspect.getsource(SerialTool.load_config)
+
+        self.assertIn("self._ensure_window_visible()", source)
+        self.assertTrue(hasattr(SerialTool, "_ensure_window_visible"))
+
+    def test_linux字体替代优先使用已安装的noto字体(self):
+        substitutions = preferred_linux_font_substitutions(
+            {"Noto Sans CJK SC", "Noto Sans Mono"},
+            platform_name="linux",
+        )
+
+        self.assertEqual(substitutions["Microsoft YaHei"], "Noto Sans CJK SC")
+        self.assertEqual(substitutions["Consolas"], "Noto Sans Mono")
 
     def test日志备份worker接受signals并完成备份(self):
         self.assertIn("signals", inspect.signature(SerialTool.backup_current_file).parameters)

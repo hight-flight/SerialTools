@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog, QSizePolicy,
                              QAction, QTabWidget, QRadioButton, QButtonGroup, QStackedWidget)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint, QRect, QEvent, QByteArray
-from PyQt5.QtGui import QBrush, QFont, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon, QPen, QIcon
+from PyQt5.QtGui import QBrush, QFont, QFontDatabase, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon, QPen, QIcon
 
 # 必须在 QApplication 创建前启用，避免高 DPI 下图标先低分辨率栅格化再放大。
 if QApplication.instance() is None:
@@ -32,7 +32,8 @@ from theme import (THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme,
                    fit_message_box_buttons, fit_push_button_texts, VERSION, unescape_text)
 from transport import TransportWrapper, TransportReadThread
 from app_paths import (ensure_user_dirs, migrate_legacy_user_data, resolve_app_paths,
-                       resource_path, sanitize_linux_runtime_environment)
+                       resource_path, sanitize_linux_runtime_environment,
+                       is_writable_directory)
 
 # sudo 运行 GUI 时可能继承普通用户的 XDG_RUNTIME_DIR；Qt 要求该目录必须
 # 属于当前 UID 且权限为 0700，否则会持续报警并可能影响桌面集成。
@@ -55,6 +56,46 @@ MULTI_COL_NAME = 2
 MULTI_COL_SEND = 3
 MULTI_COL_DELAY = 4
 MULTI_COL_ORDER = 5
+
+
+def connection_error_message(error, platform_name=None):
+    """生成连接失败提示，并为 Linux 串口权限错误提供修复方法。"""
+    platform_name = platform_name or sys.platform
+    detail = str(error)
+    if (platform_name.startswith('linux')
+            and (isinstance(error, PermissionError)
+                 or 'permission denied' in detail.lower())):
+        return (
+            f"打开连接失败: {detail}\n\n"
+            "当前用户没有访问串口的权限。请执行 "
+            "sudo usermod -aG dialout $USER，然后注销并重新登录。"
+        )
+    return f"打开连接失败: {detail}"
+
+
+def preferred_linux_font_substitutions(available_families, platform_name=None):
+    """为 Windows 专用字体选择当前 Linux 已安装的等价字体。"""
+    if not (platform_name or sys.platform).startswith('linux'):
+        return {}
+    available = set(available_families)
+    preferred = {
+        'Microsoft YaHei': ('Noto Sans CJK SC', 'Noto Sans CJK', 'WenQuanYi Zen Hei'),
+        'Consolas': ('Noto Sans Mono', 'DejaVu Sans Mono'),
+        'Cascadia Mono': ('Noto Sans Mono', 'DejaVu Sans Mono'),
+        'Arial': ('Noto Sans', 'DejaVu Sans'),
+    }
+    return {
+        source: next(candidate for candidate in candidates if candidate in available)
+        for source, candidates in preferred.items()
+        if any(candidate in available for candidate in candidates)
+    }
+
+
+def configure_linux_font_substitutions():
+    """让现有控件的固定字体名在 Ubuntu 下稳定回退。"""
+    database = QFontDatabase()
+    for source, target in preferred_linux_font_substitutions(database.families()).items():
+        QFont.insertSubstitution(source, target)
 
 
 def _load_application_icon():
@@ -2047,7 +2088,7 @@ class SerialTool(QMainWindow):
                 self._set_status("就绪", "ready")
                 self.error_state = False
             except Exception as e:
-                error_msg = f"打开连接失败: {str(e)}"
+                error_msg = connection_error_message(e)
                 QMessageBox.critical(self, "连接打开失败", error_msg)
                 self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
                 self.append_text(f"[错误]: {error_msg}\n")
@@ -3251,104 +3292,8 @@ class SerialTool(QMainWindow):
         self.append_text("[系统]: 发送区已清空")
 
     def is_valid_path(self, path):
-        """验证路径是否合法，防止路径注入攻击"""
-        import os
-        try:
-            if not path or not isinstance(path, str):
-                return False
-            
-            # 规范化路径（跨平台兼容）
-            normalized_path = os.path.normpath(path)
-            
-            # 获取规范化后的路径组件（不包括空字符串）
-            parts = [p for p in normalized_path.split(os.sep) if p]
-            
-            # 检查是否包含路径遍历组件 '..'
-            if '..' in parts:
-                print(f"路径包含遍历组件 '..': {normalized_path}")
-                return False
-            
-            # 确保规范化后的路径是绝对路径
-            abs_path = os.path.abspath(normalized_path)
-            
-            # 获取允许的目录列表（跨平台兼容）
-            allowed_dirs = []
-            
-            # 程序运行目录
-            base_dir = os.path.abspath(os.getcwd())
-            allowed_dirs.append(base_dir)
-            
-            # 用户文档目录（跨平台兼容）
-            user_documents = os.path.join(os.path.expanduser("~"), "Documents")
-            allowed_dirs.append(user_documents)
-            
-            # 用户桌面目录
-            user_desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-            allowed_dirs.append(user_desktop)
-            
-            # 用户下载目录
-            user_downloads = os.path.join(os.path.expanduser("~"), "Downloads")
-            allowed_dirs.append(user_downloads)
-
-            # 应用配置、日志、缓存和 OTA 目录由 app_paths 按平台解析，属于
-            # 程序正常写入范围；Linux 的 XDG 目录通常不在 Documents 下。
-            app_paths = getattr(self, '_app_paths', None)
-            if app_paths is not None:
-                allowed_dirs.extend(os.path.abspath(path) for path in app_paths)
-            
-            # 检查路径是否在允许的目录范围内
-            is_allowed = False
-            for allowed_dir in allowed_dirs:
-                if os.path.isdir(allowed_dir):
-                    if abs_path == allowed_dir or abs_path.startswith(allowed_dir + os.sep):
-                        is_allowed = True
-                        break
-            
-            # 如果路径不存在，检查父目录是否在允许范围内（用于创建新文件/目录）
-            if not is_allowed:
-                parent_dir = os.path.dirname(abs_path)
-                if parent_dir:
-                    parent_dir = os.path.abspath(parent_dir)
-                    for allowed_dir in allowed_dirs:
-                        if os.path.isdir(allowed_dir):
-                            if parent_dir == allowed_dir or parent_dir.startswith(allowed_dir + os.sep):
-                                is_allowed = True
-                                break
-            
-            if not is_allowed:
-                print(f"路径不在允许范围内: {abs_path}")
-                return False
-            
-            # 检查符号链接（防止通过符号链接访问受限目录）
-            if os.path.islink(abs_path):
-                print(f"路径是符号链接，不允许: {abs_path}")
-                return False
-            
-            # 检查父目录是否包含符号链接
-            check_path = abs_path
-            while check_path != os.path.dirname(check_path):
-                check_path = os.path.dirname(check_path)
-                if os.path.islink(check_path):
-                    print(f"父路径包含符号链接: {check_path}")
-                    return False
-            
-            # 检查路径是否存在且是目录，或者父目录存在（用于创建新目录）
-            if os.path.exists(normalized_path):
-                if os.path.isdir(normalized_path):
-                    return True
-                else:
-                    print(f"路径不是目录: {normalized_path}")
-                    return False
-            else:
-                # 如果路径不存在，检查父目录是否存在
-                parent_dir = os.path.dirname(normalized_path)
-                if parent_dir and os.path.exists(parent_dir) and os.path.isdir(parent_dir):
-                    return True
-            
-            return False
-        except Exception as e:
-            print(f"路径验证错误: {e}")
-            return False
+        """验证用户在文件选择器中选定的目录是否可写。"""
+        return is_writable_directory(path)
 
     def _show_save_directory(self):
         """更新路径控件；界面保持紧凑，同时允许查看完整路径。"""
@@ -5999,9 +5944,28 @@ class SerialTool(QMainWindow):
                             and re.fullmatch(r'[0-9a-fA-F]*', encoded)):
                         restore(QByteArray.fromHex(encoded.encode('ascii')))
 
+                self._ensure_window_visible()
+
                 self.append_text("[系统]: 配置已加载\n")
             except Exception as e:
                 self.append_text(f"[错误]: 加载配置失败: {str(e)}\n")
+
+    def _ensure_window_visible(self):
+        """把旧显示器保存的窗口位置限制到当前可用屏幕内。"""
+        if self.isMaximized() or self.isFullScreen():
+            return
+        geometry = self.frameGeometry()
+        screen = QApplication.screenAt(geometry.center()) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        width = min(geometry.width(), available.width())
+        height = min(geometry.height(), available.height())
+        max_x = available.right() - width + 1
+        max_y = available.bottom() - height + 1
+        x = min(max(geometry.x(), available.left()), max_x)
+        y = min(max(geometry.y(), available.top()), max_y)
+        self.setGeometry(x, y, width, height)
 
     def save_config(self):
         """保存配置文件"""
@@ -6183,6 +6147,7 @@ class SerialTool(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    configure_linux_font_substitutions()
     window = SerialTool()
     window.show()
     sys.exit(app.exec_())
