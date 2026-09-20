@@ -3094,6 +3094,15 @@ class ProtocolEditorDialog(QDialog):
 
         layout.addLayout(btn_row)
 
+    def set_theme(self, is_dark: bool):
+        """主题切换时刷新已有单元格的校验提示底色。"""
+        self._is_dark = is_dark
+        for row in range(self.fields_table.rowCount()):
+            for column in (2, 3, 5, 6):
+                item = self.fields_table.item(row, column)
+                if item is not None:
+                    self._validate_field_cell(item)
+
     def _on_sync_mode_changed(self, idx):
         """切换帧同步模式时显示/隐藏对应参数"""
         modes = [

@@ -191,7 +191,7 @@ class AutoReplyDialog(QDialog):
         mode_layout = QHBoxLayout()
         mode_layout.setSpacing(8)
         self.lbl_edit_mode = QLabel("")
-        self.lbl_edit_mode.setStyleSheet("color: #528BFF; font-weight: bold;")
+        self.lbl_edit_mode.setProperty("semanticState", "accent")
         self.lbl_edit_mode.setVisible(False)
         mode_layout.addWidget(self.lbl_edit_mode)
         self.lbl_validation = QLabel("")

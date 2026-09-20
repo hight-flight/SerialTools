@@ -59,8 +59,8 @@ class _DialogParent(QWidget):
 
 
 class UIRegressionTests(unittest.TestCase):
-    def test应用版本号为1_4_1(self):
-        self.assertEqual(VERSION, "1.4.1")
+    def test应用版本号为1_4_2(self):
+        self.assertEqual(VERSION, "1.4.2")
 
     def test应用在创建窗口前启用高DPI图像(self):
         self.assertTrue(
@@ -641,9 +641,11 @@ class UIRegressionTests(unittest.TestCase):
         self.assertNotIn("libX11", source)
         self.assertNotIn("XChangeProperty", source)
 
-    def test暗色子窗口原生标题栏使用石墨背景(self):
-        source = inspect.getsource(apply_dialog_theme)
-        self.assertIn("r, g, b = 0x15, 0x1A, 0x22", source)
+    def test子窗口主题切换调用统一原生标题栏处理(self):
+        with mock.patch.object(theme, "apply_window_titlebar") as apply_titlebar:
+            for is_dark in (True, False):
+                apply_dialog_theme(self.parent, is_dark)
+                apply_titlebar.assert_called_with(self.parent, is_dark)
 
     def test复杂对话框默认宽度为垂直滚动条预留空间(self):
         gsm = GSMDebuggerDialog(self.parent)

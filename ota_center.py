@@ -855,34 +855,19 @@ class OTAControlCenter(QDialog):
         # 停止按钮仅在 OTA 执行中可用
         self._btn_stop_ota.setEnabled(is_running)
 
-        # 进度条颜色
-        if state == self.STATE_SUCCESS:
-            self._progress_bar.setStyleSheet(
-                "QProgressBar::chunk { background-color: #4EC972; }")
-        elif state in (self.STATE_FAILED, self.STATE_CANCELLED):
-            self._progress_bar.setStyleSheet(
-                "QProgressBar::chunk { background-color: #E06C75; }")
-        elif state == self.STATE_UNCONFIRMED:
-            self._progress_bar.setStyleSheet(
-                "QProgressBar::chunk { background-color: #E5C07B; }")
-        elif is_running:
-            self._progress_bar.setStyleSheet(
-                "QProgressBar::chunk { background-color: #528BFF; }")
-        else:
-            self._progress_bar.setStyleSheet(
-                "QProgressBar::chunk { background-color: #528BFF; }")
-
-        # 状态文字着色
-        if state == self.STATE_SUCCESS:
-            self._state_label.setStyleSheet("color: #4EC972; font-weight: bold;")
-        elif state in (self.STATE_FAILED, self.STATE_CANCELLED):
-            self._state_label.setStyleSheet("color: #E06C75; font-weight: bold;")
-        elif state == self.STATE_UNCONFIRMED:
-            self._state_label.setStyleSheet("color: #E5C07B; font-weight: bold;")
-        elif is_running:
-            self._state_label.setStyleSheet("color: #528BFF; font-weight: bold;")
-        else:
-            self._state_label.setStyleSheet("")
+        # 用语义属性着色，使已显示的状态随全局主题切换。
+        role = {
+            self.STATE_SUCCESS: "success",
+            self.STATE_FAILED: "danger",
+            self.STATE_CANCELLED: "danger",
+            self.STATE_UNCONFIRMED: "warning",
+        }.get(state, "accent")
+        label_role = "" if state == self.STATE_IDLE else role
+        for widget, color_role in ((self._progress_bar, role), (self._state_label, label_role)):
+            widget.setProperty("semanticState", color_role)
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+            widget.update()
         self._update_start_button_state()
 
     def _start_button_block_reason(self):

@@ -102,6 +102,54 @@ class MultiSendTests(unittest.TestCase):
 
         self.assertFalse(self.tool.check_auto_reply.isChecked())
 
+    def test点击发送按钮后按间隔重复发送且停止后不再发送(self):
+        for stop_action in ("button", "checkbox"):
+            with self.subTest(stop_action=stop_action):
+                writes = []
+                self.tool.transport = SimpleNamespace(
+                    is_open=True,
+                    write=lambda data: writes.append(bytes(data)) or len(data),
+                    close=lambda: None,
+                )
+                self.tool.text_send.setPlainText("AT")
+                self.tool.spin_interval.setValue(100)
+                self.tool.check_repeat.setChecked(True)
+
+                self.tool.btn_send.click()
+
+                self.assertEqual(writes, [b"AT"])
+                self.assertTrue(self.tool.repeat_timer.isActive())
+                self.assertEqual(self.tool.repeat_timer.interval(), 100)
+                self.assertTrue(self.tool.btn_stop.isEnabled())
+                QTest.qWait(350)
+                self.assertGreaterEqual(len(writes), 2)
+                self.assertTrue(all(data == b"AT" for data in writes))
+
+                if stop_action == "button":
+                    self.tool.btn_stop.click()
+                else:
+                    self.tool.check_repeat.setChecked(False)
+                self.assertFalse(self.tool.repeat_timer.isActive())
+                self.assertFalse(self.tool.check_repeat.isChecked())
+                self.assertFalse(self.tool.btn_stop.isEnabled())
+                sent_count = len(writes)
+                QTest.qWait(200)
+                self.assertEqual(len(writes), sent_count)
+
+    def test未勾选重复时点击发送按钮仅发送一次(self):
+        writes = []
+        self.tool.transport = SimpleNamespace(
+            is_open=True,
+            write=lambda data: writes.append(bytes(data)) or len(data),
+            close=lambda: None,
+        )
+        self.tool.text_send.setPlainText("AT")
+        self.tool.check_repeat.setChecked(False)
+        self.tool.btn_send.click()
+        QTest.qWait(200)
+        self.assertEqual(writes, [b"AT"])
+        self.assertFalse(self.tool.repeat_timer.isActive())
+
     def test单行发送保留主发送草稿且不启动普通重复发送(self):
         self.tool.transport = SimpleNamespace(
             is_open=True,
@@ -631,9 +679,10 @@ class MultiSendTests(unittest.TestCase):
             abs(order_right - self.tool.table_multi_send.viewport().width()), 1
         )
 
-    def test主窗口默认宽度为1080并受屏幕可用宽度限制(self):
+    def test主窗口默认尺寸为1120乘780并受屏幕限制(self):
         available_width = QApplication.primaryScreen().availableGeometry().width()
-        self.assertEqual(self.tool.width(), min(1080, available_width))
+        self.assertEqual(self.tool.width(), min(1120, available_width))
+        self.assertEqual(self.tool.height(), min(780, QApplication.primaryScreen().availableGeometry().height()))
 
         self.tool.show()
         self.tool.toggle_multi_send()

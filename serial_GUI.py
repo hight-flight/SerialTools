@@ -28,7 +28,7 @@ if QApplication.instance() is None:
 from dialogs import (show_crc_calculator, show_hex_converter,
                          show_serial_monitor, show_usage_dialog,
                          show_about_dialog)
-from theme import (THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme,
+from theme import (THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, apply_window_titlebar,
                    fit_message_box_buttons, fit_push_button_texts, VERSION, unescape_text)
 from transport import TransportWrapper, TransportReadThread
 from app_paths import (ensure_user_dirs, migrate_legacy_user_data, resolve_app_paths,
@@ -564,10 +564,10 @@ class SerialTool(QMainWindow):
         primary_screen = QApplication.primaryScreen()
         if primary_screen is not None:
             available = primary_screen.availableGeometry()
-            self.resize(min(1080, available.width()), min(900, available.height()))
+            self.resize(min(1120, available.width()), min(780, available.height()))
             self.setMinimumSize(min(720, available.width()), min(560, available.height()))
         else:
-            self.resize(1080, 900)
+            self.resize(1120, 780)
             self.setMinimumSize(720, 560)  # 保证顶部设置栏和发送区控件不重叠
 
         # 主窗口部件
@@ -575,8 +575,8 @@ class SerialTool(QMainWindow):
         self.setCentralWidget(main_widget)
 
         main_layout = QVBoxLayout(main_widget)
-        main_layout.setContentsMargins(4, 0, 4, 4)  # 顶部由菜单栏占据，不留额外边距
-        main_layout.setSpacing(4)
+        main_layout.setContentsMargins(12, 8, 12, 10)
+        main_layout.setSpacing(8)
 
         # --- 菜单栏 ---
         menubar = self.menuBar()
@@ -662,10 +662,11 @@ class SerialTool(QMainWindow):
 
         # --- 顶部设置区域 ---
         serial_group = QGroupBox("通信设置")
+        serial_group.setProperty("workspaceCard", True)
         serial_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         serial_layout = QVBoxLayout(serial_group)
-        serial_layout.setContentsMargins(2, 2, 2, 2)
-        serial_layout.setSpacing(1)
+        serial_layout.setContentsMargins(12, 10, 12, 10)
+        serial_layout.setSpacing(8)
 
         # 第一行：模式选择 + 刷新 + 操作按钮（非串口模式显示）
         self.mode_layout = QHBoxLayout()
@@ -689,6 +690,7 @@ class SerialTool(QMainWindow):
 
         # 操作按钮（仅非串口模式显示）
         self.btn_switch = QPushButton("打开连接")
+        self.btn_switch.setProperty("connectionAction", True)
         self.btn_switch.setCheckable(True)
         self.btn_switch.setFont(QFont("Microsoft YaHei", 9))
         self.btn_switch.setMinimumWidth(80)
@@ -755,6 +757,7 @@ class SerialTool(QMainWindow):
 
         # 串口模式按钮（紧接波特率后面）
         self.btn_switch_serial = QPushButton("打开连接")
+        self.btn_switch_serial.setProperty("connectionAction", True)
         self.btn_switch_serial.setCheckable(True)
         self.btn_switch_serial.setFont(QFont("Microsoft YaHei", 9))
         self.btn_switch_serial.setMinimumWidth(80)
@@ -952,9 +955,11 @@ class SerialTool(QMainWindow):
         
         # 接收区
         recv_group = QGroupBox("接收区")
+        recv_group.setProperty("workspaceCard", True)
         recv_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         recv_layout = QVBoxLayout(recv_group)
-        recv_layout.setContentsMargins(4, 4, 4, 4)
+        recv_layout.setContentsMargins(12, 10, 12, 8)
+        recv_layout.setSpacing(8)
 
         self.text_recv = QTextEdit()
         self.text_recv.setReadOnly(True)
@@ -1010,10 +1015,11 @@ class SerialTool(QMainWindow):
         
         # 发送区
         send_group = QGroupBox("发送区")
+        send_group.setProperty("workspaceCard", True)
         send_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         send_layout = QVBoxLayout(send_group)
-        send_layout.setContentsMargins(4, 4, 4, 4)
-        send_layout.setSpacing(4)
+        send_layout.setContentsMargins(12, 10, 12, 10)
+        send_layout.setSpacing(8)
         
         # 发送设置行
         send_settings_layout = QHBoxLayout()
@@ -1166,9 +1172,11 @@ class SerialTool(QMainWindow):
         send_buttons_layout.setSpacing(4)
 
         self.btn_send = QPushButton("发送")
+        self.btn_send.setProperty("sendAction", True)
         self.btn_send.setFont(QFont("Microsoft YaHei", 9))
         self.btn_send.setMinimumWidth(80)
-        self.btn_send.clicked.connect(self.send_data)
+        # 丢弃 clicked 的 checked 参数，避免覆盖 send_data 的重复发送管理开关。
+        self.btn_send.clicked.connect(lambda _checked=False: self.send_data())
         self.btn_send.setShortcut("Ctrl+Return")
 
         self.btn_stop = QPushButton("停止")
@@ -1213,6 +1221,7 @@ class SerialTool(QMainWindow):
         
         # 多字符串发送组
         multi_send_group = QGroupBox("多字符串发送")
+        multi_send_group.setProperty("workspaceCard", True)
         multi_send_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         multi_send_group_layout = QVBoxLayout(multi_send_group)
         multi_send_group_layout.setContentsMargins(8, 8, 8, 8)
@@ -1391,7 +1400,7 @@ class SerialTool(QMainWindow):
         left_content = QWidget()
         left_layout = QVBoxLayout(left_content)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(4)
+        left_layout.setSpacing(8)
         left_layout.addWidget(serial_group)
         left_layout.addWidget(self.io_splitter)
         # 设置左侧内容的大小策略
@@ -1702,63 +1711,8 @@ class SerialTool(QMainWindow):
         else:
             QApplication.instance().setPalette(QApplication.style().standardPalette())
 
-        # ── Windows：DWM API 精确设置标题栏颜色 ──
         if system == 'Windows':
-            try:
-                import ctypes
-                hwnd = int(self.winId())
-                if not hwnd:
-                    return
-
-                if dark:
-                    # Win11: DWMWA_CAPTION_COLOR (35) — 精确颜色
-                    try:
-                        r, g, b = int(color_hex[1:3], 16), int(color_hex[3:5], 16), int(color_hex[5:7], 16)
-                        colorref = ctypes.c_uint((b << 16) | (g << 8) | r)
-                        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                            ctypes.wintypes.HWND(hwnd),
-                            ctypes.c_uint(35),
-                            ctypes.byref(colorref),
-                            ctypes.sizeof(colorref))
-                    except Exception:
-                        pass
-                    # Win10: DWMWA_USE_IMMERSIVE_DARK_MODE (19/20)
-                    value = ctypes.c_int(1)
-                    for attr in (20, 19):
-                        try:
-                            if ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                                    ctypes.wintypes.HWND(hwnd),
-                                    ctypes.c_uint(attr),
-                                    ctypes.byref(value),
-                                    ctypes.sizeof(value)) == 0:
-                                break
-                        except Exception:
-                            continue
-                else:
-                    # Win11: 重置标题栏颜色为系统默认
-                    try:
-                        none = ctypes.c_uint(0xFFFFFFFF)  # DWMWA_COLOR_NONE
-                        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                            ctypes.wintypes.HWND(hwnd),
-                            ctypes.c_uint(35),
-                            ctypes.byref(none),
-                            ctypes.sizeof(none))
-                    except Exception:
-                        pass
-                    # Win10: 取消暗黑模式
-                    value = ctypes.c_int(0)
-                    for attr in (20, 19):
-                        try:
-                            if ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                                    ctypes.wintypes.HWND(hwnd),
-                                    ctypes.c_uint(attr),
-                                    ctypes.byref(value),
-                                    ctypes.sizeof(value)) == 0:
-                                break
-                        except Exception:
-                            continue
-            except Exception:
-                pass
+            apply_window_titlebar(self, dark, color_hex)
 
         # Linux/macOS 的原生标题栏由桌面环境或窗口管理器控制。这里仅使用
         # Qt 调色板和 QSS，避免在 Wayland/XWayland 下直接注入 X11 属性。
@@ -4166,22 +4120,45 @@ class SerialTool(QMainWindow):
         if isinstance(obj, QPushButton) and event.type() in (QEvent.Show, QEvent.FontChange):
             fit_push_button_texts(obj)
 
-        # 自动给所有 QMessageBox/独立 QDialog 应用当前主题（标题栏暗色处理）
-        # 用 WinIdChange 事件（窗口获得 hwnd 时触发，早于 Show），避免显示后再改 DWM 产生白色闪烁
-        # 仅在暗黑模式下生效，一次性处理
-        if self.current_theme == 'dark' and event.type() == QEvent.WinIdChange:
-            if not getattr(obj, '_themed', False):
-                _need_theme = False
-                if isinstance(obj, QMessageBox):
-                    _need_theme = True
-                elif isinstance(obj, QDialog) and obj.parent() is None:
-                    _need_theme = True
-                if _need_theme and obj.winId():
-                    try:
-                        apply_dialog_theme(obj, True)
-                        obj._themed = True
-                    except Exception:
-                        pass
+        # 获得原生窗口句柄时登记 Qt 弹窗，覆盖输入框、颜色选择器和消息框。
+        # 设置主题可能间接触发窗口事件，使用实例标志避免重入。
+        # 句柄销毁也会触发 WinIdChange，此时不能调用 winId() 重新创建原生窗口。
+        if (event.type() == QEvent.WinIdChange and isinstance(obj, QDialog)
+                and obj.testAttribute(Qt.WA_WState_Created)
+                and not getattr(obj, '_applying_dialog_theme', False)):
+            owner = obj.parent()
+            while owner is not None and owner is not self:
+                owner = owner.parent()
+            if owner is self or (obj.parent() is None and self.isVisible()):
+                obj._applying_dialog_theme = True
+                try:
+                    self._apply_dialog_theme(obj)
+                except RuntimeError:
+                    pass  # 窗口销毁期间的句柄变化不再访问 Qt 对象。
+                finally:
+                    obj._applying_dialog_theme = False
+
+        if isinstance(obj, QDialog) and event.type() == QEvent.Show:
+            owner = obj.parent()
+            while owner is not None and owner is not self:
+                owner = owner.parent()
+            if owner is self or (obj.parent() is None and self.isVisible()):
+                self._track_dialog(obj)
+                apply_window_titlebar(obj, self.current_theme == 'dark')
+                # 定时器随子窗口销毁，避免无上下文的 singleShot 回调滞留到 Qt 退出阶段。
+                timer = getattr(obj, '_titlebar_refresh_timer', None)
+                if timer is None:
+                    timer = QTimer(obj)
+                    timer.setSingleShot(True)
+                    timer.timeout.connect(lambda dialog=obj:
+                        apply_window_titlebar(dialog, self.current_theme == 'dark'))
+                    obj._titlebar_refresh_timer = timer
+                timer.start(0)
+
+        if isinstance(obj, QDialog) and event.type() == QEvent.Hide:
+            timer = getattr(obj, '_titlebar_refresh_timer', None)
+            if timer is not None:
+                timer.stop()
 
         # 构造期间可能被提前调用，对尚未创建的控件做防御性判断
         text_recv = getattr(self, 'text_recv', None)
@@ -4714,17 +4691,37 @@ class SerialTool(QMainWindow):
         main_layout.addWidget(plot_widget, stretch=1)
 
         # ── 每通道曲线 + 环形缓冲区 ──
-        CHANNEL_COLORS = ([
-            (0x61, 0xAF, 0xEF), (0x98, 0xC3, 0x79), (0xE0, 0x6C, 0x75),
-            (0xD1, 0x9A, 0x66), (0xC6, 0x78, 0xDD), (0x56, 0xB6, 0xC2),
-            (0xAB, 0xB2, 0xBF), (0xE5, 0xC0, 0x7B),
-        ] if self.current_theme == 'dark' else [
-            (0, 103, 197), (20, 125, 100), (209, 47, 69),
-            (181, 71, 8), (123, 63, 178), (0, 112, 138),
-            (52, 65, 84), (138, 98, 0),
-        ])
+        CHANNEL_COLORS = []
         curves = []
         buffers = []
+
+        def set_scope_theme(is_dark):
+            """只更新绘图配色，保留通道、采样缓冲及运行状态。"""
+            plot_widget.setBackground('#19212C' if is_dark else '#FFFFFF')
+            foreground = '#B9C8D8' if is_dark else '#667085'
+            for name in ('left', 'bottom'):
+                axis = plot_widget.getAxis(name)
+                axis.setPen(pg.mkPen(foreground))
+                axis.setTextPen(pg.mkPen(foreground))
+                axis.setLabel(axis.labelText, color=foreground)
+            empty_text.setColor(foreground)
+            CHANNEL_COLORS[:] = (
+                [(97, 175, 239), (152, 195, 121), (224, 108, 117),
+                 (209, 154, 102), (198, 120, 221), (86, 182, 194),
+                 (171, 178, 191), (229, 192, 123)] if is_dark else
+                [(0, 103, 197), (20, 125, 100), (209, 47, 69),
+                 (181, 71, 8), (123, 63, 178), (0, 112, 138),
+                 (52, 65, 84), (138, 98, 0)]
+            )
+            for index, curve in enumerate(curves):
+                curve.setPen(pg.mkPen(CHANNEL_COLORS[index % len(CHANNEL_COLORS)], width=1.5))
+            legend = plot_widget.getPlotItem().legend
+            if legend is not None:
+                legend.setLabelTextColor(foreground)
+
+        dialog.set_theme = set_scope_theme
+        set_scope_theme(self.current_theme == 'dark')
+
 
         def rebuild_channels():
             """重建通道曲线和缓冲区"""

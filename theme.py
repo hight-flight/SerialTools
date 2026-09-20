@@ -3,7 +3,7 @@
 主题模块：颜色常量、QSS 样式表、对话框主题应用工具函数。
 """
 
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 
 import platform
 import re
@@ -11,7 +11,7 @@ import re
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import (
-    QApplication, QMessageBox, QPushButton, QStyle, QStyleOptionButton,
+    QApplication, QMessageBox, QPushButton, QStyle, QStyleOptionButton, QGroupBox,
 )
 
 
@@ -517,6 +517,66 @@ QTabBar::tab:selected { background-color: #19212C; color: #78BCFF; }
 QTabBar::tab:hover { background-color: #2B4057; color: #FFFFFF; }
 """
 
+
+def _workspace_qss(is_dark):
+    """统一主窗口、子窗口面板及语义控件的明暗主题样式。"""
+    colors = (
+        dict(card="#202936", border="#334155", title="#E6EDF5",
+             subtle="#263241", accent="#2784EE", hover="#4198FA", pressed="#1666C4",
+             connected="#214A3C", connected_text="#9CE5BE", disabled="#27323F",
+             disabled_text="#8191A4", success="#73D6A1", danger="#FF929A", warning="#E5C07B")
+        if is_dark else
+        dict(card="#FFFFFF", border="#DFE6EF", title="#24364B",
+             subtle="#F1F5FA", accent="#246FE5", hover="#185FCC", pressed="#1551B0",
+             connected="#EAF7EF", connected_text="#227447", disabled="#EDF1F6",
+             disabled_text="#8A98A9", success="#227447", danger="#B42332", warning="#946200")
+    )
+    return """
+QGroupBox[workspaceCard="true"] {
+    background-color: %(card)s; border: 1px solid %(border)s;
+    border-radius: 10px; margin-top: 10px; padding-top: 10px;
+}
+QGroupBox[workspaceCard="true"]::title {
+    color: %(title)s; background-color: %(card)s;
+    left: 14px; padding: 0 8px; font-weight: 600;
+}
+QLabel[semanticState="accent"] { color: %(accent)s; font-weight: bold; }
+QLabel[semanticState="success"] { color: %(success)s; font-weight: bold; }
+QLabel[semanticState="danger"] { color: %(danger)s; font-weight: bold; }
+QLabel[semanticState="warning"] { color: %(warning)s; font-weight: bold; }
+QProgressBar[semanticState="accent"]::chunk { background-color: %(accent)s; }
+QProgressBar[semanticState="success"]::chunk { background-color: %(success)s; }
+QProgressBar[semanticState="danger"]::chunk { background-color: %(danger)s; }
+QProgressBar[semanticState="warning"]::chunk { background-color: %(warning)s; }
+QPushButton[sendAction="true"], QPushButton[connectionAction="true"] {
+    background-color: %(accent)s; border: 1px solid %(accent)s;
+    color: #FFFFFF; font-weight: 600;
+}
+QPushButton[sendAction="true"]:hover, QPushButton[connectionAction="true"]:hover {
+    background-color: %(hover)s; border-color: %(hover)s;
+}
+QPushButton[sendAction="true"]:pressed, QPushButton[connectionAction="true"]:pressed {
+    background-color: %(pressed)s; border-color: %(pressed)s;
+}
+QPushButton[connectionAction="true"]:checked {
+    background-color: %(connected)s; color: %(connected_text)s;
+    border-color: %(connected_text)s;
+}
+QPushButton[connectionAction="true"]:checked:hover { background-color: %(subtle)s; }
+QPushButton[primary="true"]:disabled, QPushButton[danger="true"]:disabled,
+QPushButton[sendAction="true"]:disabled, QPushButton[connectionAction="true"]:disabled {
+    background-color: %(disabled)s; color: %(disabled_text)s; border-color: %(border)s;
+}
+QPushButton[sendAction="true"]:focus, QPushButton[connectionAction="true"]:focus {
+    border: 2px solid %(title)s; padding: 3px 9px;
+}
+""" % colors
+
+
+LIGHT_QSS += _workspace_qss(False)
+DARK_QSS += _workspace_qss(True)
+
+
 def fit_message_box_buttons(dialog):
     """按实际字体宽度扩展消息框按钮，避免高 DPI 下文字被裁切。"""
     if not isinstance(dialog, QMessageBox):
@@ -565,9 +625,46 @@ def fit_push_button_texts(root):
             button.updateGeometry()
 
 
+def apply_window_titlebar(window, is_dark, color_hex="#151A22"):
+    """同步 Windows 原生标题栏，并立即重绘非客户区。"""
+    if platform.system() != "Windows":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        hwnd = wintypes.HWND(int(window.winId()))
+        if not hwnd.value:
+            return False
+        set_attribute = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        set_attribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+        set_attribute.restype = ctypes.c_long
+        redraw = ctypes.windll.user32.RedrawWindow
+        redraw.argtypes = [wintypes.HWND, ctypes.c_void_p, wintypes.HANDLE, wintypes.UINT]
+        redraw.restype = wintypes.BOOL
+
+        def set_value(attribute, value):
+            data = ctypes.c_uint32(value)
+            return set_attribute(hwnd, attribute, ctypes.byref(data), ctypes.sizeof(data)) == 0
+
+        # 较早的 Windows 版本使用属性 19；不支持的颜色属性不影响暗色模式回退。
+        dark_applied = set_value(20, int(is_dark)) or set_value(19, int(is_dark))
+        color = QColor(color_hex)
+        caption = color.red() | (color.green() << 8) | (color.blue() << 16)
+        caption_applied = set_value(35, caption if is_dark else 0xFFFFFFFF)
+        set_value(36, 0xF5EDE6 if is_dark else 0xFFFFFFFF)
+        # RDW_INVALIDATE | RDW_UPDATENOW | RDW_FRAME：切换后立即刷新标题栏。
+        redraw(hwnd, None, None, 0x0501)
+        return dark_applied or caption_applied
+    except (AttributeError, OSError, RuntimeError):
+        return False
+
+
 def apply_dialog_theme(dialog, is_dark):
     """为子对话框应用当前主题（暗黑/明亮），支持运行时切换。"""
-    is_win = platform.system() == 'Windows'
+    for group in dialog.findChildren(QGroupBox):
+        group.setProperty("workspaceCard", True)
+
     app = QApplication.instance()
     if app is not None and not app.windowIcon().isNull():
         dialog.setWindowIcon(app.windowIcon())
@@ -581,53 +678,13 @@ def apply_dialog_theme(dialog, is_dark):
         p.setColor(QPalette.Button, QColor('#263241'))
         p.setColor(QPalette.ButtonText, QColor('#D9E3EE'))
         dialog.setPalette(p)
-        # Windows DWM 标题栏暗色
-        if is_win:
-            try:
-                import ctypes
-                hwnd = int(dialog.winId())
-                if hwnd:
-                    value = ctypes.c_int(1)
-                    for attr in (20, 19):
-                        try:
-                            if ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                                ctypes.wintypes.HWND(hwnd), ctypes.c_uint(attr),
-                                ctypes.byref(value), ctypes.sizeof(value)) == 0:
-                                break
-                        except Exception:
-                            continue
-                    r, g, b = 0x15, 0x1A, 0x22
-                    colorref = ctypes.c_uint32((b << 16) | (g << 8) | r)
-                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                        ctypes.wintypes.HWND(hwnd), ctypes.c_uint(35),
-                        ctypes.byref(colorref), ctypes.sizeof(colorref))
-            except Exception:
-                pass
 
     else:
         # 明亮主题：清除 QSS，恢复标准调色板
         dialog.setStyleSheet('')
         dialog.setPalette(QApplication.style().standardPalette())
-        # Windows DWM 标题栏恢复
-        if is_win:
-            try:
-                import ctypes
-                hwnd = int(dialog.winId())
-                if hwnd:
-                    value = ctypes.c_int(0)
-                    for attr in (20, 19):
-                        try:
-                            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                                ctypes.wintypes.HWND(hwnd), ctypes.c_uint(attr),
-                                ctypes.byref(value), ctypes.sizeof(value))
-                        except Exception:
-                            continue
-                    none = ctypes.c_uint(0xFFFFFFFF)
-                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                        ctypes.wintypes.HWND(hwnd), ctypes.c_uint(35),
-                        ctypes.byref(none), ctypes.sizeof(none))
-            except Exception:
-                pass
+
+    apply_window_titlebar(dialog, is_dark)
 
     fit_message_box_buttons(dialog)
     fit_push_button_texts(dialog)
