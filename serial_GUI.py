@@ -1148,6 +1148,12 @@ class SerialTool(QMainWindow):
         self.btn_send_file.setEnabled(False)  # 默认禁用，选择文件后启用
         fields_layout.addWidget(self.btn_send_file)
 
+        self.btn_cancel_file_send = QPushButton("取消发送")
+        self.btn_cancel_file_send.setFont(QFont("Microsoft YaHei", 9))
+        self.btn_cancel_file_send.setMinimumWidth(72)
+        self.btn_cancel_file_send.clicked.connect(self.cancel_file_send)
+        self.btn_cancel_file_send.setEnabled(False)
+        fields_layout.addWidget(self.btn_cancel_file_send)
         fields_layout.addStretch()
 
         send_layout.addLayout(fields_layout)
@@ -1486,7 +1492,7 @@ class SerialTool(QMainWindow):
             self.check_repeat, self.spin_interval, self.check_auto_reply,
             self.check_head_field,
             self.text_ota, self.check_tail_field, self.text_tail,
-            self.btn_select_file, self.btn_send_file, self.text_send,
+            self.btn_select_file, self.btn_send_file, self.btn_cancel_file_send, self.text_send,
             self.btn_send, self.btn_stop, self.btn_clear_send,
             self.btn_save_params, self.btn_toggle_multi_send,
             self.btn_batch_send, self.spin_delay, self.check_cycle_count,
@@ -2142,14 +2148,23 @@ class SerialTool(QMainWindow):
         # 禁用发送按钮，防止重复发送
         self.btn_send_file.setEnabled(False)
         self.btn_send_file.setText("发送中…")
-        
+        self.btn_cancel_file_send.setEnabled(True)
         # 使用线程池发送文件，避免阻塞UI
         worker = FileOperationWorker(self._send_file_worker, self.selected_file_path, file_size)
         worker.signals.result.connect(self.on_file_send_complete)
         worker.signals.error.connect(self.on_file_send_error)
         worker.signals.progress.connect(self.on_file_send_progress)
         self.thread_pool.start(worker)
-    
+
+    def cancel_file_send(self):
+        """请求取消当前文件发送。"""
+        if not self.btn_cancel_file_send.isEnabled():
+            return
+
+        self.stop_file_send = True
+        self.btn_cancel_file_send.setEnabled(False)
+        self.append_text("[信息]: 正在取消文件发送…\n")
+
     def _send_file_worker(self, signals, file_path, file_size):
         """文件发送工作线程"""
         import os
@@ -2208,12 +2223,14 @@ class SerialTool(QMainWindow):
         # 重新启用发送按钮
         self.btn_send_file.setEnabled(True)
         self.btn_send_file.setText("发送文件")
+        self.btn_cancel_file_send.setEnabled(False)
     
     def on_file_send_error(self, error):
         """文件发送错误回调"""
         self.append_text(f"[错误]: 文件发送错误: {error}\n")
         self.btn_send_file.setEnabled(True)
         self.btn_send_file.setText("发送文件")
+        self.btn_cancel_file_send.setEnabled(False)
     
     def on_file_send_progress(self, progress_msg):
         """文件发送进度回调"""

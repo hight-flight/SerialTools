@@ -35,6 +35,17 @@ class _FileSender:
         self.stop_file_send = False
 
 
+class _Button:
+    def __init__(self, enabled=True):
+        self.enabled = enabled
+
+    def setEnabled(self, enabled):
+        self.enabled = enabled
+
+    def isEnabled(self):
+        return self.enabled
+
+
 class FileSendingTests(unittest.TestCase):
     def _send(self, transport, payload=b"abcdef"):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -57,6 +68,18 @@ class FileSendingTests(unittest.TestCase):
 
         self.assertFalse(success)
         self.assertIn("连接已关闭", message)
+
+    def test取消文件发送会设置取消标志并禁用取消按钮(self):
+        sender = _FileSender(_PartialTransport(0))
+        sender.btn_cancel_file_send = _Button()
+        messages = []
+        sender.append_text = messages.append
+
+        SerialTool.cancel_file_send(sender)
+
+        self.assertTrue(sender.stop_file_send)
+        self.assertFalse(sender.btn_cancel_file_send.enabled)
+        self.assertIn("正在取消文件发送", messages[0])
 
 
 if __name__ == "__main__":
