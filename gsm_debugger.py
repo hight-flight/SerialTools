@@ -99,7 +99,7 @@ class GSMDebuggerDialog(QDialog):
         self._build_response_area(layout)
 
         # ── 底部选项栏 ──
-        self._build_options_bar(layout)
+        self._build_options_bar(outer_layout)
 
     def _build_status_bar(self, parent_layout):
         status_group = QGroupBox("模块状态")
@@ -147,7 +147,7 @@ class GSMDebuggerDialog(QDialog):
     def _build_info_buttons(self, parent_layout):
         info_group = QGroupBox("设备信息查询")
         info_layout = QVBoxLayout(info_group)
-        info_layout.setSpacing(4)
+        info_layout.setSpacing(6)
 
         info_row1 = [
             ("厂家标识", "AT+CGMI"),
@@ -166,7 +166,7 @@ class GSMDebuggerDialog(QDialog):
         ]
 
         row1_layout = QHBoxLayout()
-        row1_layout.setSpacing(4)
+        row1_layout.setSpacing(6)
         for label, cmd in info_row1:
             btn = QPushButton(label)
             btn.setMinimumWidth(85)
@@ -177,7 +177,7 @@ class GSMDebuggerDialog(QDialog):
         info_layout.addLayout(row1_layout)
 
         row2_layout = QHBoxLayout()
-        row2_layout.setSpacing(4)
+        row2_layout.setSpacing(6)
         for label, cmd in info_row2:
             btn = QPushButton(label)
             btn.setMinimumWidth(85)
@@ -192,11 +192,9 @@ class GSMDebuggerDialog(QDialog):
     def _build_control_buttons(self, parent_layout):
         control_group = QGroupBox("控制指令")
         control_layout = QVBoxLayout(control_group)
-        control_layout.setSpacing(4)
+        control_layout.setSpacing(6)
 
         control_row1 = [
-            ("重启模块", "AT+CFUN=1,1"),
-            ("恢复出厂", "AT&F"),
             ("挂断电话", "ATH"),
             ("查询网络模式", "AT+COPS=?"),
             ("查询短信存储", "AT+CPMS?"),
@@ -211,27 +209,24 @@ class GSMDebuggerDialog(QDialog):
         ]
         # 危险操作单独一行，使用统一样式（主题 QSS 处理）
         control_row3 = [
+            ("重启模块", "AT+CFUN=1,1"),
+            ("恢复出厂", "AT&F"),
             ("清空短信", "AT+CMGD=1,4"),
         ]
 
-        dangerous_commands = {"重启模块", "恢复出厂", "清空短信"}
         row1_layout = QHBoxLayout()
-        row1_layout.setSpacing(4)
+        row1_layout.setSpacing(6)
         for label, cmd in control_row1:
             btn = QPushButton(label)
             btn.setMinimumWidth(90)
             btn.setToolTip(cmd)
-            if label in dangerous_commands:
-                self._mark_dangerous_button(btn, label)
-                btn.clicked.connect(lambda checked, c=cmd, l=label: self._send_dangerous_command(c, l))
-            else:
-                btn.clicked.connect(lambda checked, c=cmd: self._send_command(c))
+            btn.clicked.connect(lambda checked, c=cmd: self._send_command(c))
             row1_layout.addWidget(btn)
         row1_layout.addStretch()
         control_layout.addLayout(row1_layout)
 
         row2_layout = QHBoxLayout()
-        row2_layout.setSpacing(4)
+        row2_layout.setSpacing(6)
         for label, cmd in control_row2:
             btn = QPushButton(label)
             btn.setMinimumWidth(80)
@@ -243,7 +238,7 @@ class GSMDebuggerDialog(QDialog):
 
         # 危险操作行
         row3_layout = QHBoxLayout()
-        row3_layout.setSpacing(4)
+        row3_layout.setSpacing(6)
         for label, cmd in control_row3:
             btn = QPushButton(label)
             btn.setMinimumWidth(90)

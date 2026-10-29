@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QComboBox, QPushButton, QTextEdit, QCheckBox,
                              QMessageBox, QSpinBox, QLineEdit, QProgressBar,
                              QGroupBox, QFileDialog, QApplication, QScrollArea,
-                             QWidget, QFrame)
+                             QWidget, QFrame, QGridLayout)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QMutexLocker
 from PyQt5.QtGui import QFont, QPainter, QPixmap, QColor
 
@@ -259,8 +259,10 @@ class OTAControlCenter(QDialog):
 
         # ── 1. HTTP 服务管理 ──
         http_group = QGroupBox("HTTP 服务管理")
-        http_layout = QVBoxLayout(http_group)
-        http_layout.setSpacing(6)
+        http_layout = QGridLayout(http_group)
+        http_layout.setHorizontalSpacing(8)
+        http_layout.setVerticalSpacing(8)
+        http_layout.setColumnStretch(1, 1)
 
         # 状态行
         status_row = QHBoxLayout()
@@ -272,46 +274,43 @@ class OTAControlCenter(QDialog):
         self._http_status_label = QLabel("已停止")
         status_row.addWidget(self._http_status_label)
         status_row.addStretch()
-        http_layout.addLayout(status_row)
+        http_layout.addLayout(status_row, 0, 0, 1, 2)
 
         # 端口行
-        port_row = QHBoxLayout()
-        port_row.addWidget(QLabel("端口："))
+        http_layout.addWidget(QLabel("端口："), 1, 0)
         self._port_spin = QSpinBox()
         self._port_spin.setRange(1024, 65535)
         self._port_spin.setValue(8080)
         self._port_spin.setToolTip("HTTP 服务端口（1024–65535），服务启动后不可修改")
-        port_row.addWidget(self._port_spin)
-        port_row.addStretch()
-        http_layout.addLayout(port_row)
+        http_layout.addWidget(self._port_spin, 1, 1, Qt.AlignLeft)
 
         # IP 行
-        ip_row = QHBoxLayout()
-        ip_row.addWidget(QLabel("本机 IP："))
+        http_layout.addWidget(QLabel("本机 IP："), 2, 0)
         self._ip_combo = QComboBox()
         self._ip_combo.setMinimumWidth(180)
         self._ip_combo.setToolTip("选择用于 OTA 下载的本机局域网 IP 地址")
-        ip_row.addWidget(self._ip_combo)
+        ip_row = QHBoxLayout()
+        ip_row.setSpacing(8)
+        ip_row.addWidget(self._ip_combo, 1)
         self._btn_refresh_ip = QPushButton("刷新")
         self._btn_refresh_ip.setMinimumWidth(56)
         self._btn_refresh_ip.setFont(QFont("Microsoft YaHei", 9))
         self._btn_refresh_ip.setToolTip("刷新本机 IP 列表")
         self._btn_refresh_ip.clicked.connect(self._refresh_ips)
         ip_row.addWidget(self._btn_refresh_ip)
-        ip_row.addStretch()
-        http_layout.addLayout(ip_row)
+        http_layout.addLayout(ip_row, 2, 1, 1, 2)
 
         # 服务按钮行
         srv_btn_row = QHBoxLayout()
         self._btn_start_server = QPushButton("启动服务")
+        self._btn_start_server.setProperty("connectionAction", True)
         self._btn_start_server.clicked.connect(self._start_http_service)
         srv_btn_row.addWidget(self._btn_start_server)
         self._btn_stop_server = QPushButton("停止服务")
         self._btn_stop_server.setEnabled(False)
         self._btn_stop_server.clicked.connect(self._stop_http_service)
         srv_btn_row.addWidget(self._btn_stop_server)
-        srv_btn_row.addStretch()
-        http_layout.addLayout(srv_btn_row)
+        http_layout.addLayout(srv_btn_row, 0, 2)
 
         layout.addWidget(http_group)
 

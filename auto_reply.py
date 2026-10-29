@@ -81,9 +81,10 @@ class AutoReplyDialog(QDialog):
         self.reply_sections_splitter.setSizes([220, 135, 205])
         layout.addWidget(self.reply_sections_splitter, 1)
 
-        self._build_buttons_bar(layout)
         self.scroll_area.setWidget(content)
         outer_layout.addWidget(self.scroll_area)
+        # 操作栏固定在滚动区外，小窗口下仍能导入、导出和关闭。
+        self._build_buttons_bar(outer_layout)
         self._refresh_rules_table()
 
     def _build_global_options(self, parent_layout):

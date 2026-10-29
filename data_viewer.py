@@ -2348,7 +2348,7 @@ class CaptureListWidget(QWidget):
         layout.setSpacing(2)
 
         # ── 标题 ──
-        lbl = QLabel("── 捕获列表 ──")
+        lbl = QLabel("捕获列表")
         lbl.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
         layout.addWidget(lbl)
 
@@ -2371,6 +2371,19 @@ class CaptureListWidget(QWidget):
         self.table.customContextMenuRequested.connect(self._on_context_menu)
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
 
+        # 提示覆盖在空表格上，不占用数据行，也不拦截表格交互。
+        self.empty_hint = QLabel(self.table.viewport())
+        self.empty_hint.setAccessibleName("捕获列表空状态")
+        self.empty_hint.setWordWrap(True)
+        self.empty_hint.setAlignment(Qt.AlignCenter)
+        self.empty_hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        empty_layout = QVBoxLayout(self.table.viewport())
+        empty_layout.setContentsMargins(16, 16, 16, 16)
+        empty_layout.addWidget(self.empty_hint, 0, Qt.AlignCenter)
+        self.model.modelReset.connect(self._update_empty_hint)
+        self.model.rowsInserted.connect(self._update_empty_hint)
+        self._update_empty_hint()
+
         # 固定表格样式：根据传入主题初始化，避免主题切换闪烁
         self._is_dark = is_dark
         self._apply_table_style(is_dark)
@@ -2392,6 +2405,13 @@ class CaptureListWidget(QWidget):
         bottom.addStretch()
         layout.addLayout(bottom)
 
+    def _update_empty_hint(self, *_args):
+        self.empty_hint.setText(
+            "没有匹配结果\n请调整搜索条件。" if self.model.total_count else
+            "暂无捕获数据\n连接设备后开始监听。"
+        )
+        self.empty_hint.setVisible(self.model.rowCount() == 0)
+
     def set_theme(self, is_dark: bool):
         """响应主题切换，更新表格配色"""
         self._is_dark = is_dark
@@ -2402,6 +2422,9 @@ class CaptureListWidget(QWidget):
         """根据主题应用表格样式，确保文字/背景对比度清晰"""
         self._is_dark = is_dark
         t = _VIEWER_TOKENS['dark' if is_dark else 'light']
+        self.empty_hint.setStyleSheet(
+            f"color: {t['text_muted']}; background: transparent; border: none;"
+        )
         self.table.setStyleSheet(f"""
             QTableView {{
                 background-color: {t['bg_card']};
@@ -3436,6 +3459,7 @@ class JsonViewerDialog(QDialog):
         ctrl_layout.addWidget(flt_label)
         self.combo_filter_mode = QComboBox()
         self.combo_filter_mode.setAccessibleName("数据解析模式")
+        self.combo_filter_mode.setMinimumWidth(160)
         self.combo_filter_mode.addItems(["所有行尝试解析", "提取 JSON 对象", "自定义正则", "二进制协议解析"])
         self.combo_filter_mode.setFont(QFont("Microsoft YaHei", 9))
         self.combo_filter_mode.setToolTip("选择数据解析策略")
@@ -3443,44 +3467,53 @@ class JsonViewerDialog(QDialog):
         self.combo_filter_mode.currentIndexChanged.connect(self._on_filter_mode_changed)
         ctrl_layout.addWidget(self.combo_filter_mode)
 
+        # 高级解析参数独立成行，避免挤压搜索框和监听操作。
+        self.parse_options = QWidget()
+        parse_layout = QHBoxLayout(self.parse_options)
+        parse_layout.setContentsMargins(4, 0, 4, 0)
+        parse_layout.setSpacing(8)
+        self.parse_options.hide()
+
         # 协议状态（仅二进制模式可见）
         self.lbl_protocol = QLabel("协议: 未选择")
         self.lbl_protocol.setFont(QFont("Microsoft YaHei", 9))
         self.lbl_protocol.setVisible(False)
-        ctrl_layout.addWidget(self.lbl_protocol)
+        self.lbl_protocol.setWordWrap(True)
+        parse_layout.addWidget(self.lbl_protocol, 1)
 
         self.btn_edit_protocol = QPushButton("编辑协议")
         self.btn_edit_protocol.setFont(QFont("Microsoft YaHei", 9))
         self.btn_edit_protocol.setToolTip("编辑二进制协议模板（字段定义、帧同步方式）")
         self.btn_edit_protocol.setVisible(False)
         self.btn_edit_protocol.clicked.connect(self._open_protocol_editor)
-        ctrl_layout.addWidget(self.btn_edit_protocol)
+        parse_layout.addWidget(self.btn_edit_protocol)
 
         # 正则输入框（自定义正则模式可见）
         self.edit_regex = QLineEdit()
         self.edit_regex.setAccessibleName("自定义正则表达式")
         self.edit_regex.setPlaceholderText("正则表达式，如: value=(\\d+\\.\\d+)")
         self.edit_regex.setFont(QFont("Consolas", 9))
-        self.edit_regex.setMaximumWidth(260)
+        self.edit_regex.setMinimumWidth(240)
         self.edit_regex.setToolTip(
             "输入正则表达式从数据流中提取内容\n"
             "匹配到的文本会尝试 JSON 解析后显示"
         )
         self.edit_regex.setVisible(False)
         self.edit_regex.textChanged.connect(self._on_regex_changed)
-        ctrl_layout.addWidget(self.edit_regex)
+        parse_layout.addWidget(self.edit_regex, 1)
 
         self.lbl_validation = QLabel()
         self.lbl_validation.setAccessibleName("解析配置错误")
         self.lbl_validation.setVisible(False)
-        ctrl_layout.addWidget(self.lbl_validation)
+        self.lbl_validation.setWordWrap(True)
 
         # 搜索
         self.edit_search = QLineEdit()
         self.edit_search.setAccessibleName("搜索捕获列表")
         self.edit_search.setPlaceholderText("搜索列表…")
         self.edit_search.setFont(QFont("Microsoft YaHei", 9))
-        self.edit_search.setMaximumWidth(160)
+        self.edit_search.setMinimumWidth(120)
+        self.edit_search.setMaximumWidth(240)
         self.edit_search.setToolTip("输入关键字实时过滤列表 (Ctrl+F)")
         ctrl_layout.addWidget(self.edit_search)
 
@@ -3488,6 +3521,7 @@ class JsonViewerDialog(QDialog):
 
         # ─ 操作按钮 ─
         self.btn_start = QPushButton("开始监听")
+        self.btn_start.setProperty("connectionAction", True)
         self.btn_start.setAccessibleName("开始监听")
         self.btn_start.setFont(QFont("Microsoft YaHei", 9))
         self.btn_start.setToolTip("开始从数据源捕获 (Ctrl+Enter)")
@@ -3511,15 +3545,17 @@ class JsonViewerDialog(QDialog):
         ctrl_layout.addWidget(self.btn_clear)
 
         # ─ 帮助 ─
-        self.btn_help = QPushButton("?")
+        self.btn_help = QPushButton("帮助")
         self.btn_help.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
-        self.btn_help.setFixedWidth(28)
+        self.btn_help.setMinimumWidth(56)
         self.btn_help.setAccessibleName("帮助")
         self.btn_help.setToolTip("查看使用说明")
         self.btn_help.clicked.connect(self._show_help)
         ctrl_layout.addWidget(self.btn_help)
 
         main_layout.addWidget(ctrl_widget)
+        main_layout.addWidget(self.parse_options)
+        main_layout.addWidget(self.lbl_validation)
 
         # ──── 主分割器（左右） ────
         self.splitter_h = QSplitter(Qt.Horizontal)
@@ -3847,6 +3883,7 @@ class JsonViewerDialog(QDialog):
         is_binary = (idx == 3)      # MODE_BINARY
         is_regex = (idx == 2)       # MODE_REGEX
 
+        self.parse_options.setVisible(is_binary or is_regex)
         self.lbl_protocol.setVisible(is_binary)
         self.btn_edit_protocol.setVisible(is_binary)
         self.edit_regex.setVisible(is_regex)

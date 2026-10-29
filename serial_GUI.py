@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QComboBox, QPushButton,
                              QTextEdit, QCheckBox, QMessageBox, QSplitter, QSpinBox, QLineEdit, QGroupBox, QDialog, QFormLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QFileDialog, QInputDialog, QSizePolicy,
-                             QAction, QTabWidget, QRadioButton, QButtonGroup, QStackedWidget)
+                             QAction, QTabWidget, QRadioButton, QButtonGroup, QStackedWidget, QScrollArea, QLayout)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint, QRect, QEvent, QByteArray
 from PyQt5.QtGui import QBrush, QFont, QFontDatabase, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon, QPen, QIcon
 
@@ -712,7 +712,7 @@ class SerialTool(QMainWindow):
 
         # 第一行：模式选择 + 刷新 + 操作按钮（非串口模式显示）
         self.mode_layout = QHBoxLayout()
-        self.mode_layout.setSpacing(4)
+        self.mode_layout.setSpacing(6)
 
         mode_label = QLabel("模式:")
         mode_label.setFont(QFont("Microsoft YaHei", 9))
@@ -750,7 +750,7 @@ class SerialTool(QMainWindow):
 
         # 第二行：动态参数面板 + 操作按钮（仅串口模式在参数后显示按钮）
         self.params_row = QHBoxLayout()
-        self.params_row.setSpacing(4)
+        self.params_row.setSpacing(6)
 
         self.stack_params = QStackedWidget()
         # 参数栈及页面透出通信设置面板底色，避免模式行出现矩形色块。
@@ -766,7 +766,7 @@ class SerialTool(QMainWindow):
         serial_page = QWidget()
         serial_page_layout = QHBoxLayout(serial_page)
         serial_page_layout.setContentsMargins(0, 0, 0, 0)
-        serial_page_layout.setSpacing(4)
+        serial_page_layout.setSpacing(6)
 
         port_layout = QHBoxLayout()
         port_label = QLabel("串口:")
@@ -819,7 +819,7 @@ class SerialTool(QMainWindow):
         udp_page = QWidget()
         udp_page_layout = QHBoxLayout(udp_page)
         udp_page_layout.setContentsMargins(0, 0, 0, 0)
-        udp_page_layout.setSpacing(4)
+        udp_page_layout.setSpacing(6)
         udp_page_layout.addWidget(QLabel("本地IP:", font=QFont("Microsoft YaHei", 9)))
         self.edit_udp_local_ip = QComboBox()
         self.edit_udp_local_ip.setEditable(True)
@@ -858,7 +858,7 @@ class SerialTool(QMainWindow):
         tcp_client_page = QWidget()
         tcp_client_page_layout = QHBoxLayout(tcp_client_page)
         tcp_client_page_layout.setContentsMargins(0, 0, 0, 0)
-        tcp_client_page_layout.setSpacing(4)
+        tcp_client_page_layout.setSpacing(6)
         tcp_client_page_layout.addWidget(QLabel("远程IP:", font=QFont("Microsoft YaHei", 9)))
         self.edit_tcp_remote_ip = QLineEdit()
         self.edit_tcp_remote_ip.setFont(QFont("Consolas", 9))
@@ -881,7 +881,7 @@ class SerialTool(QMainWindow):
         tcp_server_page = QWidget()
         tcp_server_page_layout = QHBoxLayout(tcp_server_page)
         tcp_server_page_layout.setContentsMargins(0, 0, 0, 0)
-        tcp_server_page_layout.setSpacing(4)
+        tcp_server_page_layout.setSpacing(6)
         tcp_server_page_layout.addWidget(QLabel("本地IP:", font=QFont("Microsoft YaHei", 9)))
         self.edit_tcp_server_local_ip = QComboBox()
         self.edit_tcp_server_local_ip.setEditable(True)
@@ -903,28 +903,28 @@ class SerialTool(QMainWindow):
 
         self.params_row.addWidget(self.stack_params)
 
-        # 自动保存（合并在参数行右侧，所有模式统一）
-        self.params_row.addSpacing(16)
+        # 日志与模式共用顶行，避免与连接参数争抢路径显示空间。
+        self.mode_layout.addSpacing(12)
         self.check_auto_save = QCheckBox("自动保存日志")
         self.check_auto_save.setFont(QFont("Microsoft YaHei", 9))
         self.check_auto_save.stateChanged.connect(self.toggle_auto_save)
-        self.params_row.addWidget(self.check_auto_save)
+        self.mode_layout.addWidget(self.check_auto_save)
 
         self.label_save_path = QLabel("路径:")
         self.label_save_path.setFont(QFont("Microsoft YaHei", 9))
-        self.params_row.addWidget(self.label_save_path)
+        self.mode_layout.addWidget(self.label_save_path)
         self.line_edit_save_path = QLineEdit()
         self.line_edit_save_path.setReadOnly(True)
         self.line_edit_save_path.setFont(QFont("Consolas", 9))
         self._show_save_directory()
-        self.line_edit_save_path.setMaximumWidth(240)
+        self.line_edit_save_path.setMinimumWidth(160)
         self.line_edit_save_path.setMinimumHeight(26)
-        self.params_row.addWidget(self.line_edit_save_path)
+        self.mode_layout.addWidget(self.line_edit_save_path, 1)
         self.btn_browse_path = QPushButton("浏览")
         self.btn_browse_path.setMinimumWidth(56)
         self.btn_browse_path.setFont(QFont("Microsoft YaHei", 9))
         self.btn_browse_path.clicked.connect(self.browse_save_path)
-        self.params_row.addWidget(self.btn_browse_path)
+        self.mode_layout.addWidget(self.btn_browse_path)
 
         serial_layout.addLayout(self.params_row)
 
@@ -935,7 +935,7 @@ class SerialTool(QMainWindow):
 
         # 第三行：显示、筛选与编码设置
         display_save_layout = QHBoxLayout()
-        display_save_layout.setSpacing(4)
+        display_save_layout.setSpacing(6)
 
         self.check_hex_recv = QCheckBox("HEX 显示")
         self.check_hex_recv.setFont(QFont("Microsoft YaHei", 9))
@@ -1062,12 +1062,12 @@ class SerialTool(QMainWindow):
         send_group.setProperty("workspaceCard", True)
         send_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         send_layout = QVBoxLayout(send_group)
-        send_layout.setContentsMargins(12, 10, 12, 10)
-        send_layout.setSpacing(8)
+        send_layout.setContentsMargins(12, 6, 12, 6)
+        send_layout.setSpacing(4)
         
         # 发送设置行
         send_settings_layout = QHBoxLayout()
-        send_settings_layout.setSpacing(4)
+        send_settings_layout.setSpacing(6)
 
         # 发送区设置：HEX发送
         self.check_hex_send = QCheckBox("HEX 发送")
@@ -1093,7 +1093,7 @@ class SerialTool(QMainWindow):
 
         # 校验选项（使用子布局，设置更小的间距）
         checksum_layout = QHBoxLayout()
-        checksum_layout.setSpacing(4)
+        checksum_layout.setSpacing(6)
 
         self.label_checksum = QLabel("校验:")
         self.label_checksum.setFont(QFont("Microsoft YaHei", 9))
@@ -1108,7 +1108,7 @@ class SerialTool(QMainWindow):
 
         # 重复发送相关控件
         repeat_layout = QHBoxLayout()
-        repeat_layout.setSpacing(4)
+        repeat_layout.setSpacing(6)
 
         self.check_repeat = QCheckBox("重复发送")
         self.check_repeat.setFont(QFont("Microsoft YaHei", 9))
@@ -1134,11 +1134,11 @@ class SerialTool(QMainWindow):
         
         # 首尾字段输入框（平行布局，紧凑版）
         fields_layout = QHBoxLayout()
-        fields_layout.setSpacing(4)
+        fields_layout.setSpacing(6)
 
         # 发送首字段
         head_field_layout = QHBoxLayout()
-        head_field_layout.setSpacing(4)
+        head_field_layout.setSpacing(6)
         self.check_head_field = QCheckBox()
         self.check_head_field.setAccessibleName("启用发送首字段")
         self.check_head_field.setToolTip("启用后在发送内容前附加首字段")
@@ -1155,7 +1155,7 @@ class SerialTool(QMainWindow):
 
         # 发送尾字段
         tail_field_layout = QHBoxLayout()
-        tail_field_layout.setSpacing(4)
+        tail_field_layout.setSpacing(6)
         self.check_tail_field = QCheckBox()
         self.check_tail_field.setAccessibleName("启用发送尾字段")
         self.check_tail_field.setToolTip("启用后在发送内容后附加尾字段")
@@ -1170,42 +1170,45 @@ class SerialTool(QMainWindow):
         tail_field_layout.addWidget(self.text_tail)
         fields_layout.addLayout(tail_field_layout)
 
-        # 文件发送（内联到头尾字段行）
+        send_layout.addLayout(fields_layout)
+
+        # 文件路径独立成行，保留完整的首尾字段与文件名空间。
+        file_layout = QHBoxLayout()
+        file_layout.setSpacing(8)
         self.file_path_edit = QLineEdit()
         self.file_path_edit.setFont(QFont("Consolas", 9))
         self.file_path_edit.setPlaceholderText("选择要发送的文件...")
         self.file_path_edit.setReadOnly(True)
-        self.file_path_edit.setMaximumWidth(180)
         self.file_path_edit.setMinimumHeight(26)
-        fields_layout.addWidget(self.file_path_edit)
+        file_layout.addWidget(self.file_path_edit)
 
         self.btn_select_file = QPushButton("选择文件")
         self.btn_select_file.setFont(QFont("Microsoft YaHei", 9))
         self.btn_select_file.setMinimumWidth(72)
         self.btn_select_file.clicked.connect(self.select_file_to_send)
-        fields_layout.addWidget(self.btn_select_file)
+        file_layout.addWidget(self.btn_select_file)
 
         self.btn_send_file = QPushButton("发送文件")
         self.btn_send_file.setFont(QFont("Microsoft YaHei", 9))
         self.btn_send_file.setMinimumWidth(72)
         self.btn_send_file.clicked.connect(self.send_file)
         self.btn_send_file.setEnabled(False)  # 默认禁用，选择文件后启用
-        fields_layout.addWidget(self.btn_send_file)
+        file_layout.addWidget(self.btn_send_file)
 
         self.btn_cancel_file_send = QPushButton("取消发送")
         self.btn_cancel_file_send.setFont(QFont("Microsoft YaHei", 9))
         self.btn_cancel_file_send.setMinimumWidth(72)
         self.btn_cancel_file_send.clicked.connect(self.cancel_file_send)
         self.btn_cancel_file_send.setEnabled(False)
-        fields_layout.addWidget(self.btn_cancel_file_send)
-        fields_layout.addStretch()
-
-        send_layout.addLayout(fields_layout)
+        file_layout.addWidget(self.btn_cancel_file_send)
+        send_layout.addLayout(file_layout)
         
         # 发送输入框
         self.text_send = QTextEdit()
-        self.text_send.setMinimumHeight(40)
         self.text_send.setFont(QFont("Consolas", 11, QFont.Normal))
+        self.text_send.ensurePolished()
+        # 默认以 30 像素紧凑显示一行内容，多行内容仍可滚动查看。
+        self.text_send.setMinimumHeight(30)
         self.text_send.setPlaceholderText("在此输入要发送的内容...")
         self.text_send.textChanged.connect(self._validate_hex_input)
         self.text_send.textChanged.connect(self._on_send_text_changed)
@@ -1219,7 +1222,7 @@ class SerialTool(QMainWindow):
 
         # 发送按钮行
         send_buttons_layout = QHBoxLayout()
-        send_buttons_layout.setSpacing(4)
+        send_buttons_layout.setSpacing(6)
 
         self.btn_send = QPushButton("发送")
         self.btn_send.setProperty("sendAction", True)
@@ -1260,8 +1263,10 @@ class SerialTool(QMainWindow):
         send_layout.addLayout(send_buttons_layout)
         self.io_splitter.addWidget(send_group)
         
-        # 设置分割器的初始大小比例（接收区约 78%，发送区约 22%）
-        self.io_splitter.setSizes([650, 250])
+        # 发送区保持紧凑，窗口增高时优先扩展接收区；仍可拖动调整。
+        self.io_splitter.setStretchFactor(0, 1)
+        self.io_splitter.setStretchFactor(1, 0)
+        self.io_splitter.setSizes([760, 1])
         
         # 添加多字符串发送区域（默认隐藏）
         self.multi_send_widget = QWidget()
@@ -1357,7 +1362,7 @@ class SerialTool(QMainWindow):
         
         # 多字符列表
         self.table_multi_send = QTableWidget()
-        self.table_multi_send.setFont(QFont("Microsoft YaHei", 8, QFont.Normal))
+        self.table_multi_send.setFont(QFont("Microsoft YaHei", 10, QFont.Normal))
         self.table_multi_send.setColumnCount(6)
         self.table_multi_send.setHorizontalHeaderLabels(
             ["HEX", "字符串", "备注", "操作", "单条延时(ms)", "顺序"]
@@ -1379,10 +1384,10 @@ class SerialTool(QMainWindow):
         
         # 设置初始列宽
         self.table_multi_send.setColumnWidth(MULTI_COL_HEX, 60)
-        self.table_multi_send.setColumnWidth(MULTI_COL_TEXT, 72)
-        self.table_multi_send.setColumnWidth(MULTI_COL_NAME, 64)
-        self.table_multi_send.setColumnWidth(MULTI_COL_SEND, 52)
-        self.table_multi_send.setColumnWidth(MULTI_COL_DELAY, 144)
+        self.table_multi_send.setColumnWidth(MULTI_COL_TEXT, 160)
+        self.table_multi_send.setColumnWidth(MULTI_COL_NAME, 80)
+        self.table_multi_send.setColumnWidth(MULTI_COL_SEND, 64)
+        self.table_multi_send.setColumnWidth(MULTI_COL_DELAY, 128)
         self.table_multi_send.setColumnWidth(MULTI_COL_ORDER, 48)
         self._multi_columns_fitted = False
         self._multi_send_collapsed_geometry = None
@@ -1392,7 +1397,7 @@ class SerialTool(QMainWindow):
         self._multi_send_collapsed_splitter_state = None
         # 确保表格充满可用空间
         self.table_multi_send.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.table_multi_send.setMinimumWidth(456)
+        self.table_multi_send.setMinimumWidth(560)
         self.table_multi_send.setRowCount(0)
         self._insert_multi_item_row({
             "hex": False, "string": "", "button_text": "无注释",
@@ -1451,6 +1456,7 @@ class SerialTool(QMainWindow):
         left_layout = QVBoxLayout(left_content)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(8)
+        left_layout.setSizeConstraint(QLayout.SetMinimumSize)
         left_layout.addWidget(serial_group)
         left_layout.addWidget(self.io_splitter)
         # 设置左侧内容的大小策略
@@ -1466,7 +1472,14 @@ class SerialTool(QMainWindow):
         right_content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         # 添加到分割器
-        self.main_splitter.addWidget(left_content)
+        # 极小窗口或展开多字符串面板时滚动访问完整控件，避免强行压缩导致重叠。
+        self.main_scroll_area = QScrollArea()
+        self.main_scroll_area.setObjectName("mainWorkspaceScroll")
+        self.main_scroll_area.setAccessibleName("通信与收发工作区")
+        self.main_scroll_area.setWidgetResizable(True)
+        self.main_scroll_area.setFrameShape(QScrollArea.NoFrame)
+        self.main_scroll_area.setWidget(left_content)
+        self.main_splitter.addWidget(self.main_scroll_area)
         self.main_splitter.addWidget(right_content)
         
         # 初始隐藏多字符串发送区域
@@ -3584,6 +3597,7 @@ class SerialTool(QMainWindow):
         item = item or {}
         row = self.table_multi_send.rowCount() if row is None else row
         self.table_multi_send.insertRow(row)
+        self.table_multi_send.setRowHeight(row, 36)
 
         hex_checkbox = FullHitCheckBox()
         hex_checkbox.setMinimumSize(24, 24)
@@ -3610,7 +3624,7 @@ class SerialTool(QMainWindow):
         self.table_multi_send.setItem(row, MULTI_COL_NAME, name_item)
 
         send_button = QPushButton("发送")
-        send_button.setFont(QFont("Microsoft YaHei", 8, QFont.Normal))
+        send_button.setFont(QFont("Microsoft YaHei", 10, QFont.Normal))
         send_button.setMinimumWidth(52)
         send_button.clicked.connect(self.on_send_multi_btn_clicked)
         send_widget = QWidget()
@@ -3626,7 +3640,7 @@ class SerialTool(QMainWindow):
         delay_spin.setRange(0, 10000)
         delay_spin.setValue(int(item.get("delay", 1000)))
         delay_spin.setSuffix(" ms")
-        delay_spin.setFont(QFont("Consolas", 8, QFont.Normal))
+        delay_spin.setFont(QFont("Consolas", 10, QFont.Normal))
         delay_spin.valueChanged.connect(
             lambda _value, widget=delay_spin: self._select_multi_row_for_widget(widget)
         )

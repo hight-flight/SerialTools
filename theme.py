@@ -3,7 +3,7 @@
 主题模块：颜色常量、QSS 样式表、对话框主题应用工具函数。
 """
 
-VERSION = "1.4.3"
+VERSION = "1.4.4"
 
 import platform
 import re
@@ -573,8 +573,32 @@ QPushButton[sendAction="true"]:focus, QPushButton[connectionAction="true"]:focus
 """ % colors
 
 
-LIGHT_QSS += _workspace_qss(False)
-DARK_QSS += _workspace_qss(True)
+# 主窗口和子窗口共用字体与控件节奏；显式设置普通控件字重，避免继承分组标题粗体。
+_CONTROL_QSS = """
+QWidget { font-family: "Microsoft YaHei"; }
+QLabel, QCheckBox, QRadioButton, QComboBox, QPushButton, QMenu, QMenuBar,
+QTabBar, QTableView, QTreeView, QHeaderView, QStatusBar {
+    font-size: 9.5pt; font-weight: normal;
+}
+QGroupBox { font-size: 10pt; font-weight: 600; }
+QHeaderView::section { font-size: 9.5pt; font-weight: 600; }
+QLineEdit, QSpinBox, QDoubleSpinBox {
+    font-family: "Consolas", "Microsoft YaHei";
+    font-size: 9.5pt; font-weight: normal; min-height: 18px;
+}
+QTextEdit, QPlainTextEdit {
+    font-family: "Consolas", "Microsoft YaHei"; font-weight: normal;
+}
+QLineEdit { padding: 4px 6px; }
+QSpinBox QLineEdit, QDoubleSpinBox QLineEdit, QComboBox QLineEdit {
+    padding: 0; min-height: 0; border: none; background: transparent;
+}
+QPushButton, QComboBox { min-height: 18px; }
+QPushButton[primary="true"] { font-weight: 600; }
+"""
+
+LIGHT_QSS += _CONTROL_QSS + _workspace_qss(False)
+DARK_QSS += _CONTROL_QSS + _workspace_qss(True)
 
 
 def fit_message_box_buttons(dialog):
@@ -617,11 +641,11 @@ def fit_push_button_texts(root):
         required_width = button.fontMetrics().horizontalAdvance(visible_text) + 8
         if not button.icon().isNull():
             required_width += button.iconSize().width() + 6
-        deficit = required_width - content_rect.width()
-        if deficit > 0:
-            button.setMinimumWidth(
-                max(button.minimumWidth(), button.width() + deficit)
-            )
+        # 按最小宽度保留文字空间，而非只检查当前宽度；窗口收窄后也不能裁字。
+        horizontal_insets = max(0, button.width() - content_rect.width())
+        minimum_width = required_width + horizontal_insets
+        if minimum_width > button.minimumWidth():
+            button.setMinimumWidth(minimum_width)
             button.updateGeometry()
 
 

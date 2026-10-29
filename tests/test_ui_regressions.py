@@ -8,7 +8,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QMutex, Qt
+from PyQt5.QtCore import QEvent, QMutex, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QHeaderView, QMessageBox, QPushButton, QScrollArea,
@@ -59,8 +59,8 @@ class _DialogParent(QWidget):
 
 
 class UIRegressionTests(unittest.TestCase):
-    def test应用版本号为1_4_3(self):
-        self.assertEqual(VERSION, "1.4.3")
+    def test应用版本号为1_4_4(self):
+        self.assertEqual(VERSION, "1.4.4")
 
     def test应用在创建窗口前启用高DPI图像(self):
         self.assertTrue(
@@ -123,6 +123,7 @@ class UIRegressionTests(unittest.TestCase):
     def test所有普通按钮为文字保留安全余量(self):
         self.assertTrue(hasattr(theme, "fit_push_button_texts"))
         button = QPushButton("隐藏多字符串发送", self.parent)
+        button.ensurePolished()
         text_width = button.fontMetrics().horizontalAdvance(button.text())
         button.resize(text_width, 28)
         button.setMinimumWidth(text_width)
@@ -155,6 +156,7 @@ class UIRegressionTests(unittest.TestCase):
                 raise RuntimeError("不允许访问非 Python 创建对象的受保护函数")
 
         button = NativeLikeButton("确定并继续", self.parent)
+        button.ensurePolished()
         text_width = button.fontMetrics().horizontalAdvance(button.text())
         button.resize(text_width, 28)
         button.setMinimumWidth(text_width)
@@ -250,11 +252,16 @@ class UIRegressionTests(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
         self.parent = _DialogParent(Path(self.temp_dir.name))
+        self.addCleanup(self._dispose_widgets)
 
-    def tearDown(self):
+    def _dispose_widgets(self):
+        # 子窗口先执行各自清理，再在 QApplication 存活时销毁原生控件。
         self.parent.close()
-        self.temp_dir.cleanup()
+        self.parent.deleteLater()
+        self.app.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.app.processEvents()
 
     @staticmethod
     def _close_dialog(dialog):
@@ -264,6 +271,7 @@ class UIRegressionTests(unittest.TestCase):
                 timer.stop()
         dialog.setAttribute(Qt.WA_DeleteOnClose, False)
         dialog.close()
+        dialog.deleteLater()
 
     def test主窗口发送输入框允许由分割器扩展(self):
         source = inspect.getsource(SerialTool.init_ui)
@@ -698,16 +706,13 @@ class UIRegressionTests(unittest.TestCase):
         self.assertNotIn("多字符发送", inspect.getsource(serial_GUI))
         self.assertNotIn("多字符发送", inspect.getsource(dialogs))
 
-    def test多字符串表头与限定轮数字体一致且面板留有余量(self):
-        source = inspect.getsource(serial_GUI.SerialTool.init_ui)
-        self.assertIn('header.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))', source)
-        self.assertIn('header.setFixedHeight(34)', source)
-        self.assertIn('header.setDefaultAlignment(Qt.AlignCenter)', source)
-        self.assertIn('self.table_multi_send.setColumnWidth(MULTI_COL_HEX, 60)', source)
-        self.assertIn('self.table_multi_send.setColumnWidth(MULTI_COL_TEXT, 72)', source)
-        self.assertIn('self.table_multi_send.setColumnWidth(MULTI_COL_NAME, 64)', source)
-        self.assertIn('self.table_multi_send.setColumnWidth(MULTI_COL_DELAY, 144)', source)
-        self.assertIn('self.table_multi_send.setMinimumWidth(456)', source)
+    def test多字符串面板为指令内容保留阅读空间(self):
+        tool = SerialTool()
+        self.addCleanup(self._close_dialog, tool)
+        table = tool.table_multi_send
+        self.assertGreaterEqual(table.columnWidth(serial_GUI.MULTI_COL_TEXT), 160)
+        self.assertGreaterEqual(table.minimumWidth(), 560)
+        self.assertEqual(table.horizontalHeader().defaultAlignment(), Qt.AlignCenter)
 
     def test关键表格表头按当前样式完整显示(self):
         tool = SerialTool()
@@ -749,15 +754,17 @@ class UIRegressionTests(unittest.TestCase):
         self.assertIn('QColor("#49A6FF")', source)
         self.assertIn('QColor("#263241")', source)
 
-    def test多字符串表格内容使用常规紧凑字体(self):
-        source = inspect.getsource(serial_GUI.SerialTool.init_ui)
-        self.assertIn(
-            'self.table_multi_send.setFont(QFont("Microsoft YaHei", 8, QFont.Normal))',
-            source,
-        )
-        row_source = inspect.getsource(serial_GUI.SerialTool._insert_multi_item_row)
-        self.assertIn('send_button.setFont(QFont("Microsoft YaHei", 8, QFont.Normal))', row_source)
-        self.assertIn('delay_spin.setFont(QFont("Consolas", 8, QFont.Normal))', row_source)
+    def test多字符串表格内容使用清晰的常规字体(self):
+        tool = SerialTool()
+        self.addCleanup(self._close_dialog, tool)
+        table = tool.table_multi_send
+        widgets = [table]
+        for column in (serial_GUI.MULTI_COL_SEND, serial_GUI.MULTI_COL_DELAY):
+            widgets.append(table.cellWidget(0, column).layout().itemAt(0).widget())
+        for widget in widgets:
+            widget.ensurePolished()
+            self.assertGreaterEqual(widget.font().pointSizeF(), 9)
+            self.assertFalse(widget.font().bold())
 
     def test数据分析帮助按钮具有可访问名称(self):
         from data_viewer import JsonViewerDialog

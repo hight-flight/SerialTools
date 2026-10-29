@@ -9,7 +9,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QMutex, QRect, Qt
+from PyQt5.QtCore import QMutex, QPoint, QRect, Qt
 from PyQt5.QtGui import QColor
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QHeaderView, QWidget
@@ -74,6 +74,38 @@ class DataViewerTests(unittest.TestCase):
         dialog.setAttribute(Qt.WA_DeleteOnClose, False)
         self.addCleanup(dialog.close)
         return dialog
+
+    def test空列表提示区分未捕获和无匹配结果(self):
+        widget = CaptureListWidget()
+        self.addCleanup(widget.close)
+        widget.show()
+        self.assertTrue(widget.empty_hint.isVisible())
+        self.assertIn("暂无捕获数据", widget.empty_hint.text())
+        widget.append_items([{"seq": 1, "summary": "temperature: 23"}])
+        self.assertFalse(widget.empty_hint.isVisible())
+        widget.set_filter("no-match")
+        self.assertTrue(widget.empty_hint.isVisible())
+        self.assertIn("没有匹配结果", widget.empty_hint.text())
+        widget.set_filter("")
+        self.assertFalse(widget.empty_hint.isVisible())
+        widget.clear()
+        self.assertTrue(widget.empty_hint.isVisible())
+        self.assertIn("暂无捕获数据", widget.empty_hint.text())
+
+    def test高级解析参数独立成行且切回普通模式收起(self):
+        dialog = self._dialog()
+        dialog.show()
+        dialog.resize(900, 650)
+        for mode, field in ((2, dialog.edit_regex), (3, dialog.btn_edit_protocol)):
+            dialog.combo_filter_mode.setCurrentIndex(mode)
+            self.app.processEvents()
+            self.assertGreater(
+                field.mapTo(dialog, QPoint(0, 0)).y(),
+                dialog.btn_start.mapTo(dialog, dialog.btn_start.rect().bottomRight()).y(),
+            )
+        dialog.combo_filter_mode.setCurrentIndex(0)
+        self.app.processEvents()
+        self.assertFalse(dialog.parse_options.isVisible())
 
     def test停止捕获会在线程结束后刷新尾数据并保留统计(self):
         dialog = self._dialog()
