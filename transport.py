@@ -49,7 +49,8 @@ class TransportWrapper:
             if self._socket is not None:
                 import select
                 r, _, _ = select.select([self._socket], [], [], 0)
-                return 1 if r else 0
+                # 此值会被接收线程用作读取缓冲大小；UDP 必须一次读完报文。
+                return (65535 if self.mode == 'udp' else 4096) if r else 0
             return 0
 
     def open_serial(self, port, baudrate, **kwargs):
@@ -113,10 +114,8 @@ class TransportWrapper:
         if self.mode == 'serial':
             if self._serial is None:
                 return b''
-            try:
-                return self._serial.read(size)
-            except (serial.SerialTimeoutException, serial.SerialException):
-                return b''
+            # 读取失败交给接收线程上报，避免设备异常仍显示为已连接。
+            return self._serial.read(size)
         elif self.mode == 'udp':
             if self._socket is None:
                 return b''

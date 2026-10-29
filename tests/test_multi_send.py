@@ -10,7 +10,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QByteArray, QRect, Qt
+from PyQt5.QtCore import QByteArray, QEvent, QRect, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication, QMessageBox, QAbstractItemView, QCheckBox, QHeaderView,
@@ -30,6 +30,8 @@ class MultiSendTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        # 子窗口的 addCleanup 必须先执行，再销毁已关闭的父窗口。
+        self.addCleanup(lambda: self.app.sendPostedEvents(None, QEvent.DeferredDelete))
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
         paths = AppPaths(
@@ -702,20 +704,19 @@ class MultiSendTests(unittest.TestCase):
         available = QRect(100, 50, 1024, 700)
         fake_screen = SimpleNamespace(availableGeometry=lambda: available)
         self.tool.setGeometry(900, 400, 1280, 900)
-        original_height = self.tool.height()
-
         with mock.patch.object(SerialTool, "screen", return_value=fake_screen):
             self.tool._fit_multi_send_to_current_screen()
 
-        geometry = self.tool.geometry()
+        geometry = self.tool.frameGeometry()
         self.assertLessEqual(geometry.width(), available.width())
-        self.assertEqual(geometry.height(), original_height)
+        self.assertLessEqual(geometry.height(), available.height())
         self.assertGreaterEqual(geometry.left(), available.left())
         self.assertGreaterEqual(geometry.top(), available.top())
         self.assertLessEqual(geometry.right(), available.right())
+        self.assertLessEqual(geometry.bottom(), available.bottom())
 
     def test展开面板时忽略布局提出的纵向增高(self):
-        self.tool.setGeometry(100, 50, 1080, 700)
+        self.tool.setGeometry(100, 50, 1080, 560)
         self.tool.show()
         self.app.processEvents()
         original_height = self.tool.height()

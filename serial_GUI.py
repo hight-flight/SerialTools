@@ -1,4 +1,5 @@
 import sys
+import codecs
 import os
 import datetime
 import struct
@@ -495,6 +496,47 @@ class SerialTool(QMainWindow):
         self.init_ui()
         self.refresh_ports() # 启动时刷新串口列表
         self.load_config() # 启动时加载配置
+        self._init_window_visibility_tracking()
+
+    def _init_window_visibility_tracking(self):
+        """显示器变化后等 Qt 完成 DPI 和窗口状态调整，再校正位置。"""
+        self._window_visibility_timer = QTimer(self)
+        self._window_visibility_timer.setSingleShot(True)
+        self._window_visibility_timer.setInterval(150)
+        self._window_visibility_timer.timeout.connect(self._recover_visible_window)
+        self._visibility_screens = []
+        app = QApplication.instance()
+        app.screenAdded.connect(self._watch_visibility_screen)
+        app.screenRemoved.connect(self._schedule_window_visibility_check)
+        app.primaryScreenChanged.connect(self._schedule_window_visibility_check)
+        for screen in app.screens():
+            self._watch_visibility_screen(screen)
+
+    def _watch_visibility_screen(self, screen):
+        self._visibility_screens = [
+            item for item in self._visibility_screens if item in QApplication.screens()
+        ]
+        if screen not in self._visibility_screens:
+            self._visibility_screens.append(screen)
+            screen.availableGeometryChanged.connect(self._schedule_window_visibility_check)
+            screen.geometryChanged.connect(self._schedule_window_visibility_check)
+            screen.logicalDotsPerInchChanged.connect(self._schedule_window_visibility_check)
+        self._schedule_window_visibility_check()
+
+    def _schedule_window_visibility_check(self, *_args):
+        timer = getattr(self, '_window_visibility_timer', None)
+        if timer is not None:
+            timer.start()
+
+    def _recover_visible_window(self):
+        # 用户最小化或关闭窗口时不能被显示器事件重新弹出。
+        if self.isVisible() and not self.isMinimized():
+            self._ensure_window_visible()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            self._schedule_window_visibility_check()
 
     def _make_arrow_icons(self):
         """生成下拉箭头 V 型图标（QSS 接管 ComboBox 后系统箭头不显示，必须手绘）"""
@@ -927,6 +969,8 @@ class SerialTool(QMainWindow):
         self.combo_encoding = QComboBox()
         self.combo_encoding.addItems(['UTF-8', 'GBK', 'GB2312', 'ASCII', 'ISO-8859-1', 'GB18030'])
         self.combo_encoding.setCurrentText('UTF-8')
+        self.combo_encoding.currentTextChanged.connect(self._reset_receive_decoder)
+        self.check_hex_recv.toggled.connect(self._reset_receive_decoder)
         self.combo_encoding.setFont(QFont("Microsoft YaHei", 9))
         self.combo_encoding.setMinimumWidth(80)
         display_save_layout.addWidget(self.combo_encoding)
@@ -1739,6 +1783,11 @@ class SerialTool(QMainWindow):
             self._set_titlebar_dark(True, color_hex='#151A22')
         else:
             self._set_titlebar_dark(False)
+        handle = self.windowHandle()
+        if handle is not None and handle is not getattr(self, '_visibility_window_handle', None):
+            handle.screenChanged.connect(self._schedule_window_visibility_check)
+            self._visibility_window_handle = handle
+        self._schedule_window_visibility_check()
 
     def _refresh_status_connection(self):
         """根据当前串口连接状态刷新状态栏文本颜色"""
@@ -1859,8 +1908,14 @@ class SerialTool(QMainWindow):
             self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
             self.toggle_connection()
         self.connection_mode = new_mode
+        self._update_connection_mode_ui(index)
+        self.refresh_ports()
+        self.append_text(f"[系统]: 通信模式切换为 {new_mode}\n")
+
+    def _update_connection_mode_ui(self, index):
+        """手动切换和恢复配置共用界面更新，不改写已保存的端点。"""
         self.stack_params.setCurrentIndex(index)
-        is_serial = (new_mode == 'serial')
+        is_serial = (self.connection_mode == 'serial')
         # 按钮位置：串口模式下按钮在参数行内，其他模式在第一行
         self.btn_switch_serial.setVisible(is_serial)
         self.btn_more_settings_serial.setVisible(is_serial)
@@ -1869,14 +1924,12 @@ class SerialTool(QMainWindow):
         # 更多设置仅串口模式有（对话框只配置串口参数），非串口模式隐藏
         self.btn_more_settings.setVisible(False)
         # 刷新/IP按钮：仅 UDP/TCP Server 显示（串口用 btn_refresh_serial；TCP Client 无本地IP字段）
-        has_local_ip = new_mode in ('udp', 'tcp_server')
+        has_local_ip = self.connection_mode in ('udp', 'tcp_server')
         self.btn_refresh.setVisible(has_local_ip)
         self.btn_refresh.setText("获取本机IP")
         self.check_rts.setVisible(is_serial)
         self.check_dtr.setVisible(is_serial)
-        self.refresh_ports()
-        self._sync_button_text("打开连接")  # 模式切换后刷新按钮文本（TCP Server → "侦听"）
-        self.append_text(f"[系统]: 通信模式切换为 {new_mode}\n")
+        self._sync_button_text("打开连接")  # TCP Server 使用侦听术语。
 
     def refresh_ports(self):
         """刷新可用的串口列表"""
@@ -1908,6 +1961,8 @@ class SerialTool(QMainWindow):
 
     def toggle_connection(self):
         """打开或关闭通信连接（支持串口 / UDP / TCP Client / TCP Server）"""
+        self.stop_file_send = True
+        self._reset_receive_decoder()
         self._reset_auto_reply_runtime()
         # 同步两套按钮的选中状态
         s = self.sender()
@@ -2181,13 +2236,16 @@ class SerialTool(QMainWindow):
                         raise Exception("文件发送已取消")
                     
                     # 读取数据块
-                    data = f.read(chunk_size)
+                    data = f.read(min(chunk_size, file_size - total_sent))
                     if not data:
-                        break
+                        raise IOError(f"文件已缩短：期望 {file_size} 字节，实际读取 {total_sent} 字节")
                     
                     # 使用互斥锁保护串口操作
                     try:
                         with QMutexLocker(self.serial_mutex):
+                            # 等锁期间可能发生断开或重连，不能把旧文件继续发给新连接。
+                            if self.stop_file_send:
+                                raise IOError("文件发送已取消")
                             if not (hasattr(self, 'transport') and self.transport
                                     and self.transport.is_open):
                                 raise IOError("连接已关闭")
@@ -2605,6 +2663,8 @@ class SerialTool(QMainWindow):
 
     def handle_read_error(self, error_msg):
         """处理传输读取错误"""
+        self.stop_file_send = True
+        self._reset_receive_decoder()
         self._reset_auto_reply_runtime()
         # 先保存错误信息，后续在UI线程中显示
         self.error_state = True  # 设置错误状态标志
@@ -2671,6 +2731,7 @@ class SerialTool(QMainWindow):
             self.combo_port.setEnabled(True)
             self.combo_baud.setEnabled(True)
             self.btn_refresh.setEnabled(True); self.btn_refresh_serial.setEnabled(True)
+            self.combo_mode.setEnabled(True)
             
             # 更新状态栏
             self._update_status_connection_text(False)
@@ -2686,6 +2747,7 @@ class SerialTool(QMainWindow):
     
     def cleanup_resources(self):
         """清理所有资源"""
+        self.stop_file_send = True
         # 停止定时器
         if hasattr(self, 'repeat_timer') and self.repeat_timer and self.repeat_timer.isActive():
             self.repeat_timer.stop()
@@ -2829,6 +2891,24 @@ class SerialTool(QMainWindow):
             payload = payload[:cut] + suffix
         return payload, timestamp + payload
 
+    def _reset_receive_decoder(self, *_args):
+        """切换编码、显示模式或连接时丢弃旧连接尚未收齐的字符。"""
+        self._receive_decoder = None
+        self._receive_encoding = None
+
+    def _decode_receive_text(self, data):
+        """串口和 TCP 的读取边界不是字符边界，需要保留未完成的多字节字符。"""
+        encoding = self.combo_encoding.currentText()
+        try:
+            encoding = codecs.lookup(encoding).name
+        except LookupError:
+            encoding = 'utf-8'
+        if (getattr(self, '_receive_decoder', None) is None
+                or self._receive_encoding != encoding):
+            self._receive_decoder = codecs.getincrementaldecoder(encoding)(errors='replace')
+            self._receive_encoding = encoding
+        return self._receive_decoder.decode(data, final=False)
+
     def handle_receive_data(self, data):
         """处理接收到的数据"""
         try:
@@ -2868,16 +2948,10 @@ class SerialTool(QMainWindow):
                     self.auto_save_data(log_entry + '\n')
                 
             else:
-                # 文本显示，处理特殊字符和转义序列
-                # 使用用户选择的编码进行解码
-                encoding = self.combo_encoding.currentText()
-                try:
-                    text = data.decode(encoding, errors='replace')
-                except LookupError:
-                    # 如果编码名称无效，回退到UTF-8
-                    encoding = 'UTF-8'
-                    text = data.decode('utf-8', errors='replace')
-                
+                text = self._decode_receive_text(data)
+                if not text:
+                    return
+
                 # 拼接并限制整体日志长度（含时间戳），返回截断后的 text 供显示
                 text, log_entry = self._build_log_entry(timestamp, text)
                 # 添加到日志缓冲区（deque自动管理大小）
@@ -2921,11 +2995,9 @@ class SerialTool(QMainWindow):
                 if self.auto_save_enabled and self.current_log_file:
                     self.auto_save_data(log_entry + '\n')
             else:
-                encoding = self.combo_encoding.currentText()
-                try:
-                    text = data.decode(encoding, errors='replace')
-                except LookupError:
-                    text = data.decode('utf-8', errors='replace')
+                text = self._decode_receive_text(data)
+                if not text:
+                    return
                 text, log_entry = self._build_log_entry(timestamp, text)
                 self.log_buffer.append(log_entry)
                 # 显示到界面（与主路径一致，限制频率）
@@ -3246,6 +3318,7 @@ class SerialTool(QMainWindow):
             return
 
         self.text_recv.clear()
+        self._reset_receive_decoder()
         # 清空日志缓冲区
         self.log_buffer.clear()
         # 重置滚动跟底状态（清空后恢复自动跟底，并丢弃待显示缓冲）
@@ -3637,11 +3710,8 @@ class SerialTool(QMainWindow):
         panel_width = max(456, self.table_multi_send.minimumWidth(),
                           right_panel.minimumSizeHint().width())
         width = min(self.width() + panel_width + self.main_splitter.handleWidth(), available.width())
-        height = self.height()
-        x = min(max(self.x(), available.left()), available.right() - width + 1)
-        max_y = max(available.top(), available.bottom() - height + 1)
-        y = min(max(self.y(), available.top()), max_y)
-        self.setGeometry(x, y, width, height)
+        self.resize(width, self.height())
+        self._ensure_window_visible(screen)
 
     def _keep_multi_send_expanded_height(self, expected_height):
         """仅在面板刚展开时恢复原高度，后续仍允许用户手动调整高度。"""
@@ -3650,8 +3720,14 @@ class SerialTool(QMainWindow):
                 and self._multi_send_collapsed_geometry is not None
                 and not self._is_special_window_state(
                     self._multi_send_collapsed_window_state
-                )):
-            self.resize(self.width(), expected_height)
+                )
+                and not self._is_special_window_state(self.windowState())):
+            screen = self.screen() or QApplication.primaryScreen()
+            if screen is not None:
+                frame_extra = self.frameGeometry().height() - self.height()
+                expected_height = min(expected_height,
+                                      screen.availableGeometry().height() - frame_extra)
+            self.resize(self.width(), max(1, expected_height))
 
     @staticmethod
     def _is_special_window_state(state):
@@ -5837,12 +5913,7 @@ class SerialTool(QMainWindow):
                         self.combo_mode.blockSignals(True)
                         self.combo_mode.setCurrentIndex(idx)
                         self.combo_mode.blockSignals(False)
-                    if hasattr(self, 'stack_params'):
-                        self.stack_params.setCurrentIndex(idx)
-                    is_serial = (self.connection_mode == 'serial')
-                    if hasattr(self, 'check_rts'): self.check_rts.setVisible(is_serial)
-                    if hasattr(self, 'check_dtr'): self.check_dtr.setVisible(is_serial)
-                    if hasattr(self, 'btn_more_settings'): self.btn_more_settings.setEnabled(is_serial)
+                    self._update_connection_mode_ui(idx)
 
                 if 'port' in config and isinstance(config['port'], str):
                     port_index = self.combo_port.findText(config['port'])
@@ -6015,22 +6086,51 @@ class SerialTool(QMainWindow):
             except Exception as e:
                 self.append_text(f"[错误]: 加载配置失败: {str(e)}\n")
 
-    def _ensure_window_visible(self):
-        """把旧显示器保存的窗口位置限制到当前可用屏幕内。"""
-        if self.isMaximized() or self.isFullScreen():
+    def _ensure_window_visible(self, screen=None):
+        """使用外框定位、内容区缩放，找回旧显示器或 DPI 变化后越界的窗口。"""
+        if self.isMinimized():
             return
-        geometry = self.frameGeometry()
-        screen = QApplication.screenAt(geometry.center()) or QApplication.primaryScreen()
+        frame = self.frameGeometry()
+        screens = QApplication.screens()
+        if screen is None and screens:
+            # 混合 DPI 下屏幕间可能有坐标空隙，不能只根据窗口中心选屏。
+            def overlap_area(candidate):
+                overlap = frame.intersected(candidate.availableGeometry())
+                return max(0, overlap.width()) * max(0, overlap.height())
+
+            screen = max(screens, key=overlap_area)
+            if not overlap_area(screen):
+                current = self.screen()
+                screen = current if current in screens else QApplication.primaryScreen()
         if screen is None:
             return
         available = screen.availableGeometry()
-        width = min(geometry.width(), available.width())
-        height = min(geometry.height(), available.height())
-        max_x = available.right() - width + 1
-        max_y = available.bottom() - height + 1
-        x = min(max(geometry.x(), available.left()), max_x)
-        y = min(max(geometry.y(), available.top()), max_y)
-        self.setGeometry(x, y, width, height)
+        if available.isEmpty():
+            return
+        state = self.windowState()
+        special = self.isMaximized() or self.isFullScreen()
+        if special:
+            # 正常最大化的外框可超出工作区几像素，由窗口管理器负责。
+            if any(frame.intersects(item.availableGeometry()) for item in screens):
+                return
+            self.setWindowState(Qt.WindowNoState)
+            frame = self.frameGeometry()
+
+        frame_width = max(0, frame.width() - self.width())
+        frame_height = max(0, frame.height() - self.height())
+        max_width = max(1, available.width() - frame_width)
+        max_height = max(1, available.height() - frame_height)
+        self.setMinimumSize(min(720, max_width), min(560, max_height))
+        self.resize(min(self.width(), max_width), min(self.height(), max_height))
+        frame = self.frameGeometry()
+        x = min(max(frame.x(), available.left()),
+                max(available.left(), available.right() - frame.width() + 1))
+        y = min(max(frame.y(), available.top()),
+                max(available.top(), available.bottom() - frame.height() + 1))
+        # QWidget.move 接收外框左上角；setGeometry 接收内容区坐标。
+        self.move(x, y)
+        if special:
+            self.setWindowState(state)
 
     def save_config(self):
         """保存配置文件"""
