@@ -543,7 +543,7 @@ class SerialTool(QMainWindow):
         import os
         icon_dir = os.fspath(self._app_paths.cache_dir)
 
-        def _draw(path, color_hex, size=12):
+        def _draw(path, color_hex, size=12, upward=False):
             pix = QPixmap(size, size)
             pix.fill(Qt.transparent)
             p = QPainter(pix)
@@ -551,13 +551,15 @@ class SerialTool(QMainWindow):
             p.setBrush(QColor(color_hex))
             p.setPen(Qt.NoPen)
             # ▼ 倒三角
-            margin = 3
+            margin = 2
             cx = size // 2
             tri = QPolygon([
                 QPoint(cx, size - margin),
                 QPoint(margin, margin + 1),
                 QPoint(size - margin, margin + 1),
             ])
+            if upward:
+                tri = QPolygon([QPoint(point.x(), size - point.y()) for point in tri])
             p.drawPolygon(tri)
             p.end()
             pix.save(path, 'PNG')
@@ -589,7 +591,9 @@ class SerialTool(QMainWindow):
             pix.save(path, 'PNG')
             return path.replace('\\', '/')
 
-        dark = _draw(os.path.join(icon_dir, '_arrow_dark.png'), '#6A7384')
+        dark = _draw(os.path.join(icon_dir, '_arrow_dark.png'), '#B9C8D8')
+        self._arrow_up_dark_path = _draw(os.path.join(icon_dir, '_arrow_up_dark.png'), '#B9C8D8', upward=True)
+        self._arrow_up_light_path = _draw(os.path.join(icon_dir, '_arrow_up_light.png'), '#666666', upward=True)
         light = _draw(os.path.join(icon_dir, '_arrow_light.png'), '#666666')
         check_dark = _draw_check(os.path.join(icon_dir, '_check_dark.png'), '#FFFFFF')
         check_light = _draw_check(os.path.join(icon_dir, '_check_light.png'), '#FFFFFF')
@@ -707,8 +711,8 @@ class SerialTool(QMainWindow):
         serial_group.setProperty("workspaceCard", True)
         serial_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         serial_layout = QVBoxLayout(serial_group)
-        serial_layout.setContentsMargins(12, 10, 12, 10)
-        serial_layout.setSpacing(8)
+        serial_layout.setContentsMargins(12, 6, 12, 6)
+        serial_layout.setSpacing(4)
 
         # 第一行：模式选择 + 刷新 + 操作按钮（非串口模式显示）
         self.mode_layout = QHBoxLayout()
@@ -1002,8 +1006,8 @@ class SerialTool(QMainWindow):
         recv_group.setProperty("workspaceCard", True)
         recv_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         recv_layout = QVBoxLayout(recv_group)
-        recv_layout.setContentsMargins(12, 10, 12, 8)
-        recv_layout.setSpacing(8)
+        recv_layout.setContentsMargins(12, 6, 12, 6)
+        recv_layout.setSpacing(4)
 
         self.text_recv = QTextEdit()
         self.text_recv.setReadOnly(True)
@@ -1114,7 +1118,8 @@ class SerialTool(QMainWindow):
         self.check_repeat.setFont(QFont("Microsoft YaHei", 9))
         repeat_layout.addWidget(self.check_repeat)
 
-        repeat_layout.addWidget(QLabel("间隔(ms):"))
+        self.label_repeat_interval = QLabel("间隔(ms):")
+        repeat_layout.addWidget(self.label_repeat_interval)
         self.spin_interval = QSpinBox()
         self.spin_interval.setRange(100, 5000)
         self.spin_interval.setValue(1000)
@@ -1132,7 +1137,7 @@ class SerialTool(QMainWindow):
 
         send_layout.addLayout(send_settings_layout)
         
-        # 首尾字段输入框（平行布局，紧凑版）
+        # 首尾字段与文件发送共用一行，腾出高度给发送内容。
         fields_layout = QHBoxLayout()
         fields_layout.setSpacing(6)
 
@@ -1143,15 +1148,16 @@ class SerialTool(QMainWindow):
         self.check_head_field.setAccessibleName("启用发送首字段")
         self.check_head_field.setToolTip("启用后在发送内容前附加首字段")
         head_field_layout.addWidget(self.check_head_field)
-        head_label = QLabel("首字段:")
+        head_label = self.label_head_field = QLabel("首字段:")
         head_label.setFont(QFont("Microsoft YaHei", 9))
         head_field_layout.addWidget(head_label)
         self.text_ota = QLineEdit()
         self.text_ota.setFont(QFont("Consolas", 9))
         self.text_ota.setPlaceholderText("输入首字段...")
         self.text_ota.setMinimumHeight(26)
+        self.text_ota.setMinimumWidth(80)
         head_field_layout.addWidget(self.text_ota)
-        fields_layout.addLayout(head_field_layout)
+        fields_layout.addLayout(head_field_layout, 1)
 
         # 发送尾字段
         tail_field_layout = QHBoxLayout()
@@ -1160,33 +1166,35 @@ class SerialTool(QMainWindow):
         self.check_tail_field.setAccessibleName("启用发送尾字段")
         self.check_tail_field.setToolTip("启用后在发送内容后附加尾字段")
         tail_field_layout.addWidget(self.check_tail_field)
-        tail_label = QLabel("尾字段:")
+        tail_label = self.label_tail_field = QLabel("尾字段:")
         tail_label.setFont(QFont("Microsoft YaHei", 9))
         tail_field_layout.addWidget(tail_label)
         self.text_tail = QLineEdit()
         self.text_tail.setFont(QFont("Consolas", 9))
         self.text_tail.setPlaceholderText("输入尾字段...")
         self.text_tail.setMinimumHeight(26)
+        self.text_tail.setMinimumWidth(80)
         tail_field_layout.addWidget(self.text_tail)
-        fields_layout.addLayout(tail_field_layout)
+        fields_layout.addLayout(tail_field_layout, 1)
 
         send_layout.addLayout(fields_layout)
 
-        # 文件路径独立成行，保留完整的首尾字段与文件名空间。
+        # 文件路径位于选择文件与发送文件按钮之间。
         file_layout = QHBoxLayout()
-        file_layout.setSpacing(8)
+        file_layout.setSpacing(6)
         self.file_path_edit = QLineEdit()
         self.file_path_edit.setFont(QFont("Consolas", 9))
         self.file_path_edit.setPlaceholderText("选择要发送的文件...")
         self.file_path_edit.setReadOnly(True)
         self.file_path_edit.setMinimumHeight(26)
-        file_layout.addWidget(self.file_path_edit)
+        self.file_path_edit.setMinimumWidth(140)
 
         self.btn_select_file = QPushButton("选择文件")
         self.btn_select_file.setFont(QFont("Microsoft YaHei", 9))
         self.btn_select_file.setMinimumWidth(72)
         self.btn_select_file.clicked.connect(self.select_file_to_send)
         file_layout.addWidget(self.btn_select_file)
+        file_layout.addWidget(self.file_path_edit, 1)
 
         self.btn_send_file = QPushButton("发送文件")
         self.btn_send_file.setFont(QFont("Microsoft YaHei", 9))
@@ -1201,14 +1209,14 @@ class SerialTool(QMainWindow):
         self.btn_cancel_file_send.clicked.connect(self.cancel_file_send)
         self.btn_cancel_file_send.setEnabled(False)
         file_layout.addWidget(self.btn_cancel_file_send)
-        send_layout.addLayout(file_layout)
+        fields_layout.addLayout(file_layout, 2)
         
         # 发送输入框
         self.text_send = QTextEdit()
         self.text_send.setFont(QFont("Consolas", 11, QFont.Normal))
         self.text_send.ensurePolished()
-        # 默认以 30 像素紧凑显示一行内容，多行内容仍可滚动查看。
-        self.text_send.setMinimumHeight(30)
+        # 合并文件发送行后，将原来一行控件及间距的 34 像素留给发送内容。
+        self.text_send.setMinimumHeight(64)
         self.text_send.setPlaceholderText("在此输入要发送的内容...")
         self.text_send.textChanged.connect(self._validate_hex_input)
         self.text_send.textChanged.connect(self._on_send_text_changed)
@@ -1261,6 +1269,14 @@ class SerialTool(QMainWindow):
         send_buttons_layout.addWidget(self.btn_toggle_multi_send)
 
         send_layout.addLayout(send_buttons_layout)
+
+        # 通信和发送控件统一为 30 像素，跳过组合控件内部的编辑器。
+        for group in (serial_group, send_group):
+            for control in group.findChildren(QWidget):
+                if isinstance(control, (QPushButton, QComboBox, QSpinBox, QLineEdit)):
+                    if not isinstance(control.parentWidget(), (QComboBox, QSpinBox)):
+                        control.setProperty("compactControl", True)
+
         self.io_splitter.addWidget(send_group)
         
         # 发送区保持紧凑，窗口增高时优先扩展接收区；仍可拖动调整。
@@ -1441,6 +1457,8 @@ class SerialTool(QMainWindow):
         
         self.multi_send_layout.addWidget(multi_send_group)
         
+        self._workspace_card_layouts = (serial_layout, recv_layout, send_layout)
+
         # 创建一个水平分割器，用于在右侧放置多字符串发送区域
         self.main_splitter = QSplitter(Qt.Horizontal)
         # 设置分割器手柄宽度
@@ -1501,6 +1519,8 @@ class SerialTool(QMainWindow):
         # --- 状态栏 ---
         ok_color = self.theme_colors['ansi_fg']['32'].name()
         self.status_msg = QLabel(f'<span style="color: {ok_color};">就绪</span>')
+        self._current_status_text = "就绪"
+        self._current_status_level = "ready"
         self.status_msg.setFont(QFont("Microsoft YaHei", 9))
         status_left_gap = QWidget()
         status_left_gap.setObjectName("statusLeftGap")
@@ -1549,7 +1569,7 @@ class SerialTool(QMainWindow):
             self.check_repeat, self.spin_interval, self.check_auto_reply,
             self.check_head_field,
             self.text_ota, self.check_tail_field, self.text_tail,
-            self.btn_select_file, self.btn_send_file, self.btn_cancel_file_send, self.text_send,
+            self.btn_select_file, self.file_path_edit, self.btn_send_file, self.btn_cancel_file_send, self.text_send,
             self.btn_send, self.btn_stop, self.btn_clear_send,
             self.btn_save_params, self.btn_toggle_multi_send,
             self.btn_batch_send, self.spin_delay, self.check_cycle_count,
@@ -1563,11 +1583,42 @@ class SerialTool(QMainWindow):
         # 应用初始主题（必须在所有控件创建之后调用）
         self.apply_theme(self.current_theme)
 
+        QTimer.singleShot(0, self._update_workspace_density)
+
         # 安装应用级事件过滤器：自动给所有 QMessageBox/QDialog 应用暗黑标题栏
         # 零侵入解决 58+ 处原生弹窗在暗黑模式下标题栏未变暗的问题
         QApplication.instance().installEventFilter(self)
         # monkey-patch QMessageBox 静态方法：在 exec_ 前预先应用暗黑主题，避免白色闪烁
         self._patch_qmessagebox_theme()
+
+    def _update_workspace_density(self):
+        """仅在工作区较窄时精简辅助文字，保留常规布局和控件高度。"""
+        compact = self.main_scroll_area.viewport().width() < 850
+        if compact == getattr(self, '_compact_workspace', None):
+            return
+        self._compact_workspace = compact
+        for layout in self._workspace_card_layouts:
+            layout.setContentsMargins(8 if compact else 12, 6, 8 if compact else 12, 6)
+        labels = (
+            (self.check_hex_send, "HEX 发送", "HEX"),
+            (self.check_newline, "回车换行", "换行"),
+            (self.check_repeat, "重复发送", "重复"),
+            (self.check_auto_reply, "自动应答", "应答"),
+            (self.label_repeat_interval, "间隔(ms):", "ms:"),
+            (self.label_head_field, "首字段:", "首:"),
+            (self.label_tail_field, "尾字段:", "尾:"),
+        )
+        for widget, full_text, short_text in labels:
+            widget.setText(short_text if compact else full_text)
+            if not widget.toolTip():
+                widget.setToolTip(full_text)
+        self.text_ota.setMinimumWidth(60 if compact else 80)
+        self.text_tail.setMinimumWidth(60 if compact else 80)
+        self.file_path_edit.setMinimumWidth(100 if compact else 140)
+        # 窄屏仍可通过“浏览”访问日志目录，完整路径同时保留在悬停提示中。
+        self.label_save_path.setVisible(not compact)
+        self.line_edit_save_path.setVisible(not compact)
+        self.btn_browse_path.setToolTip(f"选择日志保存目录：{self.save_directory}")
 
     def toggle_repeat(self):
         """切换重复发送状态"""
@@ -1651,6 +1702,7 @@ class SerialTool(QMainWindow):
         if theme_name == 'dark':
             qss = (DARK_QSS
                    .replace('__ARROW_DARK__', self._arrow_dark_path)
+                   .replace('__ARROW_UP_DARK__', self._arrow_up_dark_path)
                    .replace('__CHECK_DARK__', self._check_dark_path)
                    .replace('__RADIO_DARK__', self._radio_dark_path))
             QApplication.instance().setStyleSheet(qss)
@@ -1658,6 +1710,7 @@ class SerialTool(QMainWindow):
         else:
             qss = (LIGHT_QSS
                    .replace('__ARROW_LIGHT__', self._arrow_light_path)
+                   .replace('__ARROW_UP_LIGHT__', self._arrow_up_light_path)
                    .replace('__CHECK_LIGHT__', self._check_light_path)
                    .replace('__RADIO_LIGHT__', self._radio_light_path))
             QApplication.instance().setStyleSheet(qss)
@@ -2172,7 +2225,9 @@ class SerialTool(QMainWindow):
         
         if file_path:
             self.selected_file_path = file_path
-            self.file_path_edit.setText(file_path)
+            self.file_path_edit.setText(os.path.basename(file_path))
+            self.file_path_edit.setToolTip(file_path)
+            self.file_path_edit.setCursorPosition(0)
             self.btn_send_file.setEnabled(True)
             self.append_text(f"[信息]: 已选择文件: {file_path}\n")
 
@@ -3358,6 +3413,8 @@ class SerialTool(QMainWindow):
             return
         self.line_edit_save_path.setText(self.save_directory)
         self.line_edit_save_path.setToolTip(self.save_directory)
+        if hasattr(self, "btn_browse_path"):
+            self.btn_browse_path.setToolTip(f"选择日志保存目录：{self.save_directory}")
         self.line_edit_save_path.setCursorPosition(0)
 
     def browse_save_path(self):
@@ -3839,7 +3896,6 @@ class SerialTool(QMainWindow):
             self._multi_send_collapsed_splitter_state = bytes(
                 self.main_splitter.saveState().toHex()
             ).decode('ascii')
-            left_width = max(1, self.main_splitter.sizes()[0])
             right_content.show()
             self.btn_toggle_multi_send.setText("隐藏多字符串发送")
             if hasattr(self, 'act_multi_send'):
@@ -3868,17 +3924,21 @@ class SerialTool(QMainWindow):
             ) else self.geometry()
             panel_width = max(456, self.table_multi_send.minimumWidth(),
                               right_content.minimumSizeHint().width())
-            self.main_splitter.setSizes([left_width, panel_width])
-            QTimer.singleShot(
-                0,
-                lambda left=left_width, right=panel_width:
-                    self.main_splitter.setSizes([left, right]),
-            )
+            self._allocate_multi_send_width(panel_width)
+            QTimer.singleShot(0, lambda right=panel_width: self._allocate_multi_send_width(right))
             if not self._multi_columns_fitted:
                 QTimer.singleShot(0, self._fit_multi_send_default_columns)
 
             self.main_splitter.update()
             self.main_splitter.repaint()
+
+    def _allocate_multi_send_width(self, panel_width):
+        """右侧保留所需宽度，其余空间优先留给通信和收发控件。"""
+        if self.main_splitter.widget(1).isHidden():
+            return
+        available = self.main_splitter.width() - self.main_splitter.handleWidth()
+        self.main_splitter.setSizes([max(1, available - panel_width), panel_width])
+        self._update_workspace_density()
 
     def _fit_multi_send_default_columns(self):
         """首次展开时用字符串列吸收剩余宽度，同时保留手动拖动能力。"""
@@ -4223,6 +4283,11 @@ class SerialTool(QMainWindow):
 
     def eventFilter(self, obj, event):
         """处理发送历史导航、接收区滚轮跟底和弹窗暗黑标题栏。"""
+        if (event.type() == QEvent.Resize
+                and hasattr(self, 'main_scroll_area')
+                and obj is self.main_scroll_area.viewport()):
+            QTimer.singleShot(0, self._update_workspace_density)
+
         # 按钮显示或字体变化后重新核对文字宽度，覆盖动态创建的帮助窗口。
         if isinstance(obj, QPushButton) and event.type() in (QEvent.Show, QEvent.FontChange):
             fit_push_button_texts(obj)

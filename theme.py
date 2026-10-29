@@ -594,11 +594,36 @@ QSpinBox QLineEdit, QDoubleSpinBox QLineEdit, QComboBox QLineEdit {
     padding: 0; min-height: 0; border: none; background: transparent;
 }
 QPushButton, QComboBox { min-height: 18px; }
+QWidget[compactControl="true"] { min-height: 20px; }
 QPushButton[primary="true"] { font-weight: 600; }
 """
 
 LIGHT_QSS += _CONTROL_QSS + _workspace_qss(False)
 DARK_QSS += _CONTROL_QSS + _workspace_qss(True)
+
+
+# 数字框使用统一大小的按钮和箭头，避免系统主题下箭头过小或边框突兀。
+_SPIN_QSS = """
+QSpinBox, QDoubleSpinBox { padding-right: 24px; }
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: border; subcontrol-position: top right;
+    width: 22px; border: none; border-top-right-radius: 5px;
+    background: __SPIN_BG__;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border; subcontrol-position: bottom right;
+    width: 22px; border: none; border-bottom-right-radius: 5px;
+    background: __SPIN_BG__;
+}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover { background: __SPIN_HOVER__; }
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(__SPIN_UP__); width: 12px; height: 10px; }
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(__SPIN_DOWN__); width: 12px; height: 10px; }
+"""
+DARK_QSS += (_SPIN_QSS.replace('__SPIN_BG__', '#263241').replace('__SPIN_HOVER__', '#415A77')
+             .replace('__SPIN_UP__', '__ARROW_UP_DARK__').replace('__SPIN_DOWN__', '__ARROW_DARK__'))
+LIGHT_QSS += (_SPIN_QSS.replace('__SPIN_BG__', '#F1F5FA').replace('__SPIN_HOVER__', '#DCE9FA')
+              .replace('__SPIN_UP__', '__ARROW_UP_LIGHT__').replace('__SPIN_DOWN__', '__ARROW_LIGHT__'))
 
 
 def fit_message_box_buttons(dialog):
