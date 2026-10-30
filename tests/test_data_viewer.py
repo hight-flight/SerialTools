@@ -382,6 +382,39 @@ class DataViewerTests(unittest.TestCase):
             source = inspect.getsource(exporter)
             self.assertIn("QMessageBox.warning", source)
 
+    def test数据分析面板为独立非模态窗口(self):
+        dialog = self._dialog()
+        self.assertIsNone(dialog.parentWidget())
+        self.assertEqual(dialog.windowModality(), Qt.NonModal)
+        self.assertFalse(dialog.windowFlags() & Qt.WindowStaysOnTopHint)
+        self.assertEqual(dialog._app_paths, self.parent._app_paths)
+
+    @unittest.skipUnless(os.name == 'nt', '仅 Windows 原生窗口支持层级校验')
+    def test数据分析原生窗口可以位于主界面后面(self):
+        if self.app.platformName() != 'windows':
+            self.skipTest('需要 QT_QPA_PLATFORM=windows')
+        import ctypes
+        from ctypes import wintypes
+        get_window = ctypes.windll.user32.GetWindow
+        get_window.argtypes = [wintypes.HWND, wintypes.UINT]
+        get_window.restype = wintypes.HWND
+        self.parent.show()
+        dialog = self._dialog()
+        dialog.show()
+        QTest.qWait(100)
+        main_handle = int(self.parent.winId())
+        dialog_handle = int(dialog.winId())
+        self.assertFalse(get_window(dialog_handle, 4), '分析面板不能绑定原生所有者窗口')
+        dialog.lower()
+        self.parent.raise_()
+        QTest.qWait(100)
+        window = get_window(dialog_handle, 3)
+        above = set()
+        while window and window not in above:
+            above.add(window)
+            window = get_window(window, 3)
+        self.assertIn(main_handle, above, '主界面应该可以显示在分析面板前面')
+
     def test数据分析面板每次打开时位于主窗口中央(self):
         self.parent.setGeometry(QRect(120, 80, 560, 420))
         dialog = self._dialog()

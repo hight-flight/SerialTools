@@ -3366,7 +3366,9 @@ class JsonViewerDialog(QDialog):
     """数据分析面板 — 主对话框"""
 
     def __init__(self, parent=None, theme_callback=None, arrow_paths=None, is_dark=True):
-        super().__init__(parent)
+        # 保留业务关联，但不设置 Qt 父窗口，避免 Windows 强制面板位于主界面上方。
+        super().__init__(None)
+        self._host_window = parent
         self._theme_callback = theme_callback      # 父窗口的 _apply_dialog_theme 方法
         self._arrow_paths = arrow_paths or {}      # 箭头图标路径
         self._is_dark = is_dark                    # 初始主题状态
@@ -3393,7 +3395,7 @@ class JsonViewerDialog(QDialog):
                 pass
 
         self.setWindowTitle("数据分析面板")
-        screen = self.parentWidget().screen() if self.parentWidget() else QApplication.primaryScreen()
+        screen = parent.screen() if parent is not None else QApplication.primaryScreen()
         available = screen.availableGeometry() if screen else None
         # 图表区包含散点参数和导出操作，默认给予更宽的工作空间。
         width = min(1400, available.width()) if available else 1400
@@ -3419,7 +3421,7 @@ class JsonViewerDialog(QDialog):
 
     def center_on_current_screen(self):
         """在主窗口中央显示，并按主窗口所在屏幕限制面板尺寸。"""
-        parent = self.parentWidget()
+        parent = self._host_window
         screen = None
         if parent is not None:
             screen = QApplication.screenAt(parent.window().frameGeometry().center())
@@ -3968,7 +3970,7 @@ class JsonViewerDialog(QDialog):
             self._set_status_style(color=_VIEWER_TOKENS['dark' if self._is_dark else 'light']['danger'], bold=True)
             self.lbl_status.setText(f"状态: 无法开始 | {self.lbl_validation.text()}")
             return
-        parent = self.parent()
+        parent = self._host_window
         transport = getattr(parent, 'transport', None)
         if parent is not None and (transport is None or not getattr(transport, 'is_open', False)):
             self._set_status_style(color=_VIEWER_TOKENS['dark' if self._is_dark else 'light']['danger'], bold=True)
