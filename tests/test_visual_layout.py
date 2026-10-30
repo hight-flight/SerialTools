@@ -21,6 +21,69 @@ class VisualLayoutTests(unittest.TestCase):
         fixture.setUp()
         self.tool = fixture.tool
 
+    def test网络端口最大值在明暗主题和窄窗口下完整显示(self):
+        from PyQt5.QtTest import QTest
+        self.tool.show()
+        for theme in ('light', 'dark'):
+            self.tool.apply_theme(theme)
+            for width in (1120, 720):
+                self.tool.resize(width, 780 if width == 1120 else 560)
+                for mode, names in (
+                    (1, ('edit_udp_local_port', 'edit_udp_remote_port')),
+                    (2, ('edit_tcp_remote_port',)),
+                    (3, ('edit_tcp_server_local_port',)),
+                ):
+                    self.tool.combo_mode.setCurrentIndex(mode)
+                    QTest.qWait(100)
+                    for name in names:
+                        spin = getattr(self.tool, name)
+                        spin.setValue(65535)
+                        edit = spin.lineEdit()
+                        margins = edit.textMargins()
+                        available = edit.contentsRect().width() - margins.left() - margins.right()
+                        with self.subTest(theme=theme, width=width, control=name):
+                            self.assertGreaterEqual(available, edit.fontMetrics().horizontalAdvance('65535') + 4)
+                    # 原生窗口验证实际窄屏布局；offscreen 的字体替代与原生窗口不同。
+                    if self.app.platformName() == 'windows':
+                        self.assertEqual(self.tool.main_scroll_area.horizontalScrollBar().maximum(), 0)
+
+    def test窄窗口的筛选编码和校验下拉框完整显示最长选项(self):
+        from PyQt5.QtWidgets import QStyle, QStyleOptionComboBox
+        from PyQt5.QtTest import QTest
+        self.tool.show()
+        self.tool.resize(720, 560)
+        for theme in ('light', 'dark'):
+            self.tool.apply_theme(theme)
+            QTest.qWait(100)
+            for combo in (self.tool.combo_filter_mode, self.tool.combo_encoding,
+                          self.tool.combo_checksum, self.tool.combo_baud):
+                text = max((combo.itemText(i) for i in range(combo.count())),
+                           key=combo.fontMetrics().horizontalAdvance)
+                option = QStyleOptionComboBox()
+                option.initFrom(combo)
+                area = combo.style().subControlRect(QStyle.CC_ComboBox, option,
+                                                    QStyle.SC_ComboBoxEditField, combo)
+                with self.subTest(theme=theme, text=text):
+                    self.assertGreaterEqual(area.width(), combo.fontMetrics().horizontalAdvance(text) + 4)
+            if self.app.platformName() == 'windows':
+                self.assertEqual(self.tool.main_scroll_area.horizontalScrollBar().maximum(), 0)
+
+    def test自定义七位波特率输入后立即完整显示(self):
+        from PyQt5.QtWidgets import QInputDialog, QStyle, QStyleOptionComboBox
+        from PyQt5.QtTest import QTest
+        self.tool.show()
+        QTest.qWait(100)
+        with mock.patch.object(QInputDialog, 'getInt', return_value=(1000000, True)):
+            self.tool.combo_baud.setCurrentText('自定义')
+        QTest.qWait(100)
+        combo = self.tool.combo_baud
+        option = QStyleOptionComboBox()
+        option.initFrom(combo)
+        area = combo.style().subControlRect(QStyle.CC_ComboBox, option,
+                                            QStyle.SC_ComboBoxEditField, combo)
+        self.assertEqual(combo.currentText(), '1000000')
+        self.assertGreaterEqual(area.width(), combo.fontMetrics().horizontalAdvance('1000000') + 4)
+
     def test窄窗口仍能阅读日志路径和多行发送内容(self):
         self.tool.show()
         self.tool.resize(900, 650)

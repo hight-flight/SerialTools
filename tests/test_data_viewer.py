@@ -261,6 +261,18 @@ class DataViewerTests(unittest.TestCase):
         self.assertIn("def set_theme", source)
         self.assertIn("self.rehighlight()", source)
 
+    def test数据表行数输入框最大值完整显示(self):
+        dialog = self._dialog()
+        dialog.show()
+        dialog.data_table.show()
+        spin = dialog.data_table.spin_rows
+        spin.setValue(spin.maximum())
+        self.app.processEvents()
+        edit = spin.lineEdit()
+        margins = edit.textMargins()
+        available = edit.contentsRect().width() - margins.left() - margins.right()
+        self.assertGreaterEqual(available, edit.fontMetrics().horizontalAdvance(spin.text()) + 4)
+
     def test实时数据表包含采样序号列(self):
         source = inspect.getsource(data_viewer.DataTableWidget.refresh)
         self.assertIn('["采样"] + col_aliases', source)

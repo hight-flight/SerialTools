@@ -1857,7 +1857,6 @@ class DataTableWidget(QWidget):
         self.spin_rows.setRange(10, 500)
         self.spin_rows.setValue(self.DEFAULT_ROWS)
         self.spin_rows.setFont(QFont("Consolas", 9))
-        self.spin_rows.setMaximumWidth(70)
         toolbar.addWidget(self.spin_rows)
 
         self.check_autoscroll = QCheckBox("自动滚动")

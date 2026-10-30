@@ -30,7 +30,7 @@ from dialogs import (show_crc_calculator, show_hex_converter,
                          show_serial_monitor, show_usage_dialog,
                          show_about_dialog)
 from theme import (THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, apply_window_titlebar,
-                   fit_message_box_buttons, fit_push_button_texts, VERSION, unescape_text)
+                   fit_message_box_buttons, fit_push_button_texts, fit_combo_box_texts, VERSION, unescape_text)
 from preferences import (DEFAULT_PREFERENCES, Preferences, PreferencesDialog,
                          format_timestamp, receive_font_stylesheet)
 from transport import TransportWrapper, TransportReadThread
@@ -809,6 +809,9 @@ class SerialTool(QMainWindow):
         self.combo_baud.setCurrentText('115200')
         self.combo_baud.setFont(QFont("Consolas", 9))
         self.combo_baud.currentIndexChanged.connect(self.handle_baud_change)
+        self.combo_baud.currentTextChanged.connect(
+            lambda _text: fit_combo_box_texts((self.combo_baud,))
+        )
         baud_layout.addWidget(self.combo_baud)
         serial_page_layout.addLayout(baud_layout)
 
@@ -843,12 +846,14 @@ class SerialTool(QMainWindow):
         self.edit_udp_local_ip.setMinimumHeight(26)
         self.edit_udp_local_ip.addItem('0.0.0.0')
         udp_page_layout.addWidget(self.edit_udp_local_ip)
-        udp_page_layout.addWidget(QLabel("本地端口:", font=QFont("Microsoft YaHei", 9)))
+        self.label_udp_local_port = QLabel("本地端口:", font=QFont("Microsoft YaHei", 9))
+        self.label_udp_local_port.setAccessibleName("本地端口")
+        udp_page_layout.addWidget(self.label_udp_local_port)
         self.edit_udp_local_port = QSpinBox()
         self.edit_udp_local_port.setFont(QFont("Consolas", 9))
         self.edit_udp_local_port.setRange(1, 65535)
         self.edit_udp_local_port.setValue(8080)
-        self.edit_udp_local_port.setMaximumWidth(70)
+        self.edit_udp_local_port.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self.edit_udp_local_port.setMinimumHeight(26)
         udp_page_layout.addWidget(self.edit_udp_local_port)
         udp_page_layout.addWidget(QLabel("远程IP:", font=QFont("Microsoft YaHei", 9)))
@@ -858,12 +863,14 @@ class SerialTool(QMainWindow):
         self.edit_udp_remote_ip.setMinimumHeight(26)
         self.edit_udp_remote_ip.setText('192.168.1.100')
         udp_page_layout.addWidget(self.edit_udp_remote_ip)
-        udp_page_layout.addWidget(QLabel("远程端口:", font=QFont("Microsoft YaHei", 9)))
+        self.label_udp_remote_port = QLabel("远程端口:", font=QFont("Microsoft YaHei", 9))
+        self.label_udp_remote_port.setAccessibleName("远程端口")
+        udp_page_layout.addWidget(self.label_udp_remote_port)
         self.edit_udp_remote_port = QSpinBox()
         self.edit_udp_remote_port.setFont(QFont("Consolas", 9))
         self.edit_udp_remote_port.setRange(1, 65535)
         self.edit_udp_remote_port.setValue(8888)
-        self.edit_udp_remote_port.setMaximumWidth(70)
+        self.edit_udp_remote_port.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self.edit_udp_remote_port.setMinimumHeight(26)
         udp_page_layout.addWidget(self.edit_udp_remote_port)
         udp_page_layout.addStretch()
@@ -886,7 +893,7 @@ class SerialTool(QMainWindow):
         self.edit_tcp_remote_port.setFont(QFont("Consolas", 9))
         self.edit_tcp_remote_port.setRange(1, 65535)
         self.edit_tcp_remote_port.setValue(8888)
-        self.edit_tcp_remote_port.setMaximumWidth(70)
+        self.edit_tcp_remote_port.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self.edit_tcp_remote_port.setMinimumHeight(26)
         tcp_client_page_layout.addWidget(self.edit_tcp_remote_port)
         tcp_client_page_layout.addStretch()
@@ -910,7 +917,7 @@ class SerialTool(QMainWindow):
         self.edit_tcp_server_local_port.setFont(QFont("Consolas", 9))
         self.edit_tcp_server_local_port.setRange(1, 65535)
         self.edit_tcp_server_local_port.setValue(8888)
-        self.edit_tcp_server_local_port.setMaximumWidth(70)
+        self.edit_tcp_server_local_port.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self.edit_tcp_server_local_port.setMinimumHeight(26)
         tcp_server_page_layout.addWidget(self.edit_tcp_server_local_port)
         tcp_server_page_layout.addStretch()
@@ -973,7 +980,6 @@ class SerialTool(QMainWindow):
         self.combo_filter_mode = QComboBox()
         self.combo_filter_mode.addItems(["包含", "忽略大小写", "正则", "高亮显示"])
         self.combo_filter_mode.setFont(QFont("Microsoft YaHei", 9))
-        self.combo_filter_mode.setMaximumWidth(90)
         self.combo_filter_mode.setEnabled(False)
         self.combo_filter_mode.currentTextChanged.connect(self.update_filter_mode)
         display_save_layout.addWidget(self.combo_filter_mode)
@@ -1620,6 +1626,8 @@ class SerialTool(QMainWindow):
             (self.check_repeat, "重复发送", "重复"),
             (self.check_auto_reply, "自动应答", "应答"),
             (self.label_repeat_interval, "间隔(ms):", "ms:"),
+            (self.label_udp_local_port, "本地端口:", "端口:"),
+            (self.label_udp_remote_port, "远程端口:", "端口:"),
             (self.label_head_field, "首字段:", "首:"),
             (self.label_tail_field, "尾字段:", "尾:"),
         )
@@ -1801,6 +1809,8 @@ class SerialTool(QMainWindow):
         if hasattr(self, '_current_status_text'):
             self._set_status(self._current_status_text, self._current_status_level)
         self._refresh_open_dialog_themes()
+        fit_combo_box_texts((self.combo_baud, self.combo_filter_mode,
+                            self.combo_encoding, self.combo_checksum))
         fit_push_button_texts(self)
 
 

@@ -11,7 +11,7 @@ import re
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import (
-    QApplication, QMessageBox, QPushButton, QStyle, QStyleOptionButton, QGroupBox,
+    QApplication, QMessageBox, QPushButton, QStyle, QStyleOptionButton, QGroupBox, QStyleOptionComboBox,
 )
 
 
@@ -673,6 +673,24 @@ def fit_push_button_texts(root):
         if minimum_width > button.minimumWidth():
             button.setMinimumWidth(minimum_width)
             button.updateGeometry()
+
+
+def fit_combo_box_texts(combos):
+    """为固定选项下拉框预留最长文本、箭头和边距，避免窗口收窄时裁字。"""
+    for combo in combos:
+        if not combo.count():
+            continue
+        combo.ensurePolished()
+        option = QStyleOptionComboBox()
+        option.initFrom(combo)
+        option.editable = combo.isEditable()
+        content = combo.style().subControlRect(
+            QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, combo
+        )
+        text_width = max(combo.fontMetrics().horizontalAdvance(combo.itemText(index))
+                         for index in range(combo.count()))
+        insets = max(0, combo.width() - content.width())
+        combo.setMinimumWidth(text_width + insets + 4)
 
 
 def apply_window_titlebar(window, is_dark, color_hex="#151A22"):
