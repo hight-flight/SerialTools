@@ -12,7 +12,7 @@ import threading
 import serial
 import serial.tools.list_ports
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QComboBox, QPushButton,
                              QTextEdit, QCheckBox, QMessageBox, QSplitter, QSpinBox, QLineEdit, QGroupBox, QDialog, QFormLayout,
@@ -31,6 +31,8 @@ from dialogs import (show_crc_calculator, show_hex_converter,
                          show_about_dialog)
 from theme import (THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, apply_window_titlebar,
                    fit_message_box_buttons, fit_push_button_texts, VERSION, unescape_text)
+from preferences import (DEFAULT_PREFERENCES, Preferences, PreferencesDialog,
+                         format_timestamp, receive_font_stylesheet)
 from transport import TransportWrapper, TransportReadThread
 from app_paths import (ensure_user_dirs, migrate_legacy_user_data, resolve_app_paths,
                        resource_path, sanitize_linux_runtime_environment,
@@ -431,7 +433,8 @@ class SerialTool(QMainWindow):
         # 单条日志最大长度限制，防止过长日志占用过多内存
         self.MAX_LOG_ENTRY_LENGTH = 4096
         # 接收区显示的最大行数，超过后自动清理前面的内容，防止界面卡死
-        self.MAX_DISPLAY_LINES = 5000  # 最多显示5000行
+        self.preferences = DEFAULT_PREFERENCES
+        self.MAX_DISPLAY_LINES = self.preferences.max_display_lines
         # 自动保存相关变量
         self.auto_save_enabled = False
         self.current_log_file = None
@@ -494,6 +497,7 @@ class SerialTool(QMainWindow):
 
 
         self.init_ui()
+        self.apply_preferences(self.preferences, persist=False)
         self.refresh_ports() # 启动时刷新串口列表
         self.load_config() # 启动时加载配置
         self._init_window_visibility_tracking()
@@ -696,6 +700,13 @@ class SerialTool(QMainWindow):
         act_auto_reply = QAction("自动应答工具", self)
         act_auto_reply.triggered.connect(self.show_auto_reply)
         tool_menu.addAction(act_auto_reply)
+
+        # 设置菜单位于帮助之前，长期偏好不占用主工作区。
+        settings_menu = menubar.addMenu("设置(&S)")
+        self.act_preferences = QAction("偏好设置(&P)…", self)
+        self.act_preferences.setShortcut("Ctrl+,")
+        self.act_preferences.triggered.connect(self.show_preferences)
+        settings_menu.addAction(self.act_preferences)
 
         # 帮助菜单
         help_menu = menubar.addMenu("帮助(&H)")
@@ -1386,7 +1397,7 @@ class SerialTool(QMainWindow):
             ["HEX", "字符串", "备注", "操作", "单条延时(ms)", "顺序"]
         )
         self.table_multi_send.setAccessibleName("多字符串发送指令表")
-        self.table_multi_send.setToolTip("双击字符串、备注或顺序单元格进行编辑")
+        self.table_multi_send.setToolTip("双击字符串、备注或顺序单元格进行编辑；非零顺序号不能重复，0 表示停用")
         self.table_multi_send.setEditTriggers(
             QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
         )
@@ -1623,6 +1634,67 @@ class SerialTool(QMainWindow):
         self.label_save_path.setVisible(not compact)
         self.line_edit_save_path.setVisible(not compact)
         self.btn_browse_path.setToolTip(f"选择日志保存目录：{self.save_directory}")
+
+    def current_preferences(self):
+        # 菜单和主界面的时间戳开关始终是同一个设置。
+        return replace(self.preferences, show_timestamp=self.act_timestamp.isChecked())
+
+    def apply_preferences(self, preferences, persist=True):
+        preferences = Preferences.from_dict(preferences.to_dict())
+        previous = self.preferences
+        # 待显示的数据先按已有格式呈现，避免修改设置后混用格式。
+        self._flush_pending_display()
+        self.preferences = preferences
+        self.act_timestamp.setChecked(preferences.show_timestamp)
+        self._toggle_timestamp(preferences.show_timestamp)
+        self.text_recv.setStyleSheet(receive_font_stylesheet(preferences))
+        self.text_recv.document().setDefaultFont(QFont(preferences.receive_font, preferences.receive_font_size))
+        self.text_recv.setLineWrapMode(QTextEdit.WidgetWidth if preferences.word_wrap else QTextEdit.NoWrap)
+        self.MAX_DISPLAY_LINES = preferences.max_display_lines
+        self._recv_follow_timer.stop()
+        self._recv_follow_timer.setInterval(preferences.resume_delay_seconds * 1000)
+        if previous.auto_scroll != preferences.auto_scroll:
+            self._recv_user_reading = False
+        if preferences.auto_scroll and preferences.auto_resume and self._recv_user_reading:
+            self._recv_follow_timer.start()
+        if previous.max_display_lines != preferences.max_display_lines:
+            self._trim_recv_buffer(force=True)
+        return self.save_config() if persist else True
+
+    def show_preferences(self):
+        dialog = PreferencesDialog(self)
+        self._apply_dialog_theme(dialog)
+        try:
+            dialog.exec_()
+        finally:
+            dialog.deleteLater()
+
+    def restore_default_layout(self):
+        """在当前屏幕内恢复代码默认布局并保存，不改变通信和数据。"""
+        self.main_splitter.widget(1).hide()
+        self.btn_toggle_multi_send.setText("显示多字符串发送")
+        self.act_multi_send.setChecked(False)
+        self._clear_multi_send_expansion_state()
+        self._multi_columns_fitted = False
+        screen = self.screen() or QApplication.primaryScreen()
+        if self._is_special_window_state(self.windowState()):
+            self.showNormal()
+        if screen:
+            area = screen.availableGeometry()
+            self.resize(min(1120, area.width()), min(780, area.height()))
+            frame = self.frameGeometry()
+            frame.moveCenter(area.center())
+            self.move(frame.topLeft())
+            self._ensure_window_visible(screen)
+        else:
+            self.resize(1120, 780)
+        self.centralWidget().layout().activate()
+        self.main_splitter.setSizes([max(1, self.main_splitter.width()), 0])
+        self.io_splitter.setSizes([760, 1])
+        self.main_scroll_area.horizontalScrollBar().setValue(0)
+        self.main_scroll_area.verticalScrollBar().setValue(0)
+        self._update_workspace_density()
+        return self.save_config()
 
     def toggle_repeat(self):
         """切换重复发送状态"""
@@ -2956,6 +3028,7 @@ class SerialTool(QMainWindow):
         （原实现只截断 payload，拼接时间戳后仍会超限）。返回的截断 payload 供显示使用，
         保证显示与日志内容一致。
         """
+        timestamp = format_timestamp(timestamp, self.preferences.log_timestamp)
         suffix = "...(截断)"
         max_payload = self.MAX_LOG_ENTRY_LENGTH - len(timestamp)
         if len(payload) > max_payload:
@@ -3040,7 +3113,7 @@ class SerialTool(QMainWindow):
             error_msg = f"[解码错误]: {e}"
             # 添加到日志缓冲区（deque自动管理大小）
             timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S.%f] ")
-            log_entry = timestamp + error_msg
+            log_entry = format_timestamp(timestamp, self.preferences.log_timestamp) + error_msg
             self.log_buffer.append(log_entry)
             # 显示到界面
             self.append_text(error_msg)
@@ -3080,7 +3153,7 @@ class SerialTool(QMainWindow):
             # 分段处理异常不再静默吞掉，记录到日志缓冲区并提示用户，
             # 与主路径行为保持一致，便于排查数据丢失问题
             error_msg = f"[分段解码错误]: {e}"
-            log_entry = timestamp + error_msg
+            log_entry = format_timestamp(timestamp, self.preferences.log_timestamp) + error_msg
             self.log_buffer.append(log_entry)
             self.append_text(error_msg)
             if self.auto_save_enabled and self.current_log_file:
@@ -3089,6 +3162,7 @@ class SerialTool(QMainWindow):
     def _update_receive_display(self, text, timestamp):
         """更新接收区显示（限制更新频率，缓冲数据避免丢失）"""
         # 将数据添加到待显示缓冲区
+        timestamp = format_timestamp(timestamp, self.preferences.display_timestamp)
         self._pending_display_data.append((text, timestamp))
         # 启动兜底定时器：即使数据停止，最后一笔也能在 50ms 内刷出
         self._recv_flush_timer.start()
@@ -3209,7 +3283,7 @@ class SerialTool(QMainWindow):
 
         # 循环结束后统一裁剪一次 + 滚动一次（避免逐行裁剪/滚动导致节流失效）
         self._trim_recv_buffer()
-        if not self._recv_user_reading:
+        if self.preferences.auto_scroll and not self._recv_user_reading:
             self.text_recv.ensureCursorVisible()
             self._recv_auto_scroll_to_bottom()
 
@@ -3219,6 +3293,8 @@ class SerialTool(QMainWindow):
         阈值取约 3 行（用滚动条 singleStep 估算），避免在最新区随手搓滚轮误触发；
         查阅中继续滚动会重新计时，滚回底部附近则立即恢复（不必等满 10秒）。
         """
+        if not self.preferences.auto_scroll:
+            return
         delta = event.angleDelta().y()            # >0 向上翻（看更早内容）
         sb = self.text_recv.verticalScrollBar()
         dist_from_bottom = sb.maximum() - sb.value()
@@ -3234,10 +3310,15 @@ class SerialTool(QMainWindow):
         # 向上翻离开底部 → 进入查阅（暂停跟底）；查阅中继续滚动 → 重新计时
         if delta > 0 or self._recv_user_reading:
             self._recv_user_reading = True
-            self._recv_follow_timer.start()
+            if self.preferences.auto_resume:
+                self._recv_follow_timer.start()
+            else:
+                self._recv_follow_timer.stop()
 
     def _on_recv_follow_resume(self):
-        """滚轮静止 6 秒后：恢复自动跟底，并立即刷新到最新内容。"""
+        """达到配置的等待时间后恢复跟随，关闭自动恢复时保持阅读位置。"""
+        if not self.preferences.auto_scroll or not self.preferences.auto_resume:
+            return
         self._recv_user_reading = False
         # 查阅期间可能跳过了裁剪，恢复后把行数压回上限再跟底
         self._trim_recv_buffer(force=True)
@@ -3245,7 +3326,7 @@ class SerialTool(QMainWindow):
 
     def _recv_auto_scroll_to_bottom(self):
         """接收区自动跟底：仅在用户未在滚动查看时才滚动到底部。"""
-        if self._recv_user_reading:
+        if not self.preferences.auto_scroll or self._recv_user_reading:
             return
         sb = self.text_recv.verticalScrollBar()
         sb.setValue(sb.maximum())
@@ -3257,31 +3338,36 @@ class SerialTool(QMainWindow):
         force=True 时无视查阅状态，把行数压回 MAX_DISPLAY_LINES（用于恢复跟底后清理）。
         """
         block_count = self.text_recv.document().blockCount()
-        if block_count < self.MAX_DISPLAY_LINES:
+        if block_count <= self.MAX_DISPLAY_LINES:
             return
         if self._recv_user_reading and not force and block_count < self.MAX_DISPLAY_LINES * 3:
             return  # 查阅中，保留用户正在看的内容
-        cursor = self.text_recv.textCursor()
+        scroll_bar = self.text_recv.verticalScrollBar()
+        # 用文档光标锚定正在阅读的内容，删除前面的行后光标会自动跟随移动。
+        reading_cursor = self.text_recv.cursorForPosition(QPoint(1, 1))
+        reading_top = self.text_recv.cursorRect(reading_cursor).top()
+        # 保留批量清理的余量，同时处理单次突发数据远超上限的情况。
+        lines_to_remove = max(100, int(self.MAX_DISPLAY_LINES * 0.1),
+                              block_count - self.MAX_DISPLAY_LINES)
+        lines_to_remove = min(lines_to_remove, block_count - 1)
+        cursor = QTextCursor(self.text_recv.document())
         cursor.beginEditBlock()
-        # 删除前面的10%内容（约500行），保留大部分内容
-        lines_to_remove = max(100, int(self.MAX_DISPLAY_LINES * 0.1))
-        if force:
-            # 强制裁剪：多删一些，把行数压回上限
-            lines_to_remove = max(lines_to_remove, block_count - self.MAX_DISPLAY_LINES)
         cursor.movePosition(QTextCursor.Start)
-        for _ in range(lines_to_remove):
-            cursor.movePosition(QTextCursor.NextBlock, QTextCursor.KeepAnchor)
-            if not cursor.atEnd():
-                cursor.removeSelectedText()
+        end_block = self.text_recv.document().findBlockByNumber(lines_to_remove)
+        cursor.setPosition(end_block.position(), QTextCursor.KeepAnchor)
+        cursor.removeSelectedText()
         cursor.endEditBlock()
-        # 裁剪后文档字符位置整体前移，把显示光标重置到末尾，
-        # 避免后续操作命中已被删除的区域
-        self.text_recv.moveCursor(QTextCursor.End)
+        if self.preferences.auto_scroll and not self._recv_user_reading:
+            self.text_recv.moveCursor(QTextCursor.End)
+        else:
+            if reading_cursor.position() == 0:
+                scroll_bar.setValue(0)
+            else:
+                offset = self.text_recv.cursorRect(reading_cursor).top() - reading_top
+                scroll_bar.setValue(scroll_bar.value() + offset)
 
     def append_formatted_text(self, formatted_segments):
         """向接收区追加带格式的文本，并自动滚动到底部"""
-        # 行数超限时裁剪旧行（查阅中由 _trim_recv_buffer 决定是否跳过）
-        self._trim_recv_buffer()
 
         # 开始一个编辑块，提高性能
         cursor = self.text_recv.textCursor()
@@ -3311,8 +3397,10 @@ class SerialTool(QMainWindow):
                 hl_fmt.setBackground(tc['highlight_bg'])
                 self._apply_keyword_highlight(cursor, hl_start, full_text, hl_fmt)
 
+        self._trim_recv_buffer()
+
         # 确保文本可见（仅当用户未在滚动查看时，避免打断查阅）
-        if not self._recv_user_reading:
+        if self.preferences.auto_scroll and not self._recv_user_reading:
             self.text_recv.ensureCursorVisible()
             # 滚动到底部
             self._recv_auto_scroll_to_bottom()
@@ -3325,7 +3413,7 @@ class SerialTool(QMainWindow):
         # 只有系统消息、错误消息和发送消息才添加到日志缓冲区
         if "[系统]:" in text or "[错误]:" in text or "[发送]:" in text:
             timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S.%f] ")
-            log_entry = timestamp + text
+            log_entry = format_timestamp(timestamp, self.preferences.log_timestamp) + text
             # 限制日志条目长度
             if len(log_entry) > self.MAX_LOG_ENTRY_LENGTH:
                 log_entry = log_entry[:self.MAX_LOG_ENTRY_LENGTH] + "...(截断)"
@@ -3335,8 +3423,6 @@ class SerialTool(QMainWindow):
         # 获取光标
         cursor = self.text_recv.textCursor()
 
-        # 行数超限时裁剪旧行（查阅中由 _trim_recv_buffer 决定是否跳过）
-        self._trim_recv_buffer()
 
         # 移动到末尾
         cursor.movePosition(QTextCursor.End)
@@ -3373,8 +3459,10 @@ class SerialTool(QMainWindow):
             hl_fmt.setBackground(tc['highlight_bg'])
             self._apply_keyword_highlight(cursor, insert_start, display_text, hl_fmt)
 
+        self._trim_recv_buffer()
+
         # 确保文本可见（仅当用户未在滚动查看时，避免打断查阅）
-        if not self._recv_user_reading:
+        if self.preferences.auto_scroll and not self._recv_user_reading:
             self.text_recv.ensureCursorVisible()
             # 滚动到底部
             self._recv_auto_scroll_to_bottom()
@@ -3650,7 +3738,14 @@ class SerialTool(QMainWindow):
     
     def add_multi_item(self):
         """添加新的多字符项目"""
-        row = self._insert_multi_item_row({"order": str(self.table_multi_send.rowCount() + 1)})
+        max_order = 0
+        for existing_row in range(self.table_multi_send.rowCount()):
+            item = self.table_multi_send.item(existing_row, MULTI_COL_ORDER)
+            try:
+                max_order = max(max_order, int(item.text()) if item else 0)
+            except ValueError:
+                continue
+        row = self._insert_multi_item_row({"order": str(max_order + 1)})
         self.table_multi_send.setCurrentCell(row, MULTI_COL_TEXT)
 
     def _insert_multi_item_row(self, item=None, row=None):
@@ -3984,7 +4079,7 @@ class SerialTool(QMainWindow):
 
         1. 开始与停止：
            - 点击“开始批量发送”，系统按“顺序”从小到大发送全部有效指令
-           - 顺序为 0 的行不参与批量发送，可用于临时停用指令
+           - 非零顺序号不能重复；顺序为 0 的行不参与批量发送，允许重复
            - 发送期间按钮会变为“停止批量发送”，列表和批量设置会暂时锁定
            - 默认限定为 1 轮；取消“限定轮数”后会持续发送，直到手动停止
 
@@ -3998,7 +4093,7 @@ class SerialTool(QMainWindow):
            - 点击“操作”列中的“发送”，只发送该行，不会覆盖主发送框草稿
 
         4. 校验与状态：
-           - 参与发送的行不能为空；负数或非整数顺序会在开始前统一标出
+           - 参与发送的行不能为空；重复、负数或非整数顺序会在开始前统一标出
            - 进度与停止结果显示在批量工具栏右侧
 
         5. 保存与加载：
@@ -4092,6 +4187,7 @@ class SerialTool(QMainWindow):
         """校验表格并返回按顺序排列的不可变发送快照与单元格错误。"""
         items = []
         errors = []
+        order_rows = {}
         for row in range(self.table_multi_send.rowCount()):
             string_item = self.table_multi_send.item(row, MULTI_COL_TEXT)
             text = string_item.text() if string_item else ""
@@ -4107,6 +4203,7 @@ class SerialTool(QMainWindow):
                 continue
             if order == 0:
                 continue
+            order_rows.setdefault(order, []).append(row)
             if not text.strip():
                 errors.append((row, MULTI_COL_TEXT, "字符串不能为空"))
                 continue
@@ -4129,6 +4226,12 @@ class SerialTool(QMainWindow):
                 order=order, name=name_item.text() if name_item else "无注释",
                 source_row=row,
             ))
+        for order, rows in order_rows.items():
+            if len(rows) > 1:
+                row_numbers = "、".join(str(row + 1) for row in rows)
+                message = f"顺序 {order} 重复，涉及第 {row_numbers} 行；非零顺序号不能重复"
+                errors.extend((row, MULTI_COL_ORDER, message) for row in rows)
+        errors.sort(key=lambda error: (error[0], error[1]))
         items.sort(key=lambda item: (item.order, item.source_row))
         return tuple(items), errors
     
@@ -4141,7 +4244,11 @@ class SerialTool(QMainWindow):
             self.label_batch_status.setText(f"有 {len(errors)} 处需要修正")
             first_row, first_column, _ = errors[0]
             self.table_multi_send.setCurrentCell(first_row, first_column)
-            QMessageBox.warning(self, "无法开始", "请先修正表格中标出的无效内容。")
+            messages = list(dict.fromkeys(message for _, _, message in errors))
+            details = "\n".join(messages[:5])
+            if len(messages) > 5:
+                details += "\n其余问题请查看标出的单元格。"
+            QMessageBox.warning(self, "无法开始", f"请先修正表格中标出的无效内容：\n{details}")
             return
         if not items:
             self._set_batch_running(False)
@@ -5968,6 +6075,7 @@ class SerialTool(QMainWindow):
         import json
         
         if os.path.exists(self.config_file):
+            self._loading_config = True
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     # 限制读取的字节数，防止超大配置文件导致内存问题
@@ -6151,6 +6259,14 @@ class SerialTool(QMainWindow):
                 if need_apply_theme:
                     self.apply_theme(self.current_theme)
 
+                # 旧配置没有 preferences 时沿用代码默认值，并保留旧时间戳开关。
+                raw_preferences = config.get('preferences')
+                if not isinstance(raw_preferences, dict):
+                    raw_preferences = {}
+                raw_preferences = dict(raw_preferences)
+                raw_preferences.setdefault('show_timestamp', self.act_timestamp.isChecked())
+                self.apply_preferences(Preferences.from_dict(raw_preferences), persist=False)
+
                 # 窗口和分割器状态只接受有界十六进制字符串，避免损坏配置影响启动。
                 ui_state_targets = (
                     ('window_geometry', self.restoreGeometry),
@@ -6168,6 +6284,9 @@ class SerialTool(QMainWindow):
                 self.append_text("[系统]: 配置已加载\n")
             except Exception as e:
                 self.append_text(f"[错误]: 加载配置失败: {str(e)}\n")
+            finally:
+                self._loading_config = False
+
 
     def _ensure_window_visible(self, screen=None):
         """使用外框定位、内容区缩放，找回旧显示器或 DPI 变化后越界的窗口。"""
@@ -6217,6 +6336,9 @@ class SerialTool(QMainWindow):
 
     def save_config(self):
         """保存配置文件"""
+        # 加载过程中复选框信号会触发保存，等全部字段恢复后再允许写入。
+        if getattr(self, '_loading_config', False):
+            return True
         import json
         
         # 获取波特率，添加异常处理
@@ -6310,6 +6432,7 @@ class SerialTool(QMainWindow):
             'encoding': self.combo_encoding.currentText(),
             # 主题设置
             'theme': self.current_theme,
+            'preferences': self.current_preferences().to_dict(),
             # 窗口布局状态
             'window_geometry': self._window_geometry_hex_for_config(),
             'main_splitter_state': (
@@ -6339,11 +6462,14 @@ class SerialTool(QMainWindow):
             try:
                 import shutil as _shutil
                 _shutil.copy2(self.config_file, self._base_config_file)
-            except Exception:
-                pass
+            except Exception as exc:
+                self.append_text(f"[错误]: 同步默认启动配置失败: {exc}\n")
+                return False
             self.append_text("[系统]: 配置已保存\n")
+            return True
         except Exception as e:
             self.append_text(f"[错误]: 保存配置失败: {str(e)}\n")
+            return False
     
     def __del__(self):
         """析构函数，确保资源清理"""

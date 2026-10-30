@@ -30,9 +30,8 @@ class MultiSendTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
-        # 子窗口的 addCleanup 必须先执行，再销毁已关闭的父窗口。
-        self.addCleanup(lambda: self.app.sendPostedEvents(None, QEvent.DeferredDelete))
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
         root = Path(self.temp_dir.name)
         paths = AppPaths(
             config_dir=root / "config",
@@ -54,21 +53,26 @@ class MultiSendTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
         self.tool = SerialTool()
+        # 子窗口先清理，再销毁主窗口，最后删除仍被样式引用的临时图标目录。
+        self.addCleanup(MultiSendTests._dispose_tool, self)
 
-    def tearDown(self):
+    def _dispose_tool(self):
         thread = getattr(self.tool, "batch_thread", None)
-        if thread is not None and hasattr(thread, "request_stop"):
-            thread.request_stop()
-        if thread is not None and hasattr(thread, "wait"):
-            thread.wait(1000)
+        try:
+            if thread is not None and hasattr(thread, "request_stop"):
+                thread.request_stop()
+            if thread is not None and hasattr(thread, "wait"):
+                thread.wait(1000)
+        except RuntimeError:
+            pass  # 线程已由测试注册的清理回调销毁。
+
         self.app.processEvents()
         self.tool.close()
         self.tool.setAttribute(Qt.WA_DeleteOnClose, True)
         self.tool.deleteLater()
-        for _ in range(3):
-            self.app.processEvents()
+        self.app.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.app.processEvents()
         self.tool = None
-        self.temp_dir.cleanup()
 
     def _dispose_thread(self, thread):
         if thread.isRunning():
@@ -250,6 +254,70 @@ class MultiSendTests(unittest.TestCase):
         self.assertEqual(items, ())
         self.assertIn((0, 1, "字符串不能为空"), errors)
         self.assertIn((1, 5, "顺序必须是大于等于 0 的整数"), errors)
+
+    def test删除行或修改顺序后新增指令不会自动产生重复编号(self):
+        self.tool.add_multi_item()
+        self.tool.table_multi_send.removeRow(0)
+        self.tool.add_multi_item()
+        orders = [int(self.tool.table_multi_send.item(row, 5).text())
+                  for row in range(self.tool.table_multi_send.rowCount())]
+        self.assertEqual(orders, [2, 3])
+        self.tool.table_multi_send.item(1, 5).setText('10')
+        self.tool.add_multi_item()
+        self.assertEqual(self.tool.table_multi_send.item(2, 5).text(), '11')
+
+    def test重复顺序按数值判断并标记全部冲突行(self):
+        for row, order in enumerate(("2", "02", " 2 ")):
+            if row:
+                self.tool.add_multi_item()
+            self.tool.table_multi_send.item(row, 1).setText("AT")
+            self.tool.table_multi_send.item(row, 5).setText(order)
+
+        _, errors = self.tool._collect_multi_send_snapshot()
+
+        self.assertEqual({(row, col) for row, col, _ in errors},
+                         {(0, 5), (1, 5), (2, 5)})
+        for _, _, message in errors:
+            self.assertIn("顺序 2 重复", message)
+            self.assertIn("第 1、2、3 行", message)
+
+    def test多个零顺序允许重复且其余指令仍按数字排序(self):
+        for row, order in enumerate(("0", "0", "3", "1")):
+            if row:
+                self.tool.add_multi_item()
+            self.tool.table_multi_send.item(row, 1).setText("AT" if row >= 2 else "")
+            self.tool.table_multi_send.item(row, 5).setText(order)
+
+        items, errors = self.tool._collect_multi_send_snapshot()
+
+        self.assertEqual(errors, [])
+        self.assertEqual([item.order for item in items], [1, 3])
+
+    def test重复顺序阻止批量启动且修改后可发送并清除标记(self):
+        self.tool.table_multi_send.item(0, 1).setText("AT+ONE")
+        self.tool.table_multi_send.item(0, 5).setText("2")
+        self.tool.add_multi_item()
+        self.tool.table_multi_send.item(1, 1).setText("AT+TWO")
+        self.tool.table_multi_send.item(1, 5).setText("2")
+
+        with mock.patch("serial_GUI.BatchSendThread") as thread_class, mock.patch.object(
+            QMessageBox, "warning"
+        ) as warning:
+            self.tool.batch_send()
+            thread_class.assert_not_called()
+            warning.assert_called_once()
+            self.assertIn("顺序 2 重复", warning.call_args.args[2])
+            self.assertFalse(self.tool.btn_batch_send.isChecked())
+            for row in (0, 1):
+                self.assertIn("顺序 2 重复", self.tool.table_multi_send.item(row, 5).toolTip())
+
+            self.tool.table_multi_send.item(1, 5).setText("3")
+            self.tool.batch_send()
+            thread_class.return_value.start.assert_called_once()
+            self.assertEqual([item.order for item in thread_class.call_args.args[0]], [2, 3])
+            for row in (0, 1):
+                self.assertEqual(self.tool.table_multi_send.item(row, 5).toolTip(), "")
+            self.tool.batch_thread = None
 
     def test顺序为零的行不参与批量发送且不标记为错误(self):
         self.tool.table_multi_send.item(0, 1).setText("")
@@ -758,8 +826,11 @@ class MultiSendTests(unittest.TestCase):
         original_geometry = self.tool.geometry()
         original_left_width = self.tool.main_splitter.sizes()[0]
 
-        with mock.patch.object(SerialTool, "screen", return_value=fake_screen):
+        # 延迟窗口校正也使用同一块模拟屏幕，避免落到 offscreen 的 800 像素屏幕。
+        with mock.patch.object(SerialTool, "screen", return_value=fake_screen), \
+                mock.patch("serial_GUI.QApplication.screens", return_value=[fake_screen]):
             self.tool.toggle_multi_send()
+            QTest.qWait(180)
             self.app.processEvents()
             panel_width = max(
                 self.tool.table_multi_send.minimumWidth(),
@@ -923,14 +994,15 @@ class MultiSendTests(unittest.TestCase):
     def test展开后最大化时配置保留最大化和原正常尺寸(self):
         available = QRect(0, 0, 1920, 1080)
         fake_screen = SimpleNamespace(availableGeometry=lambda: available)
-        self.tool.setGeometry(100, 50, 1080, 800)
-        self.tool.show()
-        self.app.processEvents()
-        original_geometry = self.tool.geometry()
-
-        with mock.patch.object(SerialTool, "screen", return_value=fake_screen):
+        # 定时校正和直接调用必须使用同一块屏幕，避免测试耗时改变窗口尺寸。
+        with mock.patch.object(SerialTool, "screen", return_value=fake_screen), \
+                mock.patch("serial_GUI.QApplication.screens", return_value=[fake_screen]):
+            self.tool.setGeometry(100, 50, 1080, 800)
+            self.tool.show()
+            QTest.qWait(180)
+            original_geometry = self.tool.geometry()
             self.tool.toggle_multi_send()
-            self.app.processEvents()
+            QTest.qWait(180)
             self.tool.showMaximized()
             self.app.processEvents()
             self.tool.save_config()
