@@ -580,6 +580,7 @@ QLabel, QCheckBox, QRadioButton, QComboBox, QPushButton, QMenu, QMenuBar,
 QTabBar, QTableView, QTreeView, QHeaderView, QStatusBar {
     font-size: 9.5pt; font-weight: normal;
 }
+QLabel[receiveStatistics="true"] { font-size: 8.5pt; }
 QGroupBox { font-size: 10pt; font-weight: 600; }
 QHeaderView::section { font-size: 9.5pt; font-weight: 600; }
 QLineEdit, QSpinBox, QDoubleSpinBox {

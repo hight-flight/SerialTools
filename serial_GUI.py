@@ -1006,7 +1006,7 @@ class SerialTool(QMainWindow):
         recv_group.setProperty("workspaceCard", True)
         recv_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
         recv_layout = QVBoxLayout(recv_group)
-        recv_layout.setContentsMargins(12, 6, 12, 6)
+        recv_layout.setContentsMargins(12, 2, 12, 4)
         recv_layout.setSpacing(4)
 
         self.text_recv = QTextEdit()
@@ -1056,6 +1056,8 @@ class SerialTool(QMainWindow):
         self.label_packets.setFont(QFont("Consolas", 9))
         stats_layout.addWidget(self.label_packets)
 
+        for label in (self.label_rx_bytes, self.label_tx_bytes, self.label_packets):
+            label.setProperty("receiveStatistics", True)
         stats_layout.addStretch()
 
         recv_layout.addLayout(stats_layout)
@@ -1598,7 +1600,9 @@ class SerialTool(QMainWindow):
             return
         self._compact_workspace = compact
         for layout in self._workspace_card_layouts:
-            layout.setContentsMargins(8 if compact else 12, 6, 8 if compact else 12, 6)
+            margins = layout.contentsMargins()
+            layout.setContentsMargins(8 if compact else 12, margins.top(),
+                                      8 if compact else 12, margins.bottom())
         labels = (
             (self.check_hex_send, "HEX 发送", "HEX"),
             (self.check_newline, "回车换行", "换行"),
