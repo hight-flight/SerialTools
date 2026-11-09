@@ -754,19 +754,48 @@ class MultiSendTests(unittest.TestCase):
         self.assertEqual(self.tool.width(), min(1120, available_width))
         self.assertEqual(self.tool.height(), min(780, QApplication.primaryScreen().availableGeometry().height()))
 
+    def test展开面板按内容分配宽度且在宽窄屏幕内完整显示(self):
         self.tool.show()
-        self.tool.toggle_multi_send()
         self.app.processEvents()
-        left_width, right_width = self.tool.main_splitter.sizes()
+        for available in (QRect(0, 0, 2560, 1392), QRect(-1024, 0, 1024, 768)):
+            fake_screen = SimpleNamespace(availableGeometry=lambda: available)
+            with self.subTest(available=available.getRect()), \
+                    mock.patch.object(SerialTool, "screen", return_value=fake_screen), \
+                    mock.patch("serial_GUI.QApplication.screens", return_value=[fake_screen]):
+                self.tool.setGeometry(
+                    available.left() + 40, available.top() + 40,
+                    min(1120, available.width() - 80),
+                    min(780, available.height() - 100),
+                )
+                self.app.processEvents()
+                original_frame_width = self.tool.frameGeometry().width()
+                original_left_width = self.tool.main_splitter.sizes()[0]
+                required_panel_width = self.tool.main_splitter.widget(1).minimumSizeHint().width()
 
-        if available_width >= 1080:
-            self.assertGreaterEqual(left_width, 680)
-            self.assertGreaterEqual(right_width, 360)
-            self.assertLessEqual(right_width, 390)
-        else:
-            # 小屏无法同时容纳两个理想宽度时，窗口不越界并保留右侧最小可用宽度。
-            self.assertGreater(left_width, 0)
-            self.assertGreaterEqual(right_width, int(available_width * 0.45))
+                self.tool.toggle_multi_send()
+                QTest.qWait(180)
+                left_width, right_width = self.tool.main_splitter.sizes()
+
+                # 面板宽度由控件及边距决定，不能沿用旧布局的固定 390 像素上限。
+                self.assertGreaterEqual(right_width, required_panel_width)
+                self.assertLessEqual(right_width - required_panel_width, 2)
+                self.assertGreater(left_width, 0)
+                self.assertTrue(available.contains(self.tool.frameGeometry()))
+                table = self.tool.table_multi_send
+                last_column = table.columnCount() - 1
+                header = table.horizontalHeader()
+                self.assertLessEqual(
+                    header.sectionViewportPosition(last_column) + header.sectionSize(last_column),
+                    table.viewport().width(),
+                )
+                self.assertEqual(table.horizontalScrollBar().maximum(), 0)
+
+                extra_width = required_panel_width + self.tool.main_splitter.handleWidth()
+                if available.width() >= original_frame_width + extra_width:
+                    self.assertLessEqual(abs(left_width - original_left_width), 2)
+
+                self.tool.toggle_multi_send()
+                self.app.processEvents()
 
     def test展开面板时窗口限制在当前副屏可用区域内(self):
         available = QRect(100, 50, 1024, 700)
