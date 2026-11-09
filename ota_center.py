@@ -198,6 +198,7 @@ class OTAControlCenter(QDialog):
         self.firmware_path = ''
         self._last_ip = ''  # 上次使用的 IP，用于恢复
         self._ota_stop_flag = False
+        self._ota_monitor_closed = False
         self._ota_in_progress = False
         self._last_ota_command = b''
         self._ota_send_count = 0
@@ -222,6 +223,8 @@ class OTAControlCenter(QDialog):
         self._fallback_timer.setInterval(5000)  # 5 秒宽限
         self._fallback_timer.timeout.connect(self._on_fallback_timeout)
         self._serial_data_connected = False
+        self._serial_read_thread = None
+        self._serial_errors_suppressed = False
 
         self.init_ui()
         self._load_settings()
@@ -1003,6 +1006,7 @@ class OTAControlCenter(QDialog):
         self._last_ota_command = b''
         self._ota_send_count = 0
         self._ota_in_progress = True
+        self._ota_monitor_closed = False
         self._ota_stop_flag = False  # 清除上一次的取消标志（必须在 HTTP 等待循环前）
 
         # ── 前置检查 ──
@@ -1094,10 +1098,12 @@ class OTAControlCenter(QDialog):
             self._log(f"已发送 OTA 指令（第 1 次，{n} 字节）")
 
         except Exception as e:
+            # 关闭窗口已完成本地清理；复制重试中的取消异常不能再停止 HTTP 服务。
+            if self._ota_monitor_closed:
+                return
             self._log(f"OTA 流程错误: {e}")
             self._set_state(self.STATE_FAILED, "OTA 流程失败，请查看日志错误详情")
             self._progress_bar.setValue(0)
-            self._suppress_serial_errors(False)
             self._on_ota_finished()
 
     def _send_ota_command(self, cmd_bytes, clear_buffers=False):
@@ -1160,11 +1166,12 @@ class OTAControlCenter(QDialog):
         """监听串口数据，解析设备主动上报的进度/完成消息。"""
         if self._serial_data_connected:
             return
-        self._serial_data_connected = True
         if self.main_window and hasattr(self.main_window, 'read_thread') and \
                 self.main_window.read_thread:
             self.main_window.read_thread.receive_data_signal.connect(
                 self._on_serial_progress)
+            self._serial_read_thread = self.main_window.read_thread
+            self._serial_data_connected = True
 
     def _poll_progress(self):
         """HTTP 模式：轮询服务器发送量，按进度模式驱动进度条。
@@ -1263,7 +1270,6 @@ class OTAControlCenter(QDialog):
 
         # 成功: ota: upgrades res:0
         if re.search(r'ota\s*:\s*upgrades?\s*res\s*:\s*0\b', text, re.IGNORECASE):
-            self._serial_data_connected = False
             self._disconnect_serial_signal()
             self._progress_poll_timer.stop()
             self._timeout_timer.stop()
@@ -1277,7 +1283,6 @@ class OTAControlCenter(QDialog):
         # 失败: ota: upgrades res:非0 或通用 ERROR/FAIL
         if re.search(r'ota\s*:\s*upgrades?\s*res\s*:\s*[1-9]', text, re.IGNORECASE) or \
            re.search(r'\+ERROR\b|OTA\s*FAIL|OTA\s*ERROR', text, re.IGNORECASE):
-            self._serial_data_connected = False
             self._disconnect_serial_signal()
             self._progress_poll_timer.stop()
             self._timeout_timer.stop()
@@ -1337,7 +1342,7 @@ class OTAControlCenter(QDialog):
         self._timeout_timer.stop()
         self._fallback_timer.stop()
         self._disconnect_serial_signal()
-        self._suppress_serial_errors(False)  # 恢复串口错误信号
+        self._suppress_serial_errors(False)
 
         # 自动停止服务
         if self._check_auto_stop.isChecked() and self.http_running:
@@ -1370,31 +1375,21 @@ class OTAControlCenter(QDialog):
         self._on_ota_finished()
 
     def _suppress_serial_errors(self, suppress):
-        """OTA 期间屏蔽/恢复串口错误信号，防止设备重启导致的错误弹窗。"""
-        if not (self.main_window and hasattr(self.main_window, 'read_thread')
-                and self.main_window.read_thread):
-            return
-        try:
-            if suppress:
-                self.main_window.read_thread.error_signal.disconnect(
-                    self.main_window.handle_read_error)
-            else:
-                self.main_window.read_thread.error_signal.connect(
-                    self.main_window.handle_read_error)
-        except (TypeError, RuntimeError):
-            pass  # 已断开或已连接
+        """只屏蔽错误弹窗，保留主窗口的断线清理及日志处理。"""
+        self._serial_errors_suppressed = bool(suppress)
 
     def _disconnect_serial_signal(self):
         """断开串口接收信号的连接。"""
-        if self._serial_data_connected and self.main_window and \
-                hasattr(self.main_window, 'read_thread') and \
-                self.main_window.read_thread:
+        # 主窗口可能已清空线程或重新连接，必须断开实际绑定的旧线程。
+        read_thread = getattr(self, '_serial_read_thread', None)
+        if self._serial_data_connected and read_thread:
             try:
-                self.main_window.read_thread.receive_data_signal.disconnect(
+                read_thread.receive_data_signal.disconnect(
                     self._on_serial_progress)
             except (TypeError, RuntimeError):
                 pass
         self._serial_data_connected = False
+        self._serial_read_thread = None
 
     # ─────────────────────────────────────────────────────────────
     #  拖放支持
@@ -1435,6 +1430,15 @@ class OTAControlCenter(QDialog):
         self._timeout_timer.stop()
         self._fallback_timer.stop()
         self._disconnect_serial_signal()
+        self._suppress_serial_errors(False)
+        was_in_progress = self._ota_in_progress
+        self._ota_monitor_closed = True
+        self._ota_in_progress = False
+        self._ota_stop_flag = True
+        self._last_ota_command = b''
+        self._ota_send_count = 0
+        if was_in_progress:
+            self._set_state(self.STATE_UNCONFIRMED, "升级监控已关闭，设备升级结果未确认")
         # HTTP 服务继续运行，不受对话框关闭影响
         event.accept()
 

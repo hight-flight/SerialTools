@@ -311,9 +311,13 @@ class TransportReadThread(QThread):
                                 break
                     self.msleep(1 if data_read else 20)
                 except ValueError as e:
-                    print(e); self.error_signal.emit(f"数据解析错误: {e}"); self.msleep(100)
+                    self.set_running(False)
+                    self.error_signal.emit(f"数据解析错误: {e}")
+                    break
                 except TimeoutError as e:
-                    print(e); self.error_signal.emit(f"超时错误: {e}"); self.msleep(100)
+                    self.set_running(False)
+                    self.error_signal.emit(f"超时错误: {e}")
+                    break
                 except KeyboardInterrupt:
                     self.error_signal.emit("用户中断操作"); self.set_running(False); break
                 except SystemExit:
@@ -321,7 +325,10 @@ class TransportReadThread(QThread):
                 except MemoryError:
                     self.error_signal.emit("内存错误"); self.set_running(False); break
                 except Exception as e:
-                    print(e); self.error_signal.emit(f"读取错误: {e}"); self.msleep(100)
+                    # 设备掉线时 is_open 仍可能为 True；退出轮询，避免反复操作失效句柄。
+                    self.set_running(False)
+                    self.error_signal.emit(f"读取错误: {e}")
+                    break
         finally:
             self.set_running(False)
 

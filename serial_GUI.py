@@ -2247,6 +2247,11 @@ class SerialTool(QMainWindow):
                     except (TypeError, RuntimeError):
                         pass
                     self.read_thread.receive_data_signal.connect(self._gsm_dialog.handle_receive_data)
+                # OTA 下载可跨越设备重启；用户重连后将进度监听转移到新线程。
+                ota_dialog = getattr(self, '_ota_dialog', None)
+                if ota_dialog is not None and ota_dialog._ota_in_progress:
+                    ota_dialog._disconnect_serial_signal()
+                    ota_dialog._start_serial_tracking()
                 self.read_thread.start()
                 self._sync_button_text("关闭连接")
                 self.append_text(f"--- {connection_desc} 已打开 ---")
@@ -2817,11 +2822,17 @@ class SerialTool(QMainWindow):
 
     def handle_read_error(self, error_msg):
         """处理传输读取错误"""
+        # 旧线程的排队信号可能在重连后才送达，不能关闭新的连接。
+        source = self.sender()
+        if source is not None and source is not self.read_thread:
+            return
+        if self.error_state:
+            return
+        # 在可能进入事件循环的操作前置位，阻止重复清理及嵌套弹窗。
+        self.error_state = True
         self.stop_file_send = True
         self._reset_receive_decoder()
         self._reset_auto_reply_runtime()
-        # 先保存错误信息，后续在UI线程中显示
-        self.error_state = True  # 设置错误状态标志
         
         # 使用 try-except 包裹锁操作，防止锁获取失败导致程序崩溃
         try:
@@ -2854,19 +2865,18 @@ class SerialTool(QMainWindow):
                 self.repeat_timer.stop()
 
             # 停止接收线程
-            if hasattr(self, 'read_thread') and self.read_thread and self.read_thread.isRunning():
-                try:
+            if self.read_thread:
+                if self.read_thread.isRunning():
                     self.read_thread.stop()
-                    self.read_thread = None  # 清空线程引用
-                except Exception as e:
-                    pass
+                # stop 有超时保护，仍在运行时保留引用，防止销毁活跃 QThread。
+                if not self.read_thread.isRunning():
+                    self.read_thread = None
         except Exception as e:
             # 线程停止失败不影响主要流程
             pass
         
         # 在锁外执行UI更新（避免死锁）
         try:
-            QMessageBox.critical(self, "读取错误", error_msg)
             self.append_text(f"[错误]: {error_msg}\n")
             
             # 更新批量发送状态
@@ -2897,6 +2907,13 @@ class SerialTool(QMainWindow):
             # UI更新失败不影响主要流程
             pass
         
+        # OTA 只抑制弹窗，不丢弃断线通知；HTTP 下载仍由 OTA 自己跟踪结果。
+        ota_dialog = getattr(self, '_ota_dialog', None)
+        if ota_dialog and getattr(ota_dialog, '_serial_errors_suppressed', False):
+            ota_dialog._log(f"连接读取错误，已断开连接: {error_msg}；继续等待 OTA 结果")
+        else:
+            QMessageBox.critical(self, "读取错误", error_msg)
+
         # 错误状态保持为True，直到用户重新连接串口成功
     
     def cleanup_resources(self):
