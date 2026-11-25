@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 
-from theme import apply_dialog_theme, VERSION
+from theme import apply_dialog_theme, mono_font, VERSION
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -32,7 +32,7 @@ def show_crc_calculator(parent, is_dark=False):
     input_layout = QHBoxLayout()
     input_layout.addWidget(QLabel("数据 (HEX):"))
     input_edit = QLineEdit()
-    input_edit.setFont(QFont("Consolas", 9))
+    input_edit.setFont(mono_font(9))
     input_edit.setPlaceholderText("例如: 0103 或 010304")
     input_layout.addWidget(input_edit)
     layout.addLayout(input_layout)
@@ -42,14 +42,14 @@ def show_crc_calculator(parent, is_dark=False):
     type_layout.addWidget(QLabel("算法:"))
     combo_algo = QComboBox()
     combo_algo.addItems(["Modbus CRC16", "CRC32", "Fletcher", "XOR8", "ADD8", "ADD16"])
-    combo_algo.setFont(QFont("Consolas", 9))
+    combo_algo.setFont(mono_font(9))
     type_layout.addWidget(combo_algo)
     type_layout.addStretch()
     layout.addLayout(type_layout)
 
     # 结果显示
     result_label = QLabel("结果: —")
-    result_label.setFont(QFont("Consolas", 11, QFont.Bold))
+    result_label.setFont(mono_font(11, QFont.Bold))
     result_label.setFrameStyle(QFrame.Panel | QFrame.Sunken)
     result_label.setTextFormat(Qt.RichText)
     result_label.setMinimumHeight(36)
@@ -140,17 +140,17 @@ def show_hex_converter(parent, is_dark=False):
     layout.setSpacing(8)
 
     hex_edit = QLineEdit()
-    hex_edit.setFont(QFont("Consolas", 9))
+    hex_edit.setFont(mono_font(9))
     hex_edit.setPlaceholderText("输入 HEX，如 48 65 6C 6C 6F")
     layout.addRow("HEX:", hex_edit)
 
     ascii_edit = QLineEdit()
-    ascii_edit.setFont(QFont("Consolas", 9))
+    ascii_edit.setFont(mono_font(9))
     ascii_edit.setPlaceholderText("输入 ASCII 文本")
     layout.addRow("ASCII:", ascii_edit)
 
     dec_edit = QLineEdit()
-    dec_edit.setFont(QFont("Consolas", 9))
+    dec_edit.setFont(mono_font(9))
     dec_edit.setPlaceholderText("输入十进制（空格分隔或单个数值）")
     layout.addRow("Decimal:", dec_edit)
 

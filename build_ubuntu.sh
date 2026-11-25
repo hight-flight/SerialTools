@@ -81,6 +81,11 @@ if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "22.04" ]]; then
   exit 1
 fi
 
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+  echo "错误：构建依赖要求 Python 3.10+，当前解释器为：$(python3 --version 2>&1)" >&2
+  exit 3
+fi
+
 missing_packages=()
 for package_name in "${SYSTEM_PACKAGES[@]}"; do
   if ! dpkg-query -W -f='${Status}' "$package_name" 2>/dev/null | grep -q "install ok installed"; then

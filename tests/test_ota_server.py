@@ -165,6 +165,7 @@ class OTAServerTests(unittest.TestCase):
             ),
             _timeout_timer=timeout_timer,
             _timeout_spin=SimpleNamespace(value=lambda: 30),
+            _transfer_confirm_timer=mock.Mock(),
             _log=logs.append,
             _set_state=lambda _state, _message: None,
             STATE_DOWNLOADING="downloading",
@@ -249,6 +250,86 @@ class OTAServerTests(unittest.TestCase):
         self.assertEqual(state["value"], "unconfirmed")
         self.assertIn("未确认", state["message"])
         warning.assert_not_called()
+
+    def testhttp模式传输完成时启动确认宽限定时器(self):
+        started = []
+
+        class _StopOnly:
+            def stop(self):
+                pass
+
+        controller = SimpleNamespace(
+            _progress_mode="http",
+            _progress_poll_timer=_StopOnly(),
+            _transfer_confirm_timer=SimpleNamespace(
+                start=lambda: started.append(True)),
+            _progress_bar=SimpleNamespace(setValue=lambda value: None),
+            _state_label=SimpleNamespace(setText=lambda text: None),
+            _log=lambda message: None,
+        )
+        OTARequestHandler.setup_progress("firmware.bin", 10)
+        with OTARequestHandler._lock:
+            OTARequestHandler._bytes_sent = 10
+
+        OTAControlCenter._poll_progress(controller)
+        self.assertEqual(started, [True])
+
+    def test确认宽限到期直接显示未确认不再等超时(self):
+        stopped = []
+
+        class _Timer:
+            def stop(self):
+                stopped.append(True)
+
+        state = {}
+        controller = SimpleNamespace(
+            STATE_UNCONFIRMED="unconfirmed",
+            _ota_in_progress=True,
+            _progress_mode="http",
+            _progress_poll_timer=_Timer(),
+            _timeout_timer=_Timer(),
+            _progress_bar=SimpleNamespace(
+                setValue=lambda value: state.setdefault("bar", value)),
+            _log=lambda message: state.setdefault("logs", []).append(message),
+            _set_state=lambda value, message: state.update(
+                value=value, message=message),
+            _on_ota_finished=lambda: state.update(finished=True),
+        )
+        OTAControlCenter._on_transfer_confirm_grace_timeout(controller)
+
+        self.assertEqual(state["value"], "unconfirmed")
+        self.assertIn("未确认", state["message"])
+        self.assertEqual(state["bar"], 100)
+        self.assertTrue(state["finished"])
+        # 宽限到期后必须同时停掉轮询与超时定时器，防止状态被后续超时覆盖
+        self.assertEqual(stopped, [True, True])
+
+    def test宽限期内设备开始上报进度则取消确认宽限(self):
+        stopped = []
+
+        class _Timer:
+            def stop(self):
+                stopped.append(True)
+
+        class _StartOnly:
+            def start(self, *_args):
+                pass
+
+        controller = SimpleNamespace(
+            _serial_data_connected=True,
+            _progress_mode="http",
+            _fallback_timer=_Timer(),
+            _transfer_confirm_timer=_Timer(),
+            _timeout_timer=_StartOnly(),
+            _timeout_spin=SimpleNamespace(value=lambda: 30),
+            _progress_bar=SimpleNamespace(setValue=lambda value: None),
+            _state_label=SimpleNamespace(setText=lambda text: None),
+            _log=lambda message: None,
+        )
+        OTAControlCenter._on_serial_progress(controller, b"ota: Progress:50%")
+
+        # 切换到设备上报模式时应同时取消回退定时器与传输确认宽限
+        self.assertEqual(stopped, [True, True])
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
-from theme import unescape_text
+from theme import mono_font, unescape_text
 from app_paths import ensure_user_dirs, open_directory, resolve_app_paths
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
@@ -26,6 +26,45 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QWidget, QFrame, QGridLayout)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QMutexLocker
 from PyQt5.QtGui import QFont, QPainter, QPixmap, QColor
+
+
+_COPY_CHUNK_SIZE = 256 * 1024
+
+
+def copy_firmware_chunked(src_path, dst_path, progress_cb=None):
+    """分块复制固件文件，边复制边通过 progress_cb(copied, total) 上报进度。
+
+    等价于 shutil.copyfile 的功能；用分块读写替代一次性 copy2，
+    配合进度回调刷新界面，避免大固件复制期间冻结 UI。
+    """
+    src_size = os.path.getsize(src_path)
+    with open(src_path, 'rb') as src, open(dst_path, 'wb') as dst:
+        copied = 0
+        while True:
+            chunk = src.read(_COPY_CHUNK_SIZE)
+            if not chunk:
+                break
+            dst.write(chunk)
+            copied += len(chunk)
+            if progress_cb and src_size:
+                progress_cb(copied, src_size)
+    return copied
+
+
+def decode_device_text(data):
+    """设备串口文本解码：UTF-8 优先，其次 GBK 家族，最后 latin-1 兜底。
+
+    设备固件可能以 UTF-8 或 GBK 返回中文提示（如 OTA 失败原因）。
+    原实现 decode('utf-8', errors='replace') 不会抛异常，GBK 字节会被
+    替换为 U+FFFD 乱码并直接进入弹窗（"OTA 失败"提示），因此这里
+    按严格解码顺序回退，保证中文回复正确显示。
+    """
+    for encoding in ('utf-8', 'gb18030'):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode('latin-1', errors='replace')
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -222,6 +261,14 @@ class OTAControlCenter(QDialog):
         self._fallback_timer.setSingleShot(True)
         self._fallback_timer.setInterval(5000)  # 5 秒宽限
         self._fallback_timer.timeout.connect(self._on_fallback_timeout)
+        # 传输完成确认宽限定时器：仅 http 模式（设备不上报进度）使用，
+        # 固件传输完成后 3 秒内未收到设备最终结果，直接显示"未确认"，
+        # 不再等完整超时时间跑完
+        self._transfer_confirm_timer = QTimer(self)
+        self._transfer_confirm_timer.setSingleShot(True)
+        self._transfer_confirm_timer.setInterval(3000)  # 3 秒确认宽限
+        self._transfer_confirm_timer.timeout.connect(
+            self._on_transfer_confirm_grace_timeout)
         self._serial_data_connected = False
         self._serial_read_thread = None
         self._serial_errors_suppressed = False
@@ -437,7 +484,7 @@ class OTAControlCenter(QDialog):
         log_layout.setContentsMargins(4, 4, 4, 4)
         self._log_edit = QTextEdit()
         self._log_edit.setReadOnly(True)
-        self._log_edit.setFont(QFont("Consolas", 9))
+        self._log_edit.setFont(mono_font(9))
         self._log_edit.setMinimumHeight(120)
         log_layout.addWidget(self._log_edit)
 
@@ -935,8 +982,14 @@ class OTAControlCenter(QDialog):
         last_err = None
         for attempt in range(1, max_retries + 1):
             try:
-                # 复制到临时文件（不触碰目标文件，避免与正在读取的句柄冲突）
-                shutil.copy2(src_path, tmp_path)
+                # 复制到临时文件（不触碰目标文件，避免与正在读取的句柄冲突）。
+                # 分块复制并刷新进度条，避免大固件复制期间 UI 冻结；
+                # 按需求保持各按钮可用状态不变。
+                self._progress_bar.setValue(0)
+                copy_firmware_chunked(src_path, tmp_path,
+                                      progress_cb=self._on_firmware_copy_progress)
+                # 同步源文件元数据（等价 copy2 的 copystat）
+                shutil.copystat(src_path, tmp_path)
                 # 校验临时文件大小
                 src_size = os.path.getsize(src_path)
                 tmp_size = os.path.getsize(tmp_path)
@@ -994,6 +1047,17 @@ class OTAControlCenter(QDialog):
         # 理论上不会到达
         raise IOError(f"固件复制失败: {last_err}")
 
+    def _on_firmware_copy_progress(self, copied, total):
+        """固件复制进度回调：刷新进度条并处理事件保持界面响应。
+
+        仅在百分比变化时刷新（整个复制过程最多 100 次事件循环重入）；
+        依据既定需求，复制期间不禁用任何按钮。
+        """
+        pct = int(copied * 100 / total) if total else 100
+        if pct != self._progress_bar.value():
+            self._progress_bar.setValue(pct)
+            QApplication.processEvents()
+
     def _start_ota(self):
         """一键启动 OTA 流程；执行期间再次点击只重发指令。"""
         if self._ota_in_progress:
@@ -1050,6 +1114,7 @@ class OTAControlCenter(QDialog):
         # ── 开始 OTA 流程 ──
         self._progress_mode = 'waiting'  # 重置进度模式，等待设备上报或回退
         self._fallback_timer.stop()
+        self._transfer_confirm_timer.stop()
         self._progress_bar.setValue(0)
 
         try:
@@ -1124,7 +1189,7 @@ class OTAControlCenter(QDialog):
                 self.main_window.tx_bytes += n
                 self.main_window.label_tx_bytes.setText(
                     f"发送字节: {self.main_window.tx_bytes}")
-            cmd_text = cmd_bytes.decode('utf-8', errors='replace').strip()
+            cmd_text = decode_device_text(cmd_bytes).strip()
             self.main_window.append_text(f"[发送]: {cmd_text}\n")
             self.main_window.append_text(f"[系统]: 已发送 {n} 字节\n")
             return n
@@ -1152,6 +1217,8 @@ class OTAControlCenter(QDialog):
 
         self._ota_send_count += 1
         self._last_ota_send_at = now
+        # 重新下发后回到等待设备响应阶段，取消传输完成确认宽限
+        self._transfer_confirm_timer.stop()
         self._timeout_timer.start(self._timeout_spin.value() * 1000)
         self._set_state(self.STATE_DOWNLOADING, "已重新下发，等待设备响应...")
         self._log(f"已重新下发 OTA 指令（第 {self._ota_send_count} 次，{n} 字节）")
@@ -1209,6 +1276,9 @@ class OTAControlCenter(QDialog):
                 self._progress_poll_timer.stop()
                 self._log(f"固件已全部发送 ({total // 1024}KB)，"
                           f"等待设备写入完成（设备不上报进度）...")
+                # 传输完成：启动 3 秒确认宽限，到期仍无设备最终结果
+                # 直接显示"未确认"，不等完整超时时间
+                self._transfer_confirm_timer.start()
                 return
             pct = min(int(sent / total * 99), 99)
             self._progress_bar.setValue(pct)
@@ -1242,12 +1312,30 @@ class OTAControlCenter(QDialog):
         # 立即触发一次轮询，让进度条马上反映当前发送量
         self._poll_progress()
 
+    def _on_transfer_confirm_grace_timeout(self):
+        """传输完成后 3 秒确认宽限期结束：仍未收到设备最终结果。
+
+        仅 http 模式（设备不上报进度）触发：直接显示"未确认"，
+        不再等完整超时时间跑完。device 模式由设备进度驱动，不受影响。
+        """
+        if not self._ota_in_progress:
+            return
+        self._log("固件传输完成 3 秒内未收到设备最终确认，直接判定为未确认")
+        self._progress_poll_timer.stop()
+        self._timeout_timer.stop()
+        # device 模式保留设备最后上报的进度；http 模式封顶 100%
+        if self._progress_mode != 'device':
+            self._progress_bar.setValue(100)
+        self._set_state(self.STATE_UNCONFIRMED,
+                        "⚠ 固件传输完成，但设备未确认升级结果")
+        self._on_ota_finished()
+
     def _on_serial_progress(self, data):
         """解析串口上报的进度/完成消息（匹配 ESP-IDF 日志格式）。"""
         if not self._serial_data_connected:
             return
         try:
-            text = data.decode('utf-8', errors='replace')
+            text = decode_device_text(data)
         except Exception:
             text = data.decode('latin-1', errors='replace')
 
@@ -1259,6 +1347,8 @@ class OTAControlCenter(QDialog):
             # 收到设备真实下载进度：取消回退定时器，进入设备上报模式
             if self._progress_mode != 'device':
                 self._fallback_timer.stop()
+                # http 等待期设备突然开始上报进度：取消传输完成确认宽限
+                self._transfer_confirm_timer.stop()
                 self._progress_mode = 'device'
                 self._log("设备已上报进度，切换为设备上报模式")
             self._progress_bar.setValue(pct)
@@ -1273,6 +1363,7 @@ class OTAControlCenter(QDialog):
             self._disconnect_serial_signal()
             self._progress_poll_timer.stop()
             self._timeout_timer.stop()
+            self._transfer_confirm_timer.stop()
             self._progress_bar.setValue(100)
             self._set_state(self.STATE_SUCCESS, "✅ 升级成功")
             self._log(f"设备回复成功: {text.strip()}")
@@ -1286,6 +1377,7 @@ class OTAControlCenter(QDialog):
             self._disconnect_serial_signal()
             self._progress_poll_timer.stop()
             self._timeout_timer.stop()
+            self._transfer_confirm_timer.stop()
             self._set_state(self.STATE_FAILED, "设备上报错误")
             self._log(f"设备回复错误: {text.strip()}")
             self._on_ota_finished()
@@ -1341,6 +1433,7 @@ class OTAControlCenter(QDialog):
         self._progress_poll_timer.stop()
         self._timeout_timer.stop()
         self._fallback_timer.stop()
+        self._transfer_confirm_timer.stop()
         self._disconnect_serial_signal()
         self._suppress_serial_errors(False)
 
@@ -1355,6 +1448,7 @@ class OTAControlCenter(QDialog):
         self._log("用户取消 OTA 流程")
         self._ota_stop_flag = True
         self._fallback_timer.stop()
+        self._transfer_confirm_timer.stop()
 
         # 尝试发送取消指令
         if self.main_window and hasattr(self.main_window, 'transport') \
@@ -1429,6 +1523,7 @@ class OTAControlCenter(QDialog):
         self._progress_poll_timer.stop()
         self._timeout_timer.stop()
         self._fallback_timer.stop()
+        self._transfer_confirm_timer.stop()
         self._disconnect_serial_signal()
         self._suppress_serial_errors(False)
         was_in_progress = self._ota_in_progress

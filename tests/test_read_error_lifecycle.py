@@ -45,6 +45,7 @@ class _ReadWindow(QObject):
         self.append_text = self.messages.append
         self._sync_button_text = mock.Mock()
         self._update_status_connection_text = mock.Mock()
+        self._set_connection_controls_enabled = mock.Mock()
         self._set_status = mock.Mock()
         for name in ("btn_switch", "btn_switch_serial", "combo_port", "combo_baud",
                      "btn_refresh", "btn_refresh_serial", "combo_mode", "status_baud"):
@@ -169,7 +170,8 @@ class ReadErrorLifecycleTests(unittest.TestCase):
             main_window=None, _ota_in_progress=True, _last_ota_command=b"ota",
             _serial_errors_suppressed=True, _save_settings=lambda: None,
             _progress_poll_timer=mock.Mock(), _timeout_timer=mock.Mock(),
-            _fallback_timer=mock.Mock(), _disconnect_serial_signal=lambda: None,
+            _fallback_timer=mock.Mock(), _transfer_confirm_timer=mock.Mock(),
+            _disconnect_serial_signal=lambda: None,
             http_running=True, STATE_UNCONFIRMED="unconfirmed", _set_state=mock.Mock(),
         )
         controller._suppress_serial_errors = lambda value: OTAControlCenter._suppress_serial_errors(controller, value)
@@ -209,7 +211,7 @@ class ReadErrorIntegrationTests(unittest.TestCase):
         dialog.http_running = True
         dialog._check_auto_stop.setChecked(True)
         self.tool.transport = _BrokenTransport()
-        with mock.patch("ota_center.shutil.copy2", side_effect=PermissionError(13, "文件占用")), \
+        with mock.patch("ota_center.copy_firmware_chunked", side_effect=PermissionError(13, "文件占用")), \
                 mock.patch("ota_center.QApplication.processEvents", side_effect=dialog.close), \
                 mock.patch("ota_center.QMessageBox.warning") as warning, \
                 mock.patch.object(dialog, "_stop_http_service") as stop_http:

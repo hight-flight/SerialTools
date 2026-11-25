@@ -21,6 +21,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 MAIN_SCRIPT = 'serial_GUI.py'
 APP_NAME = 'SerialTool'
 BUILD_TIMEOUT = 600  # 打包超时时间（秒），10分钟
+# 显式声明 PerMonitorV2 DPI 感知的应用清单，避免目标机器上 Qt 运行时
+# DPI 调用失败导致 125%/150% 缩放下窗口按位图拉伸（文字模糊、控件错位）。
+APP_MANIFEST = PROJECT_ROOT / 'packaging' / 'app.manifest'
 
 # 尝试多种方式导入PyInstaller
 try:
@@ -29,11 +32,6 @@ try:
 except ImportError:
     PYINSTALLER_AVAILABLE = False
     print("[警告] 无法直接导入PyInstaller，将尝试使用命令行方式")
-
-def get_path_separator():
-    """根据操作系统获取路径分隔符"""
-    return ';' if sys.platform == 'win32' else ':'
-
 
 def get_app_version():
     """从 theme.py 读取版本号（加密源码运行时可正常 import）；失败回退 1.0.0"""
@@ -485,6 +483,7 @@ def build_pyinstaller_arguments(
         '--onedir' if onedir else '--onefile',
         '--windowed',
         '--name', APP_NAME,
+        '--manifest', os.fspath(APP_MANIFEST),
         '--hidden-import', 'pyqtgraph',
         '--hidden-import', 'numpy',
         '--hidden-import', 'ota_center',
@@ -551,6 +550,11 @@ def build_pyinstaller_arguments(
         args.extend(['--icon', icon_text])
         # 标题栏运行时也需要原始多分辨率 ICO，不能只写入 EXE 资源。
         args.extend(['--add-data', f'{icon_text}{os.pathsep}.'])
+    # 窗口图标兜底：即使 ICO 转换失败，也要把 PNG 打进包里，
+    # 否则运行时 _load_application_icon 找不到任何图标资源。
+    png_icon = PROJECT_ROOT / '图标.png'
+    if png_icon.exists() and (not icon_path or os.fspath(png_icon) != os.fspath(icon_path)):
+        args.extend(['--add-data', f'{os.fspath(png_icon)}{os.pathsep}.'])
     args.append(MAIN_SCRIPT)
     return args
 

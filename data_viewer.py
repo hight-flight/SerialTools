@@ -7,6 +7,9 @@
 依赖：PyQt5, pyqtgraph, numpy（标准库之外）
 """
 
+# 兼容 Python 3.8：让函数签名中的 `X | Y` 与内建泛型注解延迟求值。
+from __future__ import annotations
+
 import sys
 import os
 import json
@@ -36,6 +39,7 @@ from PyQt5.QtGui import (
     QStandardItemModel, QStandardItem, QCursor,
 )
 from app_paths import ensure_user_dirs, resolve_app_paths
+from theme import mono_font
 
 try:
     import pyqtgraph as pg
@@ -689,7 +693,7 @@ class TrackChip(QWidget):
         # 标签文字
         self._display_prefix = "fx: " if path.startswith("__computed__") else ""
         self.label = QLabel(self._display_prefix + self.alias)
-        self.label.setFont(QFont("Consolas", 9))
+        self.label.setFont(mono_font(9))
         self.label.setToolTip(path)
         layout.addWidget(self.label)
 
@@ -795,7 +799,7 @@ class ChartTrackerWidget(QWidget):
 
         self.edit_add_field = QLineEdit()
         self.edit_add_field.setPlaceholderText("+添加字段 (输入路径)")
-        self.edit_add_field.setFont(QFont("Consolas", 9))
+        self.edit_add_field.setFont(mono_font(9))
         self.edit_add_field.setMaximumWidth(180)
         self.edit_add_field.returnPressed.connect(self._on_add_field)
         self.chips_layout.addWidget(self.edit_add_field)
@@ -821,7 +825,7 @@ class ChartTrackerWidget(QWidget):
 
         # 图表右上角统计摘要（挂在 viewport 上确保不被 pyqtgraph 绘制覆盖）
         self.stats_overlay = QLabel(self.plot_widget.viewport())
-        self.stats_overlay.setFont(QFont("Consolas", 8))
+        self.stats_overlay.setFont(mono_font(8))
         self.stats_overlay.setStyleSheet(
             f"QLabel {{"
             f"  background-color: rgba(0,0,0,0.55);"
@@ -1856,7 +1860,7 @@ class DataTableWidget(QWidget):
         self.spin_rows = QSpinBox()
         self.spin_rows.setRange(10, 500)
         self.spin_rows.setValue(self.DEFAULT_ROWS)
-        self.spin_rows.setFont(QFont("Consolas", 9))
+        self.spin_rows.setFont(mono_font(9))
         toolbar.addWidget(self.spin_rows)
 
         self.check_autoscroll = QCheckBox("自动滚动")
@@ -2043,7 +2047,7 @@ class DetailViewerWidget(QWidget):
         # 原始文本视图
         self.raw_view = QPlainTextEdit()
         self.raw_view.setReadOnly(True)
-        self.raw_view.setFont(QFont("Consolas", 10))
+        self.raw_view.setFont(mono_font(10))
         self.raw_view.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.highlighter = JsonSyntaxHighlighter(self.raw_view.document(), is_dark=True)
         self.stack.addWidget(self.raw_view)
@@ -2115,7 +2119,7 @@ class DetailViewerWidget(QWidget):
                 self.table_view.setColumnCount(1)
                 self.table_view.setHorizontalHeaderLabels(["原始文本"])
                 item = QTableWidgetItem(raw_text)
-                item.setFont(QFont("Consolas", 10))
+                item.setFont(mono_font(10))
                 self.table_view.setItem(0, 0, item)
 
         # 原始文本：始终展示全文
@@ -2398,7 +2402,7 @@ class CaptureListWidget(QWidget):
         bottom.addWidget(self.check_autoscroll)
 
         self.lbl_stats = QLabel("共 0 条")
-        self.lbl_stats.setFont(QFont("Consolas", 9))
+        self.lbl_stats.setFont(mono_font(9))
         bottom.addWidget(self.lbl_stats)
 
         bottom.addStretch()
@@ -2543,7 +2547,7 @@ class CaptureListWidget(QWidget):
 
         te = QPlainTextEdit()
         te.setReadOnly(True)
-        te.setFont(QFont("Consolas", 10))
+        te.setFont(mono_font(10))
         if diffs:
             te.setPlainText('\n'.join(diffs))
         else:
@@ -2946,7 +2950,7 @@ class ProtocolEditorDialog(QDialog):
         name_layout = QHBoxLayout()
         name_layout.addWidget(QLabel("名称:", font=QFont("Microsoft YaHei", 9)))
         self.edit_name = QLineEdit()
-        self.edit_name.setFont(QFont("Consolas", 9))
+        self.edit_name.setFont(mono_font(9))
         self.edit_name.setPlaceholderText("如: 传感器协议 v1")
         name_layout.addWidget(self.edit_name)
         layout.addLayout(name_layout)
@@ -2954,7 +2958,7 @@ class ProtocolEditorDialog(QDialog):
         desc_layout = QHBoxLayout()
         desc_layout.addWidget(QLabel("描述:", font=QFont("Microsoft YaHei", 9)))
         self.edit_desc = QLineEdit()
-        self.edit_desc.setFont(QFont("Consolas", 9))
+        self.edit_desc.setFont(mono_font(9))
         self.edit_desc.setPlaceholderText("可选")
         desc_layout.addWidget(self.edit_desc)
         layout.addLayout(desc_layout)
@@ -2977,7 +2981,7 @@ class ProtocolEditorDialog(QDialog):
         self.lbl_header.setFont(QFont("Microsoft YaHei", 9))
         sync_layout.addWidget(self.lbl_header)
         self.edit_header = QLineEdit()
-        self.edit_header.setFont(QFont("Consolas", 9))
+        self.edit_header.setFont(mono_font(9))
         self.edit_header.setPlaceholderText("如 AA 55")
         self.edit_header.setMaximumWidth(100)
         sync_layout.addWidget(self.edit_header)
@@ -2990,7 +2994,7 @@ class ProtocolEditorDialog(QDialog):
         self.spin_frame_len = QSpinBox()
         self.spin_frame_len.setRange(1, 65535)
         self.spin_frame_len.setValue(8)
-        self.spin_frame_len.setFont(QFont("Consolas", 9))
+        self.spin_frame_len.setFont(mono_font(9))
         self.spin_frame_len.hide()
         sync_layout.addWidget(self.spin_frame_len)
 
@@ -3001,7 +3005,7 @@ class ProtocolEditorDialog(QDialog):
         sync_layout.addWidget(self.lbl_len_offset)
         self.spin_len_offset = QSpinBox()
         self.spin_len_offset.setRange(0, 255)
-        self.spin_len_offset.setFont(QFont("Consolas", 9))
+        self.spin_len_offset.setFont(mono_font(9))
         self.spin_len_offset.hide()
         sync_layout.addWidget(self.spin_len_offset)
 
@@ -3012,7 +3016,7 @@ class ProtocolEditorDialog(QDialog):
         self.combo_len_dtype = QComboBox()
         self.combo_len_dtype.addItems(_DTYPE_CHOICES)
         self.combo_len_dtype.setCurrentText('uint8')
-        self.combo_len_dtype.setFont(QFont("Consolas", 9))
+        self.combo_len_dtype.setFont(mono_font(9))
         self.combo_len_dtype.hide()
         sync_layout.addWidget(self.combo_len_dtype)
 
@@ -3023,7 +3027,7 @@ class ProtocolEditorDialog(QDialog):
         self.spin_len_adjust = QSpinBox()
         self.spin_len_adjust.setRange(-100, 1000)
         self.spin_len_adjust.setValue(0)
-        self.spin_len_adjust.setFont(QFont("Consolas", 9))
+        self.spin_len_adjust.setFont(mono_font(9))
         self.spin_len_adjust.hide()
         sync_layout.addWidget(self.spin_len_adjust)
 
@@ -3076,14 +3080,14 @@ class ProtocolEditorDialog(QDialog):
         preview_input_row = QHBoxLayout()
         preview_input_row.addWidget(QLabel("输入HEX:", font=QFont("Microsoft YaHei", 9)))
         self.edit_preview_hex = QLineEdit()
-        self.edit_preview_hex.setFont(QFont("Consolas", 9))
+        self.edit_preview_hex.setFont(mono_font(9))
         self.edit_preview_hex.setPlaceholderText("如 AA55 0064 3C  （可选，按当前协议解析预览）")
         self.edit_preview_hex.textChanged.connect(self._preview)
         preview_input_row.addWidget(self.edit_preview_hex)
         preview_layout.addLayout(preview_input_row)
 
         self.lbl_preview = QLabel("解析结果: —")
-        self.lbl_preview.setFont(QFont("Consolas", 9))
+        self.lbl_preview.setFont(mono_font(9))
         self.lbl_preview.setWordWrap(True)
         self.lbl_preview.setMaximumHeight(64)
         self.lbl_preview.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -3187,7 +3191,7 @@ class ProtocolEditorDialog(QDialog):
         combo_type = QComboBox()
         combo_type.addItems(_DTYPE_CHOICES)
         combo_type.setCurrentText(dtype)
-        combo_type.setFont(QFont("Consolas", 9))
+        combo_type.setFont(mono_font(9))
         self.fields_table.setCellWidget(r, 1, combo_type)
 
         # 偏移
@@ -3493,7 +3497,7 @@ class JsonViewerDialog(QDialog):
         self.edit_regex = QLineEdit()
         self.edit_regex.setAccessibleName("自定义正则表达式")
         self.edit_regex.setPlaceholderText("正则表达式，如: value=(\\d+\\.\\d+)")
-        self.edit_regex.setFont(QFont("Consolas", 9))
+        self.edit_regex.setFont(mono_font(9))
         self.edit_regex.setMinimumWidth(240)
         self.edit_regex.setToolTip(
             "输入正则表达式从数据流中提取内容\n"
@@ -3571,7 +3575,7 @@ class JsonViewerDialog(QDialog):
 
         self.lbl_status = QLabel("状态: 就绪 | 捕获 0 条 | 速率 0/s")
         self.lbl_status.setAccessibleName("捕获状态")
-        self.lbl_status.setFont(QFont("Consolas", 10))
+        self.lbl_status.setFont(mono_font(10))
         self.lbl_status.setTextFormat(Qt.PlainText)
         self.lbl_status.setWordWrap(True)
         self.lbl_status.setStyleSheet(

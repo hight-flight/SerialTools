@@ -19,9 +19,9 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QFrame, QSizePolicy, QCheckBox, QTabWidget,
                              QWidget, QScrollArea, QApplication)
 from PyQt5.QtCore import Qt, QTimer, QMutexLocker
-from PyQt5.QtGui import QFont, QTextCursor, QColor
+from PyQt5.QtGui import QTextCursor, QColor
 
-from theme import apply_dialog_theme, DataReceiver, unescape_text
+from theme import apply_dialog_theme, DataReceiver, mono_font, unescape_text
 
 
 class GSMDebuggerDialog(QDialog):
@@ -109,28 +109,28 @@ class GSMDebuggerDialog(QDialog):
         status_layout.addWidget(QLabel("状态指示:"))
 
         self.lbl_signal = QLabel("信号强度: —")
-        self.lbl_signal.setFont(QFont("Consolas", 9))
+        self.lbl_signal.setFont(mono_font(9))
         self.lbl_signal.setFrameStyle(QFrame.Panel | QFrame.Sunken)
         self.lbl_signal.setMinimumWidth(82)
         self.lbl_signal.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.lbl_signal)
 
         self.lbl_sim = QLabel("SIM状态: —")
-        self.lbl_sim.setFont(QFont("Consolas", 9))
+        self.lbl_sim.setFont(mono_font(9))
         self.lbl_sim.setFrameStyle(QFrame.Panel | QFrame.Sunken)
         self.lbl_sim.setMinimumWidth(76)
         self.lbl_sim.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.lbl_sim)
 
         self.lbl_network = QLabel("网络状态: —")
-        self.lbl_network.setFont(QFont("Consolas", 9))
+        self.lbl_network.setFont(mono_font(9))
         self.lbl_network.setFrameStyle(QFrame.Panel | QFrame.Sunken)
         self.lbl_network.setMinimumWidth(90)
         self.lbl_network.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.lbl_network)
 
         self.lbl_operator = QLabel("运营商: —")
-        self.lbl_operator.setFont(QFont("Consolas", 9))
+        self.lbl_operator.setFont(mono_font(9))
         self.lbl_operator.setFrameStyle(QFrame.Panel | QFrame.Sunken)
         self.lbl_operator.setMinimumWidth(90)
         self.lbl_operator.setAlignment(Qt.AlignCenter)
@@ -256,7 +256,7 @@ class GSMDebuggerDialog(QDialog):
         input_layout.setSpacing(8)
 
         self.edit_command = QLineEdit()
-        self.edit_command.setFont(QFont("Consolas", 10))
+        self.edit_command.setFont(mono_font(10))
         self.edit_command.setPlaceholderText("输入AT指令，如: AT+CSQ")
         self.edit_command.returnPressed.connect(self._send_command_from_input)
         input_layout.addWidget(self.edit_command)
@@ -279,7 +279,7 @@ class GSMDebuggerDialog(QDialog):
         response_layout.setSpacing(4)
 
         self.text_response = QTextEdit()
-        self.text_response.setFont(QFont("Consolas", 9))
+        self.text_response.setFont(mono_font(9))
         self.text_response.setReadOnly(True)
         self.text_response.setMinimumHeight(120)
         response_layout.addWidget(self.text_response)
@@ -295,13 +295,13 @@ class GSMDebuggerDialog(QDialog):
         sms_input_layout.setSpacing(8)
 
         self.edit_sms_phone = QLineEdit()
-        self.edit_sms_phone.setFont(QFont("Consolas", 9))
+        self.edit_sms_phone.setFont(mono_font(9))
         self.edit_sms_phone.setPlaceholderText("号码")
         self.edit_sms_phone.setMaximumWidth(120)
         sms_input_layout.addWidget(self.edit_sms_phone)
 
         self.edit_sms_content = QLineEdit()
-        self.edit_sms_content.setFont(QFont("Consolas", 9))
+        self.edit_sms_content.setFont(mono_font(9))
         self.edit_sms_content.setPlaceholderText("内容")
         sms_input_layout.addWidget(self.edit_sms_content)
 
@@ -352,7 +352,7 @@ class GSMDebuggerDialog(QDialog):
         call_layout.setSpacing(8)
 
         self.edit_call_num = QLineEdit()
-        self.edit_call_num.setFont(QFont("Consolas", 9))
+        self.edit_call_num.setFont(mono_font(9))
         self.edit_call_num.setPlaceholderText("号码")
         self.edit_call_num.setMaximumWidth(120)
         call_layout.addWidget(self.edit_call_num)

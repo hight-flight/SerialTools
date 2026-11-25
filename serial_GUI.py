@@ -25,12 +25,17 @@ from PyQt5.QtGui import QBrush, QFont, QFontDatabase, QTextCursor, QTextCharForm
 if QApplication.instance() is None:
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    # 说明：不显式设置 HighDpiScaleFactorRoundingPolicy，保持 Qt 5.15 默认的
+    # Round 策略——固定像素布局在整数 DPR 下最稳定；离屏测试平台（QT_QPA_
+    # PLATFORM=offscreen）的缩放系数非整数，显式 PassThrough 会导致指标类
+    # 测试失败。进程级 DPI 感知由 packaging/app.manifest 声明 PerMonitorV2 兜底。
 
 from dialogs import (show_crc_calculator, show_hex_converter,
                          show_serial_monitor, show_usage_dialog,
                          show_about_dialog)
 from theme import (THEME_COLORS, DARK_QSS, LIGHT_QSS, apply_dialog_theme, apply_window_titlebar,
-                   fit_message_box_buttons, fit_push_button_texts, fit_combo_box_texts, VERSION, unescape_text)
+                   fit_message_box_buttons, fit_push_button_texts, fit_combo_box_texts, mono_font,
+                   VERSION, unescape_text)
 from preferences import (DEFAULT_PREFERENCES, Preferences, PreferencesDialog,
                          format_timestamp, receive_font_stylesheet)
 from transport import TransportWrapper, TransportReadThread
@@ -444,6 +449,9 @@ class SerialTool(QMainWindow):
         self.log_file_count = 0
         self.save_directory = os.fspath(self._app_paths.logs_dir)
         self.max_log_files = 10  # 最大保留的日志文件数量
+        # 磁盘空间检查节流：高速接收时避免每条数据一次磁盘查询 syscall
+        self._last_disk_space_check = 0.0
+        self._DISK_SPACE_CHECK_INTERVAL = 2.0  # 秒；写失败时立即重查
         
         # 数据统计变量
         self.rx_bytes = 0
@@ -789,7 +797,7 @@ class SerialTool(QMainWindow):
         port_layout.addWidget(port_label)
         self.combo_port = QComboBox()
         self.combo_port.setMinimumWidth(100)
-        self.combo_port.setFont(QFont("Consolas", 9))
+        self.combo_port.setFont(mono_font(9))
         port_layout.addWidget(self.combo_port)
         serial_page_layout.addLayout(port_layout)
 
@@ -807,7 +815,7 @@ class SerialTool(QMainWindow):
         self.combo_baud = QComboBox()
         self.combo_baud.addItems(['9600', '19200', '38400', '57600', '115200', '自定义'])
         self.combo_baud.setCurrentText('115200')
-        self.combo_baud.setFont(QFont("Consolas", 9))
+        self.combo_baud.setFont(mono_font(9))
         self.combo_baud.currentIndexChanged.connect(self.handle_baud_change)
         self.combo_baud.currentTextChanged.connect(
             lambda _text: fit_combo_box_texts((self.combo_baud,))
@@ -841,7 +849,7 @@ class SerialTool(QMainWindow):
         udp_page_layout.addWidget(QLabel("本地IP:", font=QFont("Microsoft YaHei", 9)))
         self.edit_udp_local_ip = QComboBox()
         self.edit_udp_local_ip.setEditable(True)
-        self.edit_udp_local_ip.setFont(QFont("Consolas", 9))
+        self.edit_udp_local_ip.setFont(mono_font(9))
         self.edit_udp_local_ip.setMinimumWidth(150)
         self.edit_udp_local_ip.setMinimumHeight(26)
         self.edit_udp_local_ip.addItem('0.0.0.0')
@@ -850,7 +858,7 @@ class SerialTool(QMainWindow):
         self.label_udp_local_port.setAccessibleName("本地端口")
         udp_page_layout.addWidget(self.label_udp_local_port)
         self.edit_udp_local_port = QSpinBox()
-        self.edit_udp_local_port.setFont(QFont("Consolas", 9))
+        self.edit_udp_local_port.setFont(mono_font(9))
         self.edit_udp_local_port.setRange(1, 65535)
         self.edit_udp_local_port.setValue(8080)
         self.edit_udp_local_port.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
@@ -858,7 +866,7 @@ class SerialTool(QMainWindow):
         udp_page_layout.addWidget(self.edit_udp_local_port)
         udp_page_layout.addWidget(QLabel("远程IP:", font=QFont("Microsoft YaHei", 9)))
         self.edit_udp_remote_ip = QLineEdit()
-        self.edit_udp_remote_ip.setFont(QFont("Consolas", 9))
+        self.edit_udp_remote_ip.setFont(mono_font(9))
         self.edit_udp_remote_ip.setMinimumWidth(120)
         self.edit_udp_remote_ip.setMinimumHeight(26)
         self.edit_udp_remote_ip.setText('192.168.1.100')
@@ -867,7 +875,7 @@ class SerialTool(QMainWindow):
         self.label_udp_remote_port.setAccessibleName("远程端口")
         udp_page_layout.addWidget(self.label_udp_remote_port)
         self.edit_udp_remote_port = QSpinBox()
-        self.edit_udp_remote_port.setFont(QFont("Consolas", 9))
+        self.edit_udp_remote_port.setFont(mono_font(9))
         self.edit_udp_remote_port.setRange(1, 65535)
         self.edit_udp_remote_port.setValue(8888)
         self.edit_udp_remote_port.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
@@ -883,14 +891,14 @@ class SerialTool(QMainWindow):
         tcp_client_page_layout.setSpacing(6)
         tcp_client_page_layout.addWidget(QLabel("远程IP:", font=QFont("Microsoft YaHei", 9)))
         self.edit_tcp_remote_ip = QLineEdit()
-        self.edit_tcp_remote_ip.setFont(QFont("Consolas", 9))
+        self.edit_tcp_remote_ip.setFont(mono_font(9))
         self.edit_tcp_remote_ip.setMinimumWidth(120)
         self.edit_tcp_remote_ip.setMinimumHeight(26)
         self.edit_tcp_remote_ip.setText('192.168.1.100')
         tcp_client_page_layout.addWidget(self.edit_tcp_remote_ip)
         tcp_client_page_layout.addWidget(QLabel("远程端口:", font=QFont("Microsoft YaHei", 9)))
         self.edit_tcp_remote_port = QSpinBox()
-        self.edit_tcp_remote_port.setFont(QFont("Consolas", 9))
+        self.edit_tcp_remote_port.setFont(mono_font(9))
         self.edit_tcp_remote_port.setRange(1, 65535)
         self.edit_tcp_remote_port.setValue(8888)
         self.edit_tcp_remote_port.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
@@ -907,14 +915,14 @@ class SerialTool(QMainWindow):
         tcp_server_page_layout.addWidget(QLabel("本地IP:", font=QFont("Microsoft YaHei", 9)))
         self.edit_tcp_server_local_ip = QComboBox()
         self.edit_tcp_server_local_ip.setEditable(True)
-        self.edit_tcp_server_local_ip.setFont(QFont("Consolas", 9))
+        self.edit_tcp_server_local_ip.setFont(mono_font(9))
         self.edit_tcp_server_local_ip.setMinimumWidth(150)
         self.edit_tcp_server_local_ip.setMinimumHeight(26)
         self.edit_tcp_server_local_ip.addItem('0.0.0.0')
         tcp_server_page_layout.addWidget(self.edit_tcp_server_local_ip)
         tcp_server_page_layout.addWidget(QLabel("本地端口:", font=QFont("Microsoft YaHei", 9)))
         self.edit_tcp_server_local_port = QSpinBox()
-        self.edit_tcp_server_local_port.setFont(QFont("Consolas", 9))
+        self.edit_tcp_server_local_port.setFont(mono_font(9))
         self.edit_tcp_server_local_port.setRange(1, 65535)
         self.edit_tcp_server_local_port.setValue(8888)
         self.edit_tcp_server_local_port.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
@@ -937,7 +945,7 @@ class SerialTool(QMainWindow):
         self.mode_layout.addWidget(self.label_save_path)
         self.line_edit_save_path = QLineEdit()
         self.line_edit_save_path.setReadOnly(True)
-        self.line_edit_save_path.setFont(QFont("Consolas", 9))
+        self.line_edit_save_path.setFont(mono_font(9))
         self._show_save_directory()
         self.line_edit_save_path.setMinimumWidth(160)
         self.line_edit_save_path.setMinimumHeight(26)
@@ -969,7 +977,7 @@ class SerialTool(QMainWindow):
         display_save_layout.addWidget(self.check_filter)
 
         self.edit_filter = QLineEdit()
-        self.edit_filter.setFont(QFont("Consolas", 9))
+        self.edit_filter.setFont(mono_font(9))
         self.edit_filter.setPlaceholderText("输入关键字，逗号分隔...")
         self.edit_filter.setMaximumWidth(180)
         self.edit_filter.setMinimumHeight(26)
@@ -1028,7 +1036,7 @@ class SerialTool(QMainWindow):
 
         self.text_recv = QTextEdit()
         self.text_recv.setReadOnly(True)
-        self.text_recv.setFont(QFont("Consolas", 11, QFont.Normal))
+        self.text_recv.setFont(mono_font(11))
         self.text_recv.setPlaceholderText("等待接收数据…")
         recv_layout.addWidget(self.text_recv)
 
@@ -1060,17 +1068,17 @@ class SerialTool(QMainWindow):
 
         # 接收字节数统计
         self.label_rx_bytes = QLabel("接收字节: 0")
-        self.label_rx_bytes.setFont(QFont("Consolas", 9))
+        self.label_rx_bytes.setFont(mono_font(9))
         stats_layout.addWidget(self.label_rx_bytes)
 
         # 发送字节数统计
         self.label_tx_bytes = QLabel("发送字节: 0")
-        self.label_tx_bytes.setFont(QFont("Consolas", 9))
+        self.label_tx_bytes.setFont(mono_font(9))
         stats_layout.addWidget(self.label_tx_bytes)
 
         # 数据包数量统计
         self.label_packets = QLabel("数据包: 0")
-        self.label_packets.setFont(QFont("Consolas", 9))
+        self.label_packets.setFont(mono_font(9))
         stats_layout.addWidget(self.label_packets)
 
         for label in (self.label_rx_bytes, self.label_tx_bytes, self.label_packets):
@@ -1124,7 +1132,7 @@ class SerialTool(QMainWindow):
 
         self.combo_checksum = QComboBox()
         self.combo_checksum.addItems(["None", "ModbusCRC16", "CRC32", "Fletcher", "XOR8", "ADD8", "ADD16"])
-        self.combo_checksum.setFont(QFont("Consolas", 9))
+        self.combo_checksum.setFont(mono_font(9))
         checksum_layout.addWidget(self.combo_checksum)
 
         send_settings_layout.addLayout(checksum_layout)
@@ -1142,7 +1150,7 @@ class SerialTool(QMainWindow):
         self.spin_interval = QSpinBox()
         self.spin_interval.setRange(100, 5000)
         self.spin_interval.setValue(1000)
-        self.spin_interval.setFont(QFont("Consolas", 9))
+        self.spin_interval.setFont(mono_font(9))
         self.spin_interval.setEnabled(False)  # 默认禁用
         repeat_layout.addWidget(self.spin_interval)
 
@@ -1171,7 +1179,7 @@ class SerialTool(QMainWindow):
         head_label.setFont(QFont("Microsoft YaHei", 9))
         head_field_layout.addWidget(head_label)
         self.text_ota = QLineEdit()
-        self.text_ota.setFont(QFont("Consolas", 9))
+        self.text_ota.setFont(mono_font(9))
         self.text_ota.setPlaceholderText("输入首字段...")
         self.text_ota.setMinimumHeight(26)
         self.text_ota.setMinimumWidth(80)
@@ -1189,7 +1197,7 @@ class SerialTool(QMainWindow):
         tail_label.setFont(QFont("Microsoft YaHei", 9))
         tail_field_layout.addWidget(tail_label)
         self.text_tail = QLineEdit()
-        self.text_tail.setFont(QFont("Consolas", 9))
+        self.text_tail.setFont(mono_font(9))
         self.text_tail.setPlaceholderText("输入尾字段...")
         self.text_tail.setMinimumHeight(26)
         self.text_tail.setMinimumWidth(80)
@@ -1202,7 +1210,7 @@ class SerialTool(QMainWindow):
         file_layout = QHBoxLayout()
         file_layout.setSpacing(6)
         self.file_path_edit = QLineEdit()
-        self.file_path_edit.setFont(QFont("Consolas", 9))
+        self.file_path_edit.setFont(mono_font(9))
         self.file_path_edit.setPlaceholderText("选择要发送的文件...")
         self.file_path_edit.setReadOnly(True)
         self.file_path_edit.setMinimumHeight(26)
@@ -1232,7 +1240,7 @@ class SerialTool(QMainWindow):
         
         # 发送输入框
         self.text_send = QTextEdit()
-        self.text_send.setFont(QFont("Consolas", 11, QFont.Normal))
+        self.text_send.setFont(mono_font(11))
         self.text_send.ensurePolished()
         # 合并文件发送行后，将原来一行控件及间距的 34 像素留给发送内容。
         self.text_send.setMinimumHeight(64)
@@ -1334,7 +1342,7 @@ class SerialTool(QMainWindow):
         self.spin_delay = QSpinBox()
         self.spin_delay.setRange(0, 10000)
         self.spin_delay.setValue(1000)
-        self.spin_delay.setFont(QFont("Consolas", 9))
+        self.spin_delay.setFont(mono_font(9))
         self.spin_delay.setMinimumWidth(60)
         toolbar_layout.addWidget(self.spin_delay)
         toolbar_layout.addStretch()
@@ -1350,7 +1358,7 @@ class SerialTool(QMainWindow):
         self.spin_cycle_count = QSpinBox()
         self.spin_cycle_count.setRange(1, 9999)
         self.spin_cycle_count.setValue(1)
-        self.spin_cycle_count.setFont(QFont("Consolas", 9))
+        self.spin_cycle_count.setFont(mono_font(9))
         self.spin_cycle_count.setMinimumWidth(60)
         self.check_cycle_count.setChecked(True)
         self.spin_cycle_count.setEnabled(True)
@@ -2087,12 +2095,23 @@ class SerialTool(QMainWindow):
         """刷新可用的串口列表"""
         mode = getattr(self, 'connection_mode', 'serial')
         if mode == 'serial':
+            # 记住当前选中串口，刷新后若仍存在则保持选中，避免下拉闪断选择
+            previous_port = self.combo_port.currentText()
             self.combo_port.clear()
             ports = serial.tools.list_ports.comports()
             if ports:
-                for port in ports:
+                restore_index = 0
+                for index, port in enumerate(ports):
                     self.combo_port.addItem(port.device)
-                self.combo_port.setCurrentIndex(0)
+                    # 悬停提示显示友好描述，方便区分多个同型号设备；
+                    # 项文本仍保持纯设备号，供连接逻辑直接使用
+                    description = (port.description or '').strip()
+                    if description and description != port.device:
+                        self.combo_port.setItemData(index, f"{port.device} - {description}",
+                                                    Qt.ToolTipRole)
+                    if port.device == previous_port:
+                        restore_index = index
+                self.combo_port.setCurrentIndex(restore_index)
             else:
                 self.combo_port.addItem("无可用串口")
         else:
@@ -2186,10 +2205,7 @@ class SerialTool(QMainWindow):
                     except Exception as e:
                         self.append_text(f"[警告]: 设置RTS/DTR状态失败: {str(e)}\n")
                     connection_desc = f"串口 {port_name}, 波特率 {baud_rate}"
-                    self.combo_port.setEnabled(False)
-                    self.combo_baud.setEnabled(False)
-                    self.btn_refresh.setEnabled(False); self.btn_refresh_serial.setEnabled(False)
-                    self.combo_mode.setEnabled(False)
+                    self._set_connection_controls_enabled(True)
                 elif mode == 'udp':
                     local_ip = self.edit_udp_local_ip.currentText().strip() or '0.0.0.0'
                     local_port = self.edit_udp_local_port.value()
@@ -2197,28 +2213,19 @@ class SerialTool(QMainWindow):
                     remote_port = self.edit_udp_remote_port.value()
                     self.transport.open_udp(local_ip, str(local_port), remote_ip, str(remote_port))
                     connection_desc = f"UDP {local_ip}:{local_port} -> {remote_ip}:{remote_port}"
-                    self.combo_mode.setEnabled(False)
-                    self.combo_port.setEnabled(False)
-                    self.combo_baud.setEnabled(False)
-                    self.btn_refresh.setEnabled(False); self.btn_refresh_serial.setEnabled(False)
+                    self._set_connection_controls_enabled(True)
                 elif mode == 'tcp_client':
                     remote_ip = self.edit_tcp_remote_ip.text().strip() or '192.168.1.1'
                     remote_port = self.edit_tcp_remote_port.value()
                     self.transport.open_tcp_client(remote_ip, str(remote_port))
                     connection_desc = f"TCP Client -> {remote_ip}:{remote_port}"
-                    self.combo_mode.setEnabled(False)
-                    self.combo_port.setEnabled(False)
-                    self.combo_baud.setEnabled(False)
-                    self.btn_refresh.setEnabled(False); self.btn_refresh_serial.setEnabled(False)
+                    self._set_connection_controls_enabled(True)
                 elif mode == 'tcp_server':
                     local_ip = self.edit_tcp_server_local_ip.currentText().strip() or '0.0.0.0'
                     local_port = self.edit_tcp_server_local_port.value()
                     self.transport.open_tcp_server(local_ip, str(local_port))
                     connection_desc = f"TCP Server {local_ip}:{local_port}"
-                    self.combo_mode.setEnabled(False)
-                    self.combo_port.setEnabled(False)
-                    self.combo_baud.setEnabled(False)
-                    self.btn_refresh.setEnabled(False); self.btn_refresh_serial.setEnabled(False)
+                    self._set_connection_controls_enabled(True)
                 else:
                     QMessageBox.warning(self, "错误", f"未知的连接模式: {mode}")
                     self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
@@ -2298,10 +2305,18 @@ class SerialTool(QMainWindow):
             self._set_status("就绪", "ready")
             self.error_state = False
             self._sync_button_text("打开连接")
-            self.combo_port.setEnabled(True)
-            self.combo_baud.setEnabled(True)
-            self.btn_refresh.setEnabled(True); self.btn_refresh_serial.setEnabled(True)
-            self.combo_mode.setEnabled(True)
+            self._set_connection_controls_enabled(False)
+
+    def _set_connection_controls_enabled(self, connected):
+        """统一管理依赖连接状态的参数控件（连接/断开/读错误三处共用）。
+
+        connected=True 表示已打开连接，禁用参数修改；False 表示已断开，恢复可用。
+        """
+        self.combo_port.setEnabled(not connected)
+        self.combo_baud.setEnabled(not connected)
+        self.btn_refresh.setEnabled(not connected)
+        self.btn_refresh_serial.setEnabled(not connected)
+        self.combo_mode.setEnabled(not connected)
 
     def select_file_to_send(self):
         """选择要发送的文件"""
@@ -2892,10 +2907,7 @@ class SerialTool(QMainWindow):
             # 更新UI状态
             self._sync_button_text("打开连接")
             self.btn_switch.setChecked(False); self.btn_switch_serial.setChecked(False)
-            self.combo_port.setEnabled(True)
-            self.combo_baud.setEnabled(True)
-            self.btn_refresh.setEnabled(True); self.btn_refresh_serial.setEnabled(True)
-            self.combo_mode.setEnabled(True)
+            self._set_connection_controls_enabled(False)
             
             # 更新状态栏
             self._update_status_connection_text(False)
@@ -3084,9 +3096,10 @@ class SerialTool(QMainWindow):
     def handle_receive_data(self, data):
         """处理接收到的数据"""
         try:
-            # 数据包计数（整个数据包计一次；字节数在下方/分段处理中累加）
+            # 数据包计数（整个数据包计一次；字节数在下方/分段处理中累加）。
+            # 统计标签不在此处 setText：高频小包时每秒可达数百次 QLabel 重绘，
+            # 统一由 _flush_pending_display 在刷新周期内更新。
             self.packets += 1
-            self.label_packets.setText(f"数据包: {self.packets}")
 
             # 统一取一次时间戳，分段处理时复用，避免同一数据包出现多个不同时间戳
             timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S.%f] ")
@@ -3100,9 +3113,8 @@ class SerialTool(QMainWindow):
                     self._handle_receive_data_chunk(chunk, timestamp)
                 return
 
-            # 更新接收字节统计
+            # 更新接收字节统计（标签由 _flush_pending_display 统一刷新）
             self.rx_bytes += len(data)
-            self.label_rx_bytes.setText(f"接收字节: {self.rx_bytes}")
             
             if self.check_hex_recv.isChecked():
                 # HEX 显示
@@ -3154,9 +3166,8 @@ class SerialTool(QMainWindow):
         timestamp 由调用方传入并复用，保证同一数据包各分段时间戳一致。
         """
         try:
-            # 更新接收数据统计
+            # 更新接收数据统计（标签由 _flush_pending_display 统一刷新）
             self.rx_bytes += len(data)
-            self.label_rx_bytes.setText(f"接收字节: {self.rx_bytes}")
 
             if self.check_hex_recv.isChecked():
                 hex_str = ' '.join([f'{byte:02X}' for byte in data])
@@ -3186,6 +3197,12 @@ class SerialTool(QMainWindow):
             if self.auto_save_enabled and self.current_log_file:
                 self.auto_save_data(log_entry + '\n')
     
+    def _update_stats_labels(self):
+        """统一刷新接收/发送统计标签，避免每包数据都触发 QLabel 重绘。"""
+        self.label_rx_bytes.setText(f"接收字节: {self.rx_bytes}")
+        self.label_tx_bytes.setText(f"发送字节: {self.tx_bytes}")
+        self.label_packets.setText(f"数据包: {self.packets}")
+
     def _update_receive_display(self, text, timestamp):
         """更新接收区显示（限制更新频率，缓冲数据避免丢失）"""
         # 将数据添加到待显示缓冲区
@@ -3245,6 +3262,8 @@ class SerialTool(QMainWindow):
         if not self._pending_display_data:
             return
         self._last_display_update_time = time.time()
+        # 统计标签在刷新周期内统一更新（不再每包 setText）
+        self._update_stats_labels()
         pending = self._pending_display_data
         self._pending_display_data = []
 
@@ -3823,7 +3842,7 @@ class SerialTool(QMainWindow):
         delay_spin.setRange(0, 10000)
         delay_spin.setValue(int(item.get("delay", 1000)))
         delay_spin.setSuffix(" ms")
-        delay_spin.setFont(QFont("Consolas", 10, QFont.Normal))
+        delay_spin.setFont(mono_font(10))
         delay_spin.valueChanged.connect(
             lambda _value, widget=delay_spin: self._select_multi_row_for_widget(widget)
         )
@@ -4902,7 +4921,7 @@ class SerialTool(QMainWindow):
         spin_channels = QSpinBox()
         spin_channels.setRange(1, 8)
         spin_channels.setValue(1)
-        spin_channels.setFont(QFont("Consolas", 9))
+        spin_channels.setFont(mono_font(9))
         panel_layout.addWidget(spin_channels)
 
         lbl2 = QLabel("数据类型")
@@ -4911,7 +4930,7 @@ class SerialTool(QMainWindow):
         combo_dtype = QComboBox()
         combo_dtype.addItems(list(DATA_TYPES.keys()))
         combo_dtype.setCurrentText('uint8')
-        combo_dtype.setFont(QFont("Consolas", 9))
+        combo_dtype.setFont(mono_font(9))
         panel_layout.addWidget(combo_dtype)
 
         lbl3 = QLabel("显示点数")
@@ -4921,7 +4940,7 @@ class SerialTool(QMainWindow):
         spin_points.setRange(50, 5000)
         spin_points.setValue(500)
         spin_points.setSingleStep(100)
-        spin_points.setFont(QFont("Consolas", 9))
+        spin_points.setFont(mono_font(9))
         panel_layout.addWidget(spin_points)
 
         panel_layout.addSpacing(8)
@@ -4933,7 +4952,7 @@ class SerialTool(QMainWindow):
         spin_refresh = QSpinBox()
         spin_refresh.setRange(20, 1000)
         spin_refresh.setValue(50)
-        spin_refresh.setFont(QFont("Consolas", 9))
+        spin_refresh.setFont(mono_font(9))
         panel_layout.addWidget(spin_refresh)
 
         panel_layout.addSpacing(8)
@@ -4970,7 +4989,7 @@ class SerialTool(QMainWindow):
 
         # 当前值标签
         self.scope_value_label = QLabel("当前值: —")
-        self.scope_value_label.setFont(QFont("Consolas", 9))
+        self.scope_value_label.setFont(mono_font(9))
         self.scope_value_label.setWordWrap(True)
         panel_layout.addWidget(self.scope_value_label)
 
@@ -5207,7 +5226,7 @@ class SerialTool(QMainWindow):
         spin_tcp_unit = QSpinBox()
         spin_tcp_unit.setRange(0, 255)
         spin_tcp_unit.setValue(1)
-        spin_tcp_unit.setFont(QFont("Consolas", 9))
+        spin_tcp_unit.setFont(mono_font(9))
         proto_row.addWidget(spin_tcp_unit)
         proto_row.addStretch()
         bl.addLayout(proto_row)
@@ -5221,31 +5240,31 @@ class SerialTool(QMainWindow):
         spin_slave = QSpinBox()
         spin_slave.setRange(1, 247)
         spin_slave.setValue(1)
-        spin_slave.setFont(QFont("Consolas", 9))
+        spin_slave.setFont(mono_font(9))
         form.addRow("从站地址:", spin_slave)
         lbl_slave = form.labelForField(spin_slave)
 
         combo_func = QComboBox()
         combo_func.addItems(list(FUNC_CODES.keys()))
         combo_func.setCurrentIndex(2)
-        combo_func.setFont(QFont("Consolas", 9))
+        combo_func.setFont(mono_font(9))
         form.addRow("功能码:", combo_func)
 
         spin_addr = QSpinBox()
         spin_addr.setRange(0, 65535)
         spin_addr.setPrefix("0x")
         spin_addr.setDisplayIntegerBase(16)
-        spin_addr.setFont(QFont("Consolas", 9))
+        spin_addr.setFont(mono_font(9))
         form.addRow("起始地址:", spin_addr)
 
         spin_qty = QSpinBox()
         spin_qty.setRange(1, 125)
         spin_qty.setValue(1)
-        spin_qty.setFont(QFont("Consolas", 9))
+        spin_qty.setFont(mono_font(9))
         form.addRow("数量:", spin_qty)
 
         edit_data = QLineEdit()
-        edit_data.setFont(QFont("Consolas", 9))
+        edit_data.setFont(mono_font(9))
         edit_data.setPlaceholderText("例: 0064 00C8")
         form.addRow("数据(HEX):", edit_data)
 
@@ -5285,7 +5304,7 @@ class SerialTool(QMainWindow):
         result_group.addWidget(QLabel("生成的帧:"))
         result_frame = QTextEdit()
         result_frame.setReadOnly(True)
-        result_frame.setFont(QFont("Consolas", 10))
+        result_frame.setFont(mono_font(10))
         result_frame.setMinimumHeight(64)
         result_frame.setMaximumHeight(160)
         result_group.addWidget(result_frame)
@@ -5396,7 +5415,7 @@ class SerialTool(QMainWindow):
 
         pl.addWidget(QLabel("输入帧 (HEX):"))
         edit_input = QTextEdit()
-        edit_input.setFont(QFont("Consolas", 10))
+        edit_input.setFont(mono_font(10))
         edit_input.setPlaceholderText("输入 HEX 帧，例: 01 03 00 00 00 01 84 0A")
         edit_input.setMaximumHeight(56)
         pl.addWidget(edit_input)
@@ -5405,7 +5424,7 @@ class SerialTool(QMainWindow):
         mr.addWidget(QLabel("模式:"))
         combo_mode = QComboBox()
         combo_mode.addItems(["自动检测", "RTU", "ASCII"])
-        combo_mode.setFont(QFont("Consolas", 9))
+        combo_mode.setFont(mono_font(9))
         mr.addWidget(combo_mode)
         mr.addStretch()
 
@@ -5415,7 +5434,7 @@ class SerialTool(QMainWindow):
 
         result_parse = QTextEdit()
         result_parse.setReadOnly(True)
-        result_parse.setFont(QFont("Consolas", 10))
+        result_parse.setFont(mono_font(10))
         pl.addWidget(result_parse)
 
         def on_parse():
@@ -5984,20 +6003,27 @@ class SerialTool(QMainWindow):
                 if not self.current_log_file:
                     return
 
-            # 写入前再次检查磁盘空间（防止其他进程占用空间）
-            if not self._check_disk_space(data_size + 1024):
-                error_msg = "磁盘空间不足，无法写入数据"
-                self.append_text(f"[错误]: {error_msg}\n")
-                self._set_status(error_msg, "error")
-                return
+            # 写入前检查磁盘空间（防止其他进程占用空间）。
+            # 检查按时间间隔节流（高速接收时每条数据一次磁盘查询 syscall
+            # 会明显拖慢 UI 线程），只有距上次检查超过间隔才真正查询。
+            now = time.monotonic()
+            if now - self._last_disk_space_check >= self._DISK_SPACE_CHECK_INTERVAL:
+                self._last_disk_space_check = now
+                if not self._check_disk_space(data_size + 1024):
+                    error_msg = "磁盘空间不足，无法写入数据"
+                    self.append_text(f"[错误]: {error_msg}\n")
+                    self._set_status(error_msg, "error")
+                    # 强制后续写入立即重查，避免空间恢复前长时间误写
+                    self._last_disk_space_check = 0.0
+                    return
 
             # 写入数据（使用 try-except-else-finally 确保文件句柄安全）
-            # 注意：此处只调用 flush（刷新 Python 缓冲到 OS，不阻塞），
-            # fsync 由 _log_fsync_timer 定时执行，避免每条数据都阻塞 UI 线程
+            # 注意：此处不逐条 flush，由 Python 文件缓冲（约 8KB）自然合批，
+            # flush/fsync 统一由 _log_fsync_timer 每 2 秒执行，避免每条数据
+            # 都产生一次 syscall 阻塞 UI 线程
             write_success = False
             try:
                 self.current_log_file.write(data)
-                self.current_log_file.flush()  # 刷新到操作系统缓冲区（非阻塞）
                 write_success = True
             except IOError as e:
                 # 处理I/O错误（包括磁盘空间不足）

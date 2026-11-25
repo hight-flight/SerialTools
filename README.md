@@ -1,12 +1,21 @@
 # SerialTools
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.9+-blue)](https://www.python.org/)
 [![PyQt5](https://img.shields.io/badge/PyQt5-GUI-orange)](https://pypi.org/project/PyQt5/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 > 基于 PyQt5 的强大串口调试工具 / A powerful serial port debugging tool based on PyQt5
 
 ---
+
+## 1.4.7 更新
+
+- 统一等宽字体：各对话框与主界面改用主题 `mono_font`，跨平台显示一致。
+- 串口接收按时间窗口批量合并上报，降低发送阻塞；线程退出前刷新未发送的尾部数据，避免丢包。
+- OTA 改进：固件分块复制并刷新进度条（大固件不再冻结 UI）；设备串口文本按 UTF-8/GB18030 顺序严格解码，中文回复不再乱码；http 模式传输完成后 3 秒确认宽限。
+- 磁盘空间检查按 2 秒节流，高速接收时减少 syscall。
+- 进程级 DPI 感知由 `packaging/app.manifest`（PerMonitorV2）兜底。
+- 兼容性优化：`data_viewer.py` 支持 Python 3.8（延迟注解求值）；`pyqtgraph>=0.13.7` 避免与 numpy 2.x 不兼容；`build_ubuntu.sh` 增加 Python 3.10+ 校验；打包无条件包含 PNG 图标兜底。
 
 ## 1.4.6 更新
 
@@ -38,7 +47,7 @@
 
 ### 环境要求
 
-- Python 3.8+
+- Python 3.9+（3.8 需要 data_viewer 打开数据分析面板时不可用）
 - PyQt5
 - pyserial
 

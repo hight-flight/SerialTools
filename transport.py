@@ -5,10 +5,16 @@ TransportReadThread 在独立线程中轮询接收数据。
 
 import socket
 import select
+import time
 
 from PyQt5.QtCore import QThread, pyqtSignal, QMutex, QMutexLocker
 
 import serial
+
+# 读线程合批参数：数据先在线程内累积，达到时间窗口或字节上限后一次性
+# emit，避免高波特率下每毫秒一次的 queued 信号淹没 UI 事件循环。
+READ_BATCH_WINDOW_SEC = 0.010   # 合并窗口 10ms，兼顾显示延迟与 UI 负载
+READ_BATCH_MAX_BYTES = 16384    # 窗口未到但积压达到上限时立即发出
 
 
 class TransportWrapper:
@@ -290,10 +296,14 @@ class TransportReadThread(QThread):
         self.running_lock.unlock()
 
     def run(self):
+        # 合批缓冲：线程内累积数据，窗口到期或达到上限后单次 emit。
+        pending = bytearray()
+        window_started = None
         try:
             while self.is_running():
                 try:
                     data_read = False
+                    chunk = None
                     with QMutexLocker(self.transport_mutex):
                         if not self.transport or not self.transport.is_open:
                             self.error_signal.emit("连接已关闭")
@@ -301,15 +311,23 @@ class TransportReadThread(QThread):
                             break
                         if self.transport.in_waiting > 0:
                             try:
-                                data = self.transport.read(self.transport.in_waiting or 4096)
-                                if data:
-                                    self.receive_data_signal.emit(data)
-                                    data_read = True
+                                chunk = self.transport.read(self.transport.in_waiting or 4096)
                             except Exception as e:
                                 self.error_signal.emit(f"读取异常: {e}")
                                 self.set_running(False)
                                 break
-                    self.msleep(1 if data_read else 20)
+                    if chunk:
+                        if not pending:
+                            window_started = time.monotonic()
+                        pending.extend(chunk)
+                        data_read = True
+                    if pending and (len(pending) >= READ_BATCH_MAX_BYTES
+                                    or time.monotonic() - window_started >= READ_BATCH_WINDOW_SEC):
+                        self.receive_data_signal.emit(bytes(pending))
+                        pending = bytearray()
+                        window_started = None
+                    # 有数据待合并时保持 1ms 轮询以降低合批延迟。
+                    self.msleep(1 if (data_read or pending) else 20)
                 except ValueError as e:
                     self.set_running(False)
                     self.error_signal.emit(f"数据解析错误: {e}")
@@ -330,6 +348,9 @@ class TransportReadThread(QThread):
                     self.error_signal.emit(f"读取错误: {e}")
                     break
         finally:
+            # 线程退出前冲刷未发出的合批数据，避免尾部数据丢失。
+            if pending:
+                self.receive_data_signal.emit(bytes(pending))
             self.set_running(False)
 
     def stop(self):

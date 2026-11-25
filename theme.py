@@ -3,13 +3,13 @@
 主题模块：颜色常量、QSS 样式表、对话框主题应用工具函数。
 """
 
-VERSION = "1.4.6"
+VERSION = "1.4.7"
 
 import platform
 import re
 
 from PyQt5.QtCore import QObject, pyqtSignal
-from PyQt5.QtGui import QColor, QPalette
+from PyQt5.QtGui import QColor, QFont, QPalette
 from PyQt5.QtWidgets import (
     QApplication, QMessageBox, QPushButton, QStyle, QStyleOptionButton, QGroupBox, QStyleOptionComboBox,
 )
@@ -18,6 +18,18 @@ from PyQt5.QtWidgets import (
 _TEXT_ESCAPE_PATTERN = re.compile(
     r"\\(?:[\\rntbfva]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})"
 )
+
+
+# 等宽字体优先 + 中文字体回退：部分电脑的字体回退链不完整，
+# 纯西文等宽字体（Consolas）显示中文时会乱码（如 OTA 日志"端口"行）。
+MONO_FONT_FAMILIES = ['Consolas', 'Microsoft YaHei']
+
+
+def mono_font(point_size, weight=QFont.Normal):
+    """创建带中文回退的等宽字体，避免在缺少中文字形回退的电脑上显示乱码。"""
+    font = QFont(MONO_FONT_FAMILIES[0], point_size, weight)
+    font.setFamilies(MONO_FONT_FAMILIES)
+    return font
 
 
 def unescape_text(text):
@@ -463,6 +475,18 @@ QTabWidget::pane { border: 1px solid #E3E8EF; background-color: #FFFFFF; }
 QTabBar::tab { background-color: #F1F5F9; color: #475467; padding: 6px 16px; border: 1px solid #E3E8EF; border-bottom: none; border-top-left-radius: 6px; border-top-right-radius: 6px; }
 QTabBar::tab:selected { background-color: #FFFFFF; color: #1677FF; }
 QTabBar::tab:hover { background-color: #EEF5FF; color: #1677FF; }
+QTabBar::tab:disabled { color: #98A2B3; }
+QScrollBar:horizontal { background: #F6F8FB; height: 10px; margin: 4px; }
+QScrollBar::handle:horizontal { background: #B9C5D3; min-width: 28px; border-radius: 5px; }
+QScrollBar::handle:horizontal:hover { background: #8FA1B5; }
+QScrollBar::handle:horizontal:pressed { background: #6E8093; }
+QHeaderView::section:hover { background-color: #E8EFF6; }
+QTableCornerButton::section { background-color: #F1F5F9; border: none; border-bottom: 1px solid #E3E8EF; }
+QListView, QListWidget { background-color: #FFFFFF; color: #1D2939; border: 1px solid #E3E8EF; border-radius: 8px; }
+QListView::item:selected, QListWidget::item:selected { background-color: #E2EFFF; color: #102A56; }
+QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled { background-color: #F2F4F7; color: #98A2B3; border-color: #E3E8EF; }
+QMenu::item:disabled { color: #98A2B3; }
+QProgressBar::chunk { background-color: #1677FF; border-radius: 3px; }
 """
 
 DARK_QSS += """
@@ -478,7 +502,7 @@ QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; backgr
 QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox { background-color: #19212C; color: #E6EDF5; border: 1px solid #3A4A5E; border-radius: 6px; selection-background-color: #245B8F; selection-color: #FFFFFF; }
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #49A6FF; }
 QLineEdit:read-only, QTextEdit:read-only, QPlainTextEdit:read-only { background-color: #111827; }
-QPlainTextEdit { font-family: Consolas, "Cascadia Mono"; }
+QPlainTextEdit { font-family: Consolas, "Microsoft YaHei", "Cascadia Mono"; }
 QPushButton { background-color: #263241; color: #D9E3EE; border: 1px solid #3A4A5E; border-radius: 6px; padding: 4px 10px; }
 QPushButton:hover { background-color: #2B4057; border-color: #49A6FF; color: #FFFFFF; }
 QPushButton:pressed { background-color: #203A55; }
@@ -515,6 +539,18 @@ QTabWidget::pane { border: 1px solid #2D3A4A; background-color: #19212C; }
 QTabBar::tab { background-color: #263241; color: #B9C8D8; padding: 6px 16px; border: 1px solid #2D3A4A; border-bottom: none; border-top-left-radius: 6px; border-top-right-radius: 6px; }
 QTabBar::tab:selected { background-color: #19212C; color: #78BCFF; }
 QTabBar::tab:hover { background-color: #2B4057; color: #FFFFFF; }
+QTabBar::tab:disabled { color: #8191A4; }
+QScrollBar:horizontal { background: #151A22; height: 10px; margin: 4px; }
+QScrollBar::handle:horizontal { background: #415164; min-width: 28px; border-radius: 5px; }
+QScrollBar::handle:horizontal:hover { background: #5A6D82; }
+QScrollBar::handle:horizontal:pressed { background: #6E82A0; }
+QHeaderView::section:hover { background-color: #2D3A4A; }
+QTableCornerButton::section { background-color: #263241; border: none; border-bottom: 1px solid #3A4A5E; }
+QListView, QListWidget { background-color: #19212C; color: #E6EDF5; border: 1px solid #2D3A4A; border-radius: 8px; }
+QListView::item:selected, QListWidget::item:selected { background-color: #245B8F; color: #FFFFFF; }
+QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled { background-color: #1E2835; color: #8191A4; border-color: #2D3A4A; }
+QMenu::item:disabled { color: #8191A4; }
+QProgressBar::chunk { background-color: #49A6FF; border-radius: 3px; }
 """
 
 

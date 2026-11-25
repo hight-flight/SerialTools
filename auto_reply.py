@@ -19,9 +19,9 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLa
                              QFrame, QCheckBox, QSpinBox, QFileDialog,
                              QScrollArea, QSplitter, QWidget, QApplication)
 from PyQt5.QtCore import Qt, QTimer, QMutexLocker
-from PyQt5.QtGui import QFont, QTextCursor
+from PyQt5.QtGui import QTextCursor
 
-from theme import apply_dialog_theme, DataReceiver, unescape_text
+from theme import apply_dialog_theme, DataReceiver, mono_font, unescape_text
 from app_paths import auto_reply_rules_dir, resolve_app_paths
 
 
@@ -207,7 +207,7 @@ class AutoReplyDialog(QDialog):
 
         row1_layout.addWidget(QLabel("触发条件:"))
         self.edit_trigger = QLineEdit()
-        self.edit_trigger.setFont(QFont("Consolas", 9))
+        self.edit_trigger.setFont(mono_font(9))
         self.edit_trigger.setPlaceholderText("输入触发条件")
         row1_layout.addWidget(self.edit_trigger)
 
@@ -224,7 +224,7 @@ class AutoReplyDialog(QDialog):
 
         row2_layout.addWidget(QLabel("响应内容:"))
         self.edit_response = QLineEdit()
-        self.edit_response.setFont(QFont("Consolas", 9))
+        self.edit_response.setFont(mono_font(9))
         self.edit_response.setPlaceholderText("输入响应内容")
         row2_layout.addWidget(self.edit_response)
 
@@ -282,7 +282,7 @@ class AutoReplyDialog(QDialog):
         log_layout.setSpacing(6)
 
         self.text_log = QTextEdit()
-        self.text_log.setFont(QFont("Consolas", 9))
+        self.text_log.setFont(mono_font(9))
         self.text_log.setReadOnly(True)
         self.text_log.setMinimumHeight(160)
         self.text_log.document().setMaximumBlockCount(2000)
