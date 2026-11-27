@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QAction, QTabWidget, QRadioButton, QButtonGroup, QStackedWidget, QScrollArea, QLayout)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRunnable, QThreadPool, QObject, QMetaObject, Q_ARG, pyqtSlot, QMutex, QMutexLocker, QPoint, QRect, QEvent, QByteArray
 from PyQt5.QtGui import QBrush, QFont, QFontDatabase, QTextCursor, QTextCharFormat, QColor, QPalette, QPixmap, QPainter, QPolygon, QPen, QIcon
+from PyQt5.QtCore import QTemporaryDir
 
 # 必须在 QApplication 创建前启用，避免高 DPI 下图标先低分辨率栅格化再放大。
 if QApplication.instance() is None:
@@ -552,10 +553,16 @@ class SerialTool(QMainWindow):
 
     def _make_arrow_icons(self):
         """生成下拉箭头 V 型图标（QSS 接管 ComboBox 后系统箭头不显示，必须手绘）"""
-        import os
-        icon_dir = os.fspath(self._app_paths.cache_dir)
+        app = QApplication.instance()
+        icon_dir = getattr(app, '_serialtool_theme_icon_dir', None)
+        if icon_dir is None:
+            # 全局 QSS 引用的图标随应用存活，避免重建主窗口时更换路径并重载样式。
+            icon_dir = app._serialtool_theme_icon_dir = QTemporaryDir()
+        icon_path = icon_dir.path() if icon_dir.isValid() else os.fspath(self._app_paths.cache_dir)
 
         def _draw(path, color_hex, size=12, upward=False):
+            if os.path.isfile(path):
+                return path.replace('\\', '/')
             pix = QPixmap(size, size)
             pix.fill(Qt.transparent)
             p = QPainter(pix)
@@ -578,6 +585,8 @@ class SerialTool(QMainWindow):
             return path.replace('\\', '/')
 
         def _draw_check(path, color_hex, size=12):
+            if os.path.isfile(path):
+                return path.replace('\\', '/')
             pix = QPixmap(size, size)
             pix.fill(Qt.transparent)
             p = QPainter(pix)
@@ -592,6 +601,8 @@ class SerialTool(QMainWindow):
 
         def _draw_radio_dot(path, color_hex, size=12):
             """绘制单选项选中态的中心圆点，避免 QSS 边框改变控件布局尺寸。"""
+            if os.path.isfile(path):
+                return path.replace('\\', '/')
             pix = QPixmap(size, size)
             pix.fill(Qt.transparent)
             p = QPainter(pix)
@@ -603,14 +614,14 @@ class SerialTool(QMainWindow):
             pix.save(path, 'PNG')
             return path.replace('\\', '/')
 
-        dark = _draw(os.path.join(icon_dir, '_arrow_dark.png'), '#B9C8D8')
-        self._arrow_up_dark_path = _draw(os.path.join(icon_dir, '_arrow_up_dark.png'), '#B9C8D8', upward=True)
-        self._arrow_up_light_path = _draw(os.path.join(icon_dir, '_arrow_up_light.png'), '#666666', upward=True)
-        light = _draw(os.path.join(icon_dir, '_arrow_light.png'), '#666666')
-        check_dark = _draw_check(os.path.join(icon_dir, '_check_dark.png'), '#FFFFFF')
-        check_light = _draw_check(os.path.join(icon_dir, '_check_light.png'), '#FFFFFF')
-        radio_dark = _draw_radio_dot(os.path.join(icon_dir, '_radio_dark.png'), '#FFFFFF')
-        radio_light = _draw_radio_dot(os.path.join(icon_dir, '_radio_light.png'), '#FFFFFF')
+        dark = _draw(os.path.join(icon_path, '_arrow_dark.png'), '#B9C8D8')
+        self._arrow_up_dark_path = _draw(os.path.join(icon_path, '_arrow_up_dark.png'), '#B9C8D8', upward=True)
+        self._arrow_up_light_path = _draw(os.path.join(icon_path, '_arrow_up_light.png'), '#666666', upward=True)
+        light = _draw(os.path.join(icon_path, '_arrow_light.png'), '#666666')
+        check_dark = _draw_check(os.path.join(icon_path, '_check_dark.png'), '#FFFFFF')
+        check_light = _draw_check(os.path.join(icon_path, '_check_light.png'), '#FFFFFF')
+        radio_dark = _draw_radio_dot(os.path.join(icon_path, '_radio_dark.png'), '#FFFFFF')
+        radio_light = _draw_radio_dot(os.path.join(icon_path, '_radio_light.png'), '#FFFFFF')
         return dark, light, check_dark, check_light, radio_dark, radio_light
 
     def init_ui(self):
@@ -1560,10 +1571,10 @@ class SerialTool(QMainWindow):
         # 使用富文本设置连接状态，只改变状态部分的颜色
         self.status_connection = QLabel()
         self.status_connection.setFont(QFont("Microsoft YaHei", 9))
+        self.status_baud = QLabel()
+        self.status_baud.setFont(QFont("Microsoft YaHei", 9))
         # 初始状态为未连接
         self._update_status_connection_text(False)
-        self.status_baud = QLabel("波特率: 115200")
-        self.status_baud.setFont(QFont("Microsoft YaHei", 9))
         self.status_log = QLabel("日志文件: 未创建")
         self.status_log.setFont(QFont("Microsoft YaHei", 9))
         self.status_log.setToolTip("当前未创建日志文件")
@@ -1789,23 +1800,29 @@ class SerialTool(QMainWindow):
         """应用主题（light 或 dark）"""
         self.current_theme = theme_name
         self.theme_colors = dict(THEME_COLORS[theme_name])
+        app = QApplication.instance()
+        app.setProperty("serialToolDarkTheme", theme_name == 'dark')
 
-        # 1. 全局 QSS（注入下拉箭头图片路径）
+        # 1. 构建当前窗口的 QSS（注入下拉箭头图片路径）
         if theme_name == 'dark':
             qss = (DARK_QSS
                    .replace('__ARROW_DARK__', self._arrow_dark_path)
                    .replace('__ARROW_UP_DARK__', self._arrow_up_dark_path)
                    .replace('__CHECK_DARK__', self._check_dark_path)
                    .replace('__RADIO_DARK__', self._radio_dark_path))
-            QApplication.instance().setStyleSheet(qss)
-            self._set_titlebar_dark(True, color_hex='#151A22')
         else:
             qss = (LIGHT_QSS
                    .replace('__ARROW_LIGHT__', self._arrow_light_path)
                    .replace('__ARROW_UP_LIGHT__', self._arrow_up_light_path)
                    .replace('__CHECK_LIGHT__', self._check_light_path)
                    .replace('__RADIO_LIGHT__', self._radio_light_path))
-            QApplication.instance().setStyleSheet(qss)
+        app.setProperty("serialToolStyleSheet", qss)
+        # 将重新修饰限制在这个窗口的控件树，避免访问其他窗口中正在销毁的控件。
+        if self.styleSheet() != qss:
+            self.setStyleSheet(qss)
+        if theme_name == 'dark':
+            self._set_titlebar_dark(True, color_hex='#151A22')
+        else:
             self._set_titlebar_dark(False)
 
         # 同步菜单栏暗黑模式勾选状态
@@ -1834,27 +1851,11 @@ class SerialTool(QMainWindow):
             return  # 避免重复 patch
         QMessageBox._theme_patched = True
 
-        # 保存原始静态方法
-        _orig_information = QMessageBox.information
-        _orig_warning = QMessageBox.warning
-        _orig_critical = QMessageBox.critical
-        _orig_question = QMessageBox.question
-
         def _apply_theme_before_exec(msgbox):
-            """在 exec_ 前应用主题（仅暗黑模式）。
-            关键：用 winId() 强制创建原生窗口句柄但不触发显示，
-            然后设置 DWM 暗色属性，这样窗口首次绘制时标题栏已经是暗色。
-            """
-            if self.current_theme == 'dark' and not getattr(msgbox, '_themed', False):
-                try:
-                    # winId() 会触发 QWidget 的窗口创建（创建 hwnd），但不显示窗口
-                    # 这是 Qt 提供的"创建窗口但不显示"的标准方法
-                    _ = msgbox.winId()
-                    # 此时 hwnd 已创建但窗口未显示，设置 DWM 暗色属性
-                    apply_dialog_theme(msgbox, True)
-                    msgbox._themed = True
-                except Exception:
-                    pass
+            # 静态方法的生命周期长于窗口，读取应用主题可避免保留首个主窗口。
+            app = QApplication.instance()
+            if app.property("serialToolDarkTheme"):
+                apply_dialog_theme(msgbox, True)
 
         def _build_msgbox(icon, parent, title, text, args, kwargs):
             """统一构造 QMessageBox：正确分离 buttons / defaultButton。
@@ -1921,7 +1922,7 @@ class SerialTool(QMainWindow):
         else:
             QApplication.instance().setPalette(QApplication.style().standardPalette())
 
-        if system == 'Windows':
+        if system == 'Windows' and self.testAttribute(Qt.WA_WState_Created):
             apply_window_titlebar(self, dark, color_hex)
 
         # Linux/macOS 的原生标题栏由桌面环境或窗口管理器控制。这里仅使用
@@ -1984,6 +1985,11 @@ class SerialTool(QMainWindow):
                 f'<span style="color: {label_color};">连接状态：</span>'
                 f'<span style="color: {err_color};">未连接</span>'
             )
+            if self.connection_mode == 'serial':
+                baud = self.combo_baud.currentText() or '115200'
+                self.status_baud.setText(f"波特率: {baud}")
+            else:
+                self.status_baud.setText(f"模式: {self.combo_mode.currentText()}")
 
     def toggle_theme(self):
         """切换主题，并同步所有已打开的子窗口。"""
@@ -2037,6 +2043,8 @@ class SerialTool(QMainWindow):
                 self.custom_baud = int(baud_text)
             except ValueError:
                 pass
+        if self.connection_mode == 'serial':
+            self._refresh_status_connection()
 
     # --- 功能函数 ---
 
@@ -2090,6 +2098,7 @@ class SerialTool(QMainWindow):
         self.check_rts.setVisible(is_serial)
         self.check_dtr.setVisible(is_serial)
         self._sync_button_text("打开连接")  # TCP Server 使用侦听术语。
+        self._refresh_status_connection()
 
     def refresh_ports(self):
         """刷新可用的串口列表"""
@@ -2299,9 +2308,6 @@ class SerialTool(QMainWindow):
                 self.transport.close()
                 self.append_text("--- 连接已关闭 ---")
             self._update_status_connection_text(False)
-            # 显示实际选中的波特率（避免写死 115200 与实际不符）
-            _cur_baud = self.combo_baud.currentText() or '115200'
-            self.status_baud.setText(f"波特率: {_cur_baud}")
             self._set_status("就绪", "ready")
             self.error_state = False
             self._sync_button_text("打开连接")
@@ -2911,9 +2917,6 @@ class SerialTool(QMainWindow):
             
             # 更新状态栏
             self._update_status_connection_text(False)
-            # 显示实际选中的波特率（避免写死 115200 与实际不符）
-            _cur_baud = self.combo_baud.currentText() or '115200'
-            self.status_baud.setText(f"波特率: {_cur_baud}")
             self._set_status(f"连接读取错误: {error_msg}", "error")
         except Exception as e:
             # UI更新失败不影响主要流程
@@ -4494,7 +4497,7 @@ class SerialTool(QMainWindow):
         text_send = getattr(self, 'text_send', None)
 
         # ---- 接收区滚轮：用户滚动查看时暂停自动跟底，6 秒静止后恢复 ----
-        if text_recv is not None and obj is text_recv.viewport() and event.type() == QEvent.Wheel:
+        if event.type() == QEvent.Wheel and text_recv is not None and obj is text_recv.viewport():
             self._on_recv_wheel(event)
 
         # ---- 发送栏上下键历史记录导航 ----
@@ -5813,6 +5816,7 @@ class SerialTool(QMainWindow):
                         self.combo_baud.insertItem(custom_index, selected_baud)
                         self.combo_baud.setCurrentIndex(custom_index)
                         self.combo_baud.currentIndexChanged.connect(self.handle_baud_change)
+                        self._refresh_status_connection()
         except Exception as e:
             self.append_text(f"[错误]: 打开设置对话框失败: {e}\n")
             # 显示错误提示

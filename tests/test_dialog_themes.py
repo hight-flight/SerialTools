@@ -123,6 +123,7 @@ class DialogThemeTests(unittest.TestCase):
         dwm = SimpleNamespace(DwmSetWindowAttribute=mock.Mock(side_effect=set_attribute))
         user = SimpleNamespace(RedrawWindow=mock.Mock(return_value=1))
         with mock.patch("theme.platform.system", return_value="Windows"), \
+                mock.patch.object(QApplication, "platformName", return_value="windows"), \
                 mock.patch.object(ctypes, "windll", SimpleNamespace(dwmapi=dwm, user32=user), create=True), \
                 mock.patch.object(dialog, "winId", return_value=0x123456789):
             theme.apply_dialog_theme(dialog, True)
@@ -134,6 +135,35 @@ class DialogThemeTests(unittest.TestCase):
             self.assertEqual(attributes.get(20), 0)
             self.assertEqual(attributes.get(35), 0xFFFFFFFF)
             self.assertEqual(attributes.get(36), 0xFFFFFFFF)
+
+    def test离屏窗口应用主题时不创建原生句柄(self):
+        import theme
+        dialog = QDialog(self.tool)
+        self.addCleanup(dialog.close)
+        with mock.patch("theme.platform.system", return_value="Windows"), \
+                mock.patch.object(QApplication, "platformName", return_value="offscreen"):
+            self.assertFalse(theme.apply_window_titlebar(dialog, True))
+        self.assertFalse(dialog.testAttribute(Qt.WA_WState_Created))
+
+    def test同一应用重建主窗口时沿用主题样式(self):
+        from serial_GUI import SerialTool
+
+        original_qss = self.tool.styleSheet()
+        self.assertTrue(original_qss)
+        paths = self.tool._app_paths._replace(cache_dir=self.tool._app_paths.cache_dir / "new")
+        with mock.patch("serial_GUI.resolve_app_paths", return_value=paths):
+            window = SerialTool()
+        try:
+            self.assertEqual(window.styleSheet(), original_qss)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.sendPostedEvents(None, QEvent.DeferredDelete)
+
+    def test切换主窗口主题不重载应用级样式(self):
+        original_qss = self.app.styleSheet()
+        self.tool.apply_theme("dark")
+        self.assertEqual(self.app.styleSheet(), original_qss)
 
     def test原生句柄销毁事件不重新创建窗口(self):
         dialog = QDialog(self.tool)

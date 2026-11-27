@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import QApplication, QMessageBox
 from ota_center import OTAControlCenter
 from serial_GUI import SerialTool
 from transport import TransportReadThread
-from tests import test_window_placement
+from tests import run_on_native_windows, test_window_placement
 
 
 class _BrokenTransport:
@@ -233,6 +233,10 @@ class ReadErrorIntegrationTests(unittest.TestCase):
         self.assertFalse(dialog._btn_stop_ota.isEnabled())
 
     def test真实错误弹窗一次点击即可关闭且界面已断开(self):
+        # Qt 5 的 Windows 离屏后端显示 QMessageBox 时会发生原生崩溃。
+        if run_on_native_windows(self, self.app.platformName(), "tests.test_read_error_lifecycle"):
+            return
+
         self.tool.transport = _BrokenTransport()
         self.tool.btn_switch.setChecked(True)
         self.tool.combo_mode.setEnabled(False)

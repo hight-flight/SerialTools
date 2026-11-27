@@ -3,7 +3,7 @@
 主题模块：颜色常量、QSS 样式表、对话框主题应用工具函数。
 """
 
-VERSION = "1.4.7"
+VERSION = "1.4.8"
 
 import platform
 import re
@@ -12,6 +12,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPalette
 from PyQt5.QtWidgets import (
     QApplication, QMessageBox, QPushButton, QStyle, QStyleOptionButton, QGroupBox, QStyleOptionComboBox,
+    QLabel, QProgressBar,
 )
 
 
@@ -731,7 +732,7 @@ def fit_combo_box_texts(combos):
 
 def apply_window_titlebar(window, is_dark, color_hex="#151A22"):
     """同步 Windows 原生标题栏，并立即重绘非客户区。"""
-    if platform.system() != "Windows":
+    if platform.system() != "Windows" or QApplication.platformName() != "windows":
         return False
     try:
         import ctypes
@@ -775,7 +776,6 @@ def apply_dialog_theme(dialog, is_dark):
 
     if is_dark:
         # 暗黑主题
-        dialog.setStyleSheet(QApplication.instance().styleSheet())
         p = dialog.palette()
         p.setColor(QPalette.Highlight, QColor('#245B8F'))
         p.setColor(QPalette.HighlightedText, QColor('#FFFFFF'))
@@ -784,9 +784,19 @@ def apply_dialog_theme(dialog, is_dark):
         dialog.setPalette(p)
 
     else:
-        # 明亮主题：清除 QSS，恢复标准调色板
-        dialog.setStyleSheet('')
+        # 明亮主题恢复标准调色板。
         dialog.setPalette(QApplication.style().standardPalette())
+
+    qss = (app.styleSheet() or app.property("serialToolStyleSheet") or '') if is_dark else ''
+    if dialog.styleSheet() != qss:
+        dialog.setStyleSheet(qss)
+
+    # 局部样式切换后，Qt 可能保留动态属性对应的旧配色，主动刷新状态控件。
+    for widget in dialog.findChildren((QLabel, QProgressBar)):
+        if widget.property("semanticState"):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+            widget.update()
 
     apply_window_titlebar(dialog, is_dark)
 

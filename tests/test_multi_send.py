@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
 
 from app_paths import AppPaths
 from serial_GUI import FullHitCheckBox, SerialTool
+from tests import run_on_native_windows
 from theme import DARK_QSS, LIGHT_QSS
 
 ORIGINAL_LOAD_CONFIG = SerialTool.load_config
@@ -755,6 +756,8 @@ class MultiSendTests(unittest.TestCase):
         self.assertEqual(self.tool.height(), min(780, QApplication.primaryScreen().availableGeometry().height()))
 
     def test展开面板按内容分配宽度且在宽窄屏幕内完整显示(self):
+        if run_on_native_windows(self, self.app.platformName(), "tests.test_multi_send"):
+            return
         self.tool.show()
         self.app.processEvents()
         for available in (QRect(0, 0, 2560, 1392), QRect(-1024, 0, 1024, 768)):

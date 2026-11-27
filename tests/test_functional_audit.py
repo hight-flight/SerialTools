@@ -137,9 +137,26 @@ class FunctionalAuditTests(unittest.TestCase):
                 self.assertFalse(self.tool.btn_switch.isHidden())
                 self.assertTrue(self.tool.btn_switch_serial.isHidden())
                 self.assertEqual(self.tool.btn_refresh.isHidden(), mode == "tcp_client")
+                self.assertEqual(self.tool.status_baud.text(), f"模式: {self.tool.combo_mode.currentText()}")
                 if mode == "tcp_server":
                     self.assertEqual(self.tool.btn_switch.text(), "侦听")
                     self.assertEqual(self.tool.edit_tcp_server_local_ip.currentText(), "127.0.0.1")
+
+    def test切换网络模式和断开后状态栏仍显示网络模式(self):
+        for index in (1, 2, 3):
+            with self.subTest(index=index):
+                self.tool.combo_mode.setCurrentIndex(index)
+                expected = f"模式: {self.tool.combo_mode.currentText()}"
+                self.assertEqual(self.tool.status_baud.text(), expected)
+                self.tool.status_baud.setText(f"{expected} 127.0.0.1:8888")
+                self.tool.toggle_connection()
+                self.assertEqual(self.tool.status_baud.text(), expected)
+                with mock.patch.object(QMessageBox, "critical"):
+                    self.tool.handle_read_error("连接已关闭")
+                self.assertEqual(self.tool.status_baud.text(), expected)
+        self.tool.combo_mode.setCurrentIndex(0)
+        self.tool.combo_baud.setCurrentText("9600")
+        self.assertEqual(self.tool.status_baud.text(), "波特率: 9600")
 
     def test接收错误后可以切换通信模式(self):
         self.tool.combo_mode.setEnabled(False)

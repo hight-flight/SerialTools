@@ -59,8 +59,8 @@ class _DialogParent(QWidget):
 
 
 class UIRegressionTests(unittest.TestCase):
-    def test应用版本号为1_4_7(self):
-        self.assertEqual(VERSION, "1.4.7")
+    def test应用版本号为1_4_8(self):
+        self.assertEqual(VERSION, "1.4.8")
 
     def test应用在创建窗口前启用高DPI图像(self):
         self.assertTrue(

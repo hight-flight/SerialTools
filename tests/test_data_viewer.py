@@ -9,7 +9,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QMutex, QPoint, QRect, Qt
+from PyQt5.QtCore import QEvent, QMutex, QPoint, QRect, Qt
 from PyQt5.QtGui import QColor
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QHeaderView, QWidget
@@ -63,21 +63,30 @@ class DataViewerTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.parent = _DialogParent(Path(self.temp_dir.name))
+        self.addCleanup(self.temp_dir.cleanup)
+        self.addCleanup(self._dispose_parent)
 
-    def tearDown(self):
-        self.parent.close()
-        self.temp_dir.cleanup()
+    def _dispose_parent(self):
+        self._dispose_widget(self.parent)
+        # 先销毁控件再移除临时目录，避免下一次全局 QSS 刷新访问旧控件。
+        self.app.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.app.processEvents()
+
+    @staticmethod
+    def _dispose_widget(widget):
+        widget.close()
+        widget.deleteLater()
 
     def _dialog(self, connected=True):
         self.parent.transport.is_open = connected
         dialog = JsonViewerDialog(self.parent)
         dialog.setAttribute(Qt.WA_DeleteOnClose, False)
-        self.addCleanup(dialog.close)
+        self.addCleanup(self._dispose_widget, dialog)
         return dialog
 
     def test空列表提示区分未捕获和无匹配结果(self):
         widget = CaptureListWidget()
-        self.addCleanup(widget.close)
+        self.addCleanup(self._dispose_widget, widget)
         widget.show()
         self.assertTrue(widget.empty_hint.isVisible())
         self.assertIn("暂无捕获数据", widget.empty_hint.text())
@@ -218,7 +227,7 @@ class DataViewerTests(unittest.TestCase):
     def test图表依赖缺失时统计面板仍可安全刷新(self):
         with mock.patch.object(data_viewer, "HAS_PYQTGRAPH", False):
             tracker = ChartTrackerWidget()
-            self.addCleanup(tracker.close)
+            self.addCleanup(self._dispose_widget, tracker)
             self.assertEqual(tracker._tracked, {})
 
     def test跟踪标签别名和颜色修改会回写图表状态(self):
@@ -289,7 +298,7 @@ class DataViewerTests(unittest.TestCase):
             self.skipTest("pyqtgraph 不可用")
 
         tracker = ChartTrackerWidget()
-        self.addCleanup(tracker.close)
+        self.addCleanup(self._dispose_widget, tracker)
         tracker.resize(360, 420)
         tracker.show()
         self.app.processEvents()
@@ -317,7 +326,7 @@ class DataViewerTests(unittest.TestCase):
             self.skipTest("pyqtgraph 不可用")
 
         tracker = ChartTrackerWidget()
-        self.addCleanup(tracker.close)
+        self.addCleanup(self._dispose_widget, tracker)
         tracker.resize(640, 420)
         tracker.show()
         self.app.processEvents()
@@ -346,7 +355,7 @@ class DataViewerTests(unittest.TestCase):
         dialog._save_layout()
 
         restored = JsonViewerDialog(self.parent)
-        self.addCleanup(restored.close)
+        self.addCleanup(self._dispose_widget, restored)
         restored.show()
         self.app.processEvents()
         left, right = restored.splitter_h.sizes()
@@ -359,7 +368,7 @@ class DataViewerTests(unittest.TestCase):
         if not data_viewer.HAS_PYQTGRAPH:
             self.skipTest("pyqtgraph 不可用")
         tracker = ChartTrackerWidget()
-        self.addCleanup(tracker.close)
+        self.addCleanup(self._dispose_widget, tracker)
 
         self.assertTrue(hasattr(tracker, "btn_export_png"))
         self.assertTrue(hasattr(tracker, "btn_export_csv"))
